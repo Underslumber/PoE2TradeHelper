@@ -1,0 +1,7 @@
+{
+  "exchange": {
+    "status": { "option": "online" },
+    "have": ["chaos"],
+    "want": ["divine"]
+  }
+}
