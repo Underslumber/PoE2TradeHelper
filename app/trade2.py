@@ -12,6 +12,7 @@ import httpx
 from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, USER_AGENT
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
+TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
 POE_SITE_BASE = "https://www.pathofexile.com"
 HISTORY_PATH = DATA_DIR / "trade_rate_history.jsonl"
 RATE_CACHE_TTL = 300
@@ -45,7 +46,7 @@ CATEGORY_RU = {
     "Abyss": "Бездны",
     "Essences": "Эссенции",
     "Runes": "Руны",
-    "Ultimatum": "Ультиматум / Soul Cores",
+    "Ultimatum": "Ультиматум / ядра душ",
     "Idol": "Идолы",
     "UncutGems": "Неограненные камни",
     "LineageSupportGems": "Родословные камни поддержки",
@@ -91,6 +92,8 @@ EMOTION_CHAIN = [
 ]
 
 LOW_VOLUME_THRESHOLD = 10.0
+SIGNAL_MARGIN_THRESHOLD = 0.08
+WEAK_MARGIN_THRESHOLD = 0.02
 
 
 def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -108,7 +111,27 @@ def _image_url(path: str | None) -> str | None:
     return f"{POE_SITE_BASE}{path}"
 
 
-def normalize_static_entries(payload: dict[str, Any]) -> dict[str, list[dict[str, str | None]]]:
+def _localized_entry_texts(payload: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    localized: dict[str, dict[str, str]] = {}
+    if not payload:
+        return localized
+    for category in payload.get("result", []):
+        category_id = category.get("id")
+        if not category_id:
+            continue
+        localized[category_id] = {
+            entry.get("id"): entry.get("text")
+            for entry in category.get("entries", [])
+            if entry.get("id") and entry.get("id") != "sep" and entry.get("text")
+        }
+    return localized
+
+
+def normalize_static_entries(
+    payload: dict[str, Any],
+    localized_payload: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, str | None]]]:
+    localized = _localized_entry_texts(localized_payload)
     categories: dict[str, list[dict[str, str | None]]] = {}
     for category in payload.get("result", []):
         category_id = category.get("id")
@@ -124,7 +147,7 @@ def normalize_static_entries(payload: dict[str, Any]) -> dict[str, list[dict[str
                 {
                     "id": entry_id,
                     "text": text,
-                    "text_ru": ITEM_RU.get(text, text),
+                    "text_ru": localized.get(category_id, {}).get(entry_id) or ITEM_RU.get(text, text),
                     "image": _image_url(entry.get("image")),
                 }
             )
@@ -186,9 +209,13 @@ async def get_trade_leagues() -> list[dict[str, str]]:
 
 async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
     async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-        response = await client.get(f"{TRADE2_BASE}/data/static")
+        response, ru_response = await asyncio.gather(
+            client.get(f"{TRADE2_BASE}/data/static"),
+            client.get(f"{TRADE2_RU_BASE}/data/static"),
+        )
         response.raise_for_status()
-    return normalize_static_entries(response.json())
+        ru_response.raise_for_status()
+    return normalize_static_entries(response.json(), ru_response.json())
 
 
 async def _post_exchange(
@@ -442,64 +469,118 @@ def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -
 
     by_id = {row["id"]: row for row in rows}
     advice = []
-    for source, result in zip(EMOTION_CHAIN, EMOTION_CHAIN[1:]):
+    for source_index, source in enumerate(EMOTION_CHAIN):
         source_row = by_id.get(source)
-        result_row = by_id.get(result)
-        source_value = source_row.get("median") if source_row else None
-        result_value = result_row.get("median") if result_row else None
-        if source_value is None or result_value is None:
+        if not source_row:
             continue
-        craft_cost = source_value * 3
-        profit = result_value - craft_cost
-        margin = profit / craft_cost if craft_cost else 0
-        if profit > 0:
-            try:
-                source_volume = float(source_row.get("volume") or 0)
-            except (TypeError, ValueError):
-                source_volume = 0
-            try:
-                result_volume = float(result_row.get("volume") or 0)
-            except (TypeError, ValueError):
-                result_volume = 0
-            min_volume = min(source_volume, result_volume)
-            volume_warning_ru = ""
-            volume_warning_en = ""
-            if min_volume < LOW_VOLUME_THRESHOLD:
-                volume_warning_ru = " Объем низкий: проверь стакан вручную перед сделкой."
-                volume_warning_en = " Low volume: check the order book manually before trading."
-            advice.append(
-                {
-                    "kind": "profit",
-                    "source": source,
-                    "result": result,
-                    "source_name_ru": source_row.get("text_ru"),
-                    "result_name_ru": result_row.get("text_ru"),
-                    "source_name_en": source_row.get("text"),
-                    "result_name_en": result_row.get("text"),
-                    "craft_cost": craft_cost,
-                    "result_value": result_value,
-                    "profit": profit,
-                    "margin": margin,
-                    "source_volume": source_volume,
-                    "result_volume": result_volume,
-                    "min_volume": min_volume,
-                    "low_volume": min_volume < LOW_VOLUME_THRESHOLD,
-                    "target": target,
-                    "title_ru": "Выгодная перековка эмоций",
-                    "title_en": "Profitable emotion upgrade",
-                    "message_ru": (
-                        f"3 x {source_row.get('text_ru')} -> {result_row.get('text_ru')}: "
-                        f"расчетная прибыль {profit:.4f} {target}, маржа {margin:.1%}, "
-                        f"минимальный объем {min_volume:.1f}.{volume_warning_ru}"
-                    ),
-                    "message_en": (
-                        f"3 x {source_row.get('text')} -> {result_row.get('text')}: "
-                        f"estimated profit {profit:.4f} {target}, margin {margin:.1%}, "
-                        f"minimum volume {min_volume:.1f}.{volume_warning_en}"
-                    ),
-                }
+        for result_index in range(source_index + 1, len(EMOTION_CHAIN)):
+            result = EMOTION_CHAIN[result_index]
+            result_row = by_id.get(result)
+            if not result_row:
+                continue
+            path_steps = result_index - source_index
+            input_count = 3**path_steps
+            path_advice = _build_emotion_path_advice(
+                source=source,
+                result=result,
+                source_row=source_row,
+                result_row=result_row,
+                input_count=input_count,
+                path_steps=path_steps,
+                target=target,
             )
-    return sorted(advice, key=lambda item: item.get("profit", 0), reverse=True)
+            if path_advice:
+                advice.append(path_advice)
+    severity_rank = {"signal": 0, "weak": 1, "watch": 2}
+    return sorted(advice, key=lambda item: (severity_rank.get(item.get("severity"), 9), -item.get("profit", 0)))
+
+
+def _build_emotion_path_advice(
+    source: str,
+    result: str,
+    source_row: dict[str, Any],
+    result_row: dict[str, Any],
+    input_count: int,
+    path_steps: int,
+    target: str,
+) -> dict[str, Any] | None:
+    source_value = source_row.get("median")
+    result_value = result_row.get("median")
+    if source_value is None or result_value is None:
+        return None
+    craft_cost = source_value * input_count
+    profit = result_value - craft_cost
+    margin = profit / craft_cost if craft_cost else 0
+    try:
+        source_volume = float(source_row.get("volume") or 0)
+    except (TypeError, ValueError):
+        source_volume = 0
+    try:
+        result_volume = float(result_row.get("volume") or 0)
+    except (TypeError, ValueError):
+        result_volume = 0
+    min_volume = min(source_volume, result_volume)
+    low_volume = min_volume < LOW_VOLUME_THRESHOLD
+    if margin >= SIGNAL_MARGIN_THRESHOLD and not low_volume:
+        severity = "signal"
+        title_ru = "Сигнал"
+        title_en = "Signal"
+        risk_ru = "Объем достаточный, маржа заметная."
+        risk_en = "Volume is acceptable and margin is meaningful."
+    elif profit > 0 and margin >= WEAK_MARGIN_THRESHOLD:
+        severity = "weak"
+        title_ru = "Слабый сигнал"
+        title_en = "Weak signal"
+        risk_ru = "Есть расчетная прибыль, но проверь стакан и свежесть цены."
+        risk_en = "Estimated profit exists, but check the order book and price freshness."
+        if low_volume:
+            risk_ru = "Объем низкий: проверь стакан вручную перед сделкой."
+            risk_en = "Low volume: check the order book manually before trading."
+    else:
+        severity = "watch"
+        title_ru = "Наблюдать"
+        title_en = "Watch"
+        risk_ru = "Маржа слишком мала или отрицательная для действия."
+        risk_en = "Margin is too small or negative for action."
+    return {
+        "kind": "emotion_path",
+        "severity": severity,
+        "source": source,
+        "result": result,
+        "path_steps": path_steps,
+        "input_count": input_count,
+        "source_name_ru": source_row.get("text_ru"),
+        "result_name_ru": result_row.get("text_ru"),
+        "source_name_en": source_row.get("text"),
+        "result_name_en": result_row.get("text"),
+        "craft_cost": craft_cost,
+        "result_value": result_value,
+        "profit": profit,
+        "margin": margin,
+        "source_volume": source_volume,
+        "result_volume": result_volume,
+        "min_volume": min_volume,
+        "low_volume": low_volume,
+        "source_sparkline": source_row.get("sparkline") or [],
+        "result_sparkline": result_row.get("sparkline") or [],
+        "basis_ru": "График конечной позиции за 7 дней.",
+        "basis_en": "7-day chart of the result item.",
+        "target": target,
+        "title_ru": title_ru,
+        "title_en": title_en,
+        "message_ru": (
+            f"{input_count} x {source_row.get('text_ru')} -> {result_row.get('text_ru')} "
+            f"({path_steps} шаг.): "
+            f"прибыль {profit:.4f} {target}, маржа {margin:.1%}, "
+            f"минимальный объем {min_volume:.1f}. {risk_ru}"
+        ),
+        "message_en": (
+            f"{input_count} x {source_row.get('text')} -> {result_row.get('text')} "
+            f"({path_steps} step{'s' if path_steps != 1 else ''}): "
+            f"profit {profit:.4f} {target}, margin {margin:.1%}, "
+            f"minimum volume {min_volume:.1f}. {risk_en}"
+        ),
+    }
 
 
 def read_history(limit: int = 30) -> list[dict[str, Any]]:

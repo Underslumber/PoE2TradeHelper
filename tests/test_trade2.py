@@ -29,6 +29,33 @@ def test_normalize_static_entries_skips_separators_and_expands_images():
     ]
 
 
+def test_normalize_static_entries_prefers_official_russian_payload():
+    payload = {
+        "result": [
+            {
+                "id": "Currency",
+                "entries": [
+                    {"id": "transmute", "text": "Orb of Transmutation", "image": "/image.png"},
+                ],
+            }
+        ]
+    }
+    localized_payload = {
+        "result": [
+            {
+                "id": "Currency",
+                "entries": [
+                    {"id": "transmute", "text": "Сфера превращения"},
+                ],
+            }
+        ]
+    }
+
+    categories = normalize_static_entries(payload, localized_payload)
+
+    assert categories["Currency"][0]["text_ru"] == "Сфера превращения"
+
+
 def test_normalize_exchange_result_flattens_offers():
     payload = {
         "id": "query123",
@@ -104,9 +131,83 @@ def test_build_trade_advice_marks_low_volume_emotion_upgrade():
     assert len(advice) == 1
     assert advice[0]["profit"] == 1
     assert advice[0]["margin"] == 1 / 3
+    assert advice[0]["severity"] == "weak"
     assert advice[0]["min_volume"] == 3
     assert advice[0]["low_volume"] is True
     assert "Объем низкий" in advice[0]["message_ru"]
+
+
+def test_build_trade_advice_classifies_signal_and_watch():
+    rows = [
+        {
+            "id": "diluted-liquid-ire",
+            "text": "Diluted Liquid Ire",
+            "text_ru": "Разбавленный жидкий гнев",
+            "median": 1,
+            "volume": 30,
+        },
+        {
+            "id": "diluted-liquid-guilt",
+            "text": "Diluted Liquid Guilt",
+            "text_ru": "Разбавленная жидкая вина",
+            "median": 3.5,
+            "volume": 30,
+        },
+        {
+            "id": "diluted-liquid-greed",
+            "text": "Diluted Liquid Greed",
+            "text_ru": "Разбавленная жидкая жадность",
+            "median": 9,
+            "volume": 30,
+        },
+    ]
+
+    advice = build_trade_advice("Delirium", rows, "divine")
+
+    assert [item["severity"] for item in advice] == ["signal", "watch", "watch"]
+    assert advice[0]["source"] == "diluted-liquid-ire"
+    assert advice[0]["result"] == "diluted-liquid-guilt"
+    assert advice[0]["path_steps"] == 1
+    assert advice[0]["input_count"] == 3
+    assert advice[0]["profit"] == 3.5 - 1 * 3
+    assert "Объем достаточный" in advice[0]["message_ru"]
+
+
+def test_build_trade_advice_finds_best_full_emotion_path():
+    rows = [
+        {
+            "id": "diluted-liquid-ire",
+            "text": "Diluted Liquid Ire",
+            "text_ru": "Разбавленный жидкий гнев",
+            "median": 1,
+            "volume": 30,
+        },
+        {
+            "id": "diluted-liquid-guilt",
+            "text": "Diluted Liquid Guilt",
+            "text_ru": "Разбавленная жидкая вина",
+            "median": 4,
+            "volume": 30,
+        },
+        {
+            "id": "diluted-liquid-greed",
+            "text": "Diluted Liquid Greed",
+            "text_ru": "Разбавленная жидкая жадность",
+            "median": 20,
+            "volume": 30,
+            "sparkline": [10, 15, 20],
+        },
+    ]
+
+    advice = build_trade_advice("Delirium", rows, "divine")
+
+    assert advice[0]["source"] == "diluted-liquid-ire"
+    assert advice[0]["result"] == "diluted-liquid-greed"
+    assert advice[0]["path_steps"] == 2
+    assert advice[0]["input_count"] == 9
+    assert advice[0]["profit"] == 11
+    assert advice[0]["result_sparkline"] == [10, 15, 20]
+    assert "9 x" in advice[0]["message_ru"]
 
 
 def test_read_latest_rates_returns_newest_matching_snapshot(tmp_path, monkeypatch):

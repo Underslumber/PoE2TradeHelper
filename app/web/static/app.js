@@ -91,7 +91,36 @@ const i18n = {
     items: 'Позиций',
     priced: 'С ценой',
     lastSnapshot: 'Последний снимок',
+    marketTab: 'Рынок',
+    signalsTab: 'Сигналы',
     tradeAdvice: 'Советы по торгам',
+    detailedSignals: 'Подробные сигналы',
+    topSignals: 'Лучшие 5',
+    allSignals: 'Все',
+    buySignals: 'Купить',
+    sellSignals: 'Продать',
+    bestOperations: 'Лучшие операции',
+    chainMaxSteps: 'Длина цепочки',
+    noBuySignals: 'Нет позиций с заметным падением цены и достаточным объемом.',
+    noSellSignals: 'Нет позиций с заметным ростом цены и достаточным объемом.',
+    priceDrop: 'Падение',
+    priceRise: 'Рост',
+    currentPoint: 'Сейчас',
+    signalBasis: 'Основа',
+    resultChartBasis: 'результат за 7 дней',
+    priceChartBasis: 'цена за 7 дней',
+    noSignalChart: 'Нет графика',
+    sevenDayChange: '7д',
+    crossCurrency: 'Кросс-валюта',
+    crossHint: 'Сравнение покупки за одну валюту и продажи за другую появится после расчета.',
+    crossLoading: 'Считаю кросс-валютные варианты...',
+    noCrossDeals: 'Кросс-валютных вариантов с положительной разницей и объемом пока нет.',
+    signalLabel: 'Сигнал',
+    weakSignalLabel: 'Слабый сигнал',
+    buyFor: 'Купить за',
+    sellFor: 'Продать за',
+    spread: 'Разница',
+    demandVolume: 'Объем',
     item: 'Предмет',
     name: 'Название',
     value: 'Цена',
@@ -146,7 +175,36 @@ const i18n = {
     items: 'Items',
     priced: 'Priced',
     lastSnapshot: 'Last snapshot',
+    marketTab: 'Market',
+    signalsTab: 'Signals',
     tradeAdvice: 'Trade advice',
+    detailedSignals: 'Detailed signals',
+    topSignals: 'Top 5',
+    allSignals: 'All',
+    buySignals: 'Buy',
+    sellSignals: 'Sell',
+    bestOperations: 'Best operations',
+    chainMaxSteps: 'Chain length',
+    noBuySignals: 'No items with a notable price drop and enough volume.',
+    noSellSignals: 'No items with a notable price rise and enough volume.',
+    priceDrop: 'Drop',
+    priceRise: 'Rise',
+    currentPoint: 'Now',
+    signalBasis: 'Basis',
+    resultChartBasis: '7-day result',
+    priceChartBasis: '7-day price',
+    noSignalChart: 'No chart',
+    sevenDayChange: '7d',
+    crossCurrency: 'Cross-currency',
+    crossHint: 'Buy-for-one-currency and sell-for-another comparison appears after calculation.',
+    crossLoading: 'Calculating cross-currency variants...',
+    noCrossDeals: 'No positive-spread cross-currency variants with volume yet.',
+    signalLabel: 'Signal',
+    weakSignalLabel: 'Weak signal',
+    buyFor: 'Buy for',
+    sellFor: 'Sell for',
+    spread: 'Spread',
+    demandVolume: 'Volume',
     item: 'Item',
     name: 'Name',
     value: 'Value',
@@ -187,6 +245,12 @@ const state = {
   detailTarget: 'auto',
   rates: {},
   detailRates: {},
+  advice: [],
+  mainView: 'market',
+  activeAdviceTab: 'buy',
+  crossDeals: [],
+  crossDealsKey: '',
+  isLoadingCrossDeals: false,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
   autoRefreshTimer: null,
   isRefreshing: false,
@@ -194,6 +258,7 @@ const state = {
 };
 
 const preferredTargets = ['exalted', 'divine', 'chaos'];
+const CROSS_MIN_VOLUME = 10;
 
 function t(key) {
   const messages = i18n[state.lang] || {};
@@ -217,7 +282,8 @@ function applyLanguage() {
   renderTargetCurrencyInfo();
   renderCategories();
   renderMarket();
-  renderAdvice((state.rates[state.selectedCategory] || {}).advice || []);
+  renderAdvice(state.advice);
+  switchMainView(state.mainView);
   fillDetailTargetSelect();
   renderSelectedItemDetail();
   renderHistory();
@@ -287,7 +353,8 @@ function currencyMarkup(target) {
   if (!target) return '-';
   const icon = currencyIcon(target);
   const label = currencyLabel(target);
-  return `${icon ? `<img src="${icon}" alt="">` : ''}<span>${label}</span><span class="currency-code">(${target})</span>`;
+  const code = state.lang === 'ru' ? '' : `<span class="currency-code">(${target})</span>`;
+  return `${icon ? `<img src="${icon}" alt="">` : ''}<span>${label}</span>${code}`;
 }
 
 function selectedTarget() {
@@ -314,9 +381,13 @@ function targetOptions(includeAuto = false) {
   const ordered = preferredTargets
     .map(id => currencyEntries.find(entry => entry.id === id))
     .filter(Boolean)
-    .map(entry => ({ id: entry.id, text: `${entryName(entry)} (${entry.id})` }));
+    .map(entry => ({ id: entry.id, text: state.lang === 'ru' ? entryName(entry) : `${entryName(entry)} (${entry.id})` }));
   if (!includeAuto) return ordered;
   return [{ id: 'auto', text: t('autoTarget') }, ...ordered];
+}
+
+function availableTargetIds() {
+  return targetOptions(false).map(entry => entry.id);
 }
 
 function statusOptions() {
@@ -413,6 +484,8 @@ function renderCategories() {
     button.addEventListener('click', () => {
       state.selectedCategory = category.id;
       state.selectedItemId = null;
+      state.crossDeals = [];
+      state.crossDealsKey = '';
       document.getElementById('category-title').textContent = categoryName(category);
       document.getElementById('item-detail-panel')?.classList.add('d-none');
       renderCategories();
@@ -492,6 +565,22 @@ function findEntry(itemId) {
   return (state.categories[state.selectedCategory] || []).find(entry => entry.id === itemId);
 }
 
+function findAnyEntry(itemId) {
+  for (const entries of Object.values(state.categories)) {
+    const entry = entries.find(item => item.id === itemId);
+    if (entry) return entry;
+  }
+  return null;
+}
+
+function entryIcon(entry) {
+  return entry?.image || '';
+}
+
+function itemTitleMarkup(name, icon) {
+  return `<span class="advice-item-title">${icon ? `<img src="${icon}" alt="">` : ''}<span>${name}</span></span>`;
+}
+
 function ratesCacheKey(target) {
   const league = document.getElementById('live-league')?.value || '';
   const status = document.getElementById('live-status')?.value || 'any';
@@ -562,6 +651,82 @@ function renderSparkline(values) {
   `;
 }
 
+function miniSignalChart(values, basisText, currentValue = null, changeValue = null) {
+  const data = (values || []).map(Number).filter(Number.isFinite);
+  if (data.length < 2) {
+    return `<aside class="advice-chart empty"><span>${t('noSignalChart')}</span></aside>`;
+  }
+  const width = 360;
+  const height = 128;
+  const leftPad = 40;
+  const rightPad = 10;
+  const topPad = 10;
+  const bottomPad = 28;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const points = data.map((value, index) => {
+    const x = leftPad + (index / (data.length - 1)) * (width - leftPad - rightPad);
+    const y = height - bottomPad - ((value - min) / range) * (height - topPad - bottomPad);
+    return { x, y };
+  });
+  const polyline = points.map(point => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ');
+  const current = points[points.length - 1];
+  const previous = points[Math.max(0, points.length - 3)];
+  const highlightX = Math.max(leftPad, previous.x - 3);
+  const highlightWidth = Math.max(14, width - rightPad - highlightX);
+  const directionClass = data[data.length - 1] >= data[0] ? 'up' : 'down';
+  const plotBottom = height - bottomPad;
+  const plotRight = width - rightPad;
+  const gridX = points.map(point => point.x);
+  const gridY = [0, 0.25, 0.5, 0.75, 1].map(ratio => topPad + ratio * (plotBottom - topPad));
+  const valueAtY = y => max - ((y - topPad) / (plotBottom - topPad)) * range;
+  const dateFormatter = new Intl.DateTimeFormat(state.lang === 'ru' ? 'ru-RU' : 'en-GB', { day: '2-digit', month: '2-digit' });
+  const today = new Date();
+  const dayLabels = points.map((point, index) => {
+    const daysAgo = data.length - 1 - index;
+    const date = new Date(today);
+    date.setDate(today.getDate() - daysAgo);
+    const label = dateFormatter.format(date);
+    return `<text class="advice-chart-x-label" x="${point.x.toFixed(2)}" y="${height - 7}" text-anchor="middle">${label}</text>`;
+  }).join('');
+  const absoluteCurrent = Number(currentValue);
+  const canScaleValues = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 && data.every(value => value > 0);
+  const scale = canScaleValues ? absoluteCurrent / data[data.length - 1] : null;
+  const valueLabels = canScaleValues ? [gridY[0], gridY[2], gridY[4]].map(y => (
+    `<text class="advice-chart-y-label" x="${leftPad - 7}" y="${(y + 3).toFixed(2)}" text-anchor="end">${formatAmount(valueAtY(y) * scale)}</text>`
+  )).join('') : '';
+  const displayCurrent = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 ? absoluteCurrent : data[data.length - 1];
+  const firstValue = data[0];
+  const numericChange = Number(changeValue);
+  const change = Number.isFinite(numericChange) ? numericChange : (firstValue ? ((data[data.length - 1] - firstValue) / firstValue) * 100 : null);
+  return `
+    <aside class="advice-chart ${directionClass}">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${t('priceChartLabel')}">
+        ${gridX.map(x => `<line class="advice-chart-grid day" x1="${x.toFixed(2)}" y1="${topPad}" x2="${x.toFixed(2)}" y2="${plotBottom}"></line>`).join('')}
+        ${gridY.map(y => `<line class="advice-chart-grid" x1="${leftPad}" y1="${y.toFixed(2)}" x2="${plotRight}" y2="${y.toFixed(2)}"></line>`).join('')}
+        <rect class="advice-chart-current-area" x="${highlightX.toFixed(2)}" y="${topPad}" width="${highlightWidth.toFixed(2)}" height="${plotBottom - topPad}"></rect>
+        <line class="advice-chart-current-line" x1="${leftPad}" y1="${current.y.toFixed(2)}" x2="${plotRight}" y2="${current.y.toFixed(2)}"></line>
+        <polyline class="advice-chart-line" points="${polyline}"></polyline>
+        <circle class="advice-chart-point" cx="${current.x.toFixed(2)}" cy="${current.y.toFixed(2)}" r="3.4"></circle>
+        ${valueLabels}
+        ${dayLabels}
+      </svg>
+      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatAmount(displayCurrent)}</span><span>${t('sevenDayChange')}: ${formatChange(change)}</span></div>
+      <div class="advice-chart-basis">${t('signalBasis')}: ${basisText}</div>
+    </aside>
+  `;
+}
+
+function renderAdviceCard(card, contentHtml, chartHtml) {
+  card.innerHTML = `
+    <div class="advice-card-layout">
+      <div class="advice-card-content">${contentHtml}</div>
+      ${chartHtml || ''}
+    </div>
+  `;
+}
+
 async function renderSelectedItemDetail() {
   const panel = document.getElementById('item-detail-panel');
   if (!panel || !state.selectedItemId) return;
@@ -611,24 +776,303 @@ function openItemDetail(itemId) {
   renderSelectedItemDetail();
 }
 
+function switchMainView(view) {
+  state.mainView = view === 'signals' ? 'signals' : 'market';
+  document.querySelectorAll('.main-view-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.mainTab === state.mainView);
+  });
+  document.querySelectorAll('[data-main-view]').forEach(element => {
+    element.classList.toggle('view-hidden', element.dataset.mainView !== state.mainView);
+  });
+  if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
+}
+
 function renderAdvice(advice) {
   const panel = document.getElementById('advice-panel');
-  const list = document.getElementById('advice-list');
-  if (!panel || !list) return;
+  if (!panel) return;
+  state.advice = advice || [];
+  panel.classList.remove('d-none');
+  renderTrendSignals();
+  renderOperationSignals();
+  renderCrossDeals();
+  switchAdviceTab(state.activeAdviceTab);
+}
+
+function currentSignalRows() {
+  const categoryRates = state.rates[state.selectedCategory] || {};
+  const rateRows = rowsById(categoryRates);
+  return (state.categories[state.selectedCategory] || [])
+    .map(entry => {
+      const row = rateRows.get(entry.id);
+      const change = Number(row?.change);
+      const volume = Number(row?.volume || 0);
+      const value = rateValue(row);
+      if (!row || !Number.isFinite(change) || !value || volume < CROSS_MIN_VOLUME) return null;
+      return { entry, row, change, volume, value, target: categoryRates.target || selectedTarget() };
+    })
+    .filter(Boolean);
+}
+
+function trendSignals(direction) {
+  const rows = currentSignalRows().filter(item => direction === 'buy' ? item.change < 0 : item.change > 0);
+  return rows.sort((left, right) => {
+    const changeOrder = direction === 'buy' ? left.change - right.change : right.change - left.change;
+    return changeOrder || right.volume - left.volume;
+  }).slice(0, 30);
+}
+
+function renderTrendSignals() {
+  renderTrendSignalList(document.getElementById('advice-list-buy'), trendSignals('buy'), 'buy');
+  renderTrendSignalList(document.getElementById('advice-list-sell'), trendSignals('sell'), 'sell');
+}
+
+function renderTrendSignalList(list, signals, direction) {
+  if (!list) return;
   list.innerHTML = '';
-  if (!advice || !advice.length) {
-    panel.classList.add('d-none');
+  if (!signals.length) {
+    list.innerHTML = `<p class="text-secondary">${t(direction === 'buy' ? 'noBuySignals' : 'noSellSignals')}</p>`;
     return;
   }
-  panel.classList.remove('d-none');
-  advice.forEach(item => {
+  signals.forEach(item => {
     const card = document.createElement('article');
-    card.className = `advice-card ${item.kind || ''}`;
-    const title = state.lang === 'ru' ? item.title_ru : item.title_en;
-    const message = state.lang === 'ru' ? item.message_ru : item.message_en;
-    card.innerHTML = `<strong>${title}</strong><p>${message}</p>`;
+    card.className = `advice-card ${direction === 'buy' ? 'weak' : 'signal'}`;
+    const badge = direction === 'buy' ? t('priceDrop') : t('priceRise');
+    const action = direction === 'buy' ? t('buySignals') : t('sellSignals');
+    renderAdviceCard(card, `
+      <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
+      <p>${action}: ${formatAmount(item.value)} ${currencyLabel(item.target)} (${formatChange(item.change)})</p>
+      <div class="deal-meta"><span>${t('volume')}: ${formatAmount(item.volume)}</span><span>${t('offers')}: ${formatAmount(item.row.offers || 0)}</span></div>
+    `, miniSignalChart(item.row.sparkline || [], t('priceChartBasis'), item.value, item.change));
     list.appendChild(card);
   });
+}
+
+function renderOperationSignals() {
+  const list = document.getElementById('advice-list-ops');
+  if (!list) return;
+  const maxSteps = Number(document.getElementById('chain-max-steps')?.value || 5);
+  const operations = state.advice.filter(item => Number(item.path_steps || 1) <= maxSteps);
+  renderAdviceList(list, operations, t('noAdvice'));
+}
+
+function renderAdviceList(list, advice, emptyText) {
+  list.innerHTML = '';
+  if (!advice || !advice.length) {
+    list.innerHTML = `<p class="text-secondary">${emptyText}</p>`;
+    return;
+  }
+  advice.forEach(item => {
+    const card = document.createElement('article');
+    const severity = item.severity || item.kind || 'watch';
+    card.className = `advice-card ${severity}`;
+    const title = state.lang === 'ru' ? item.title_ru : item.title_en;
+    const sourceName = state.lang === 'ru' ? item.source_name_ru : item.source_name_en;
+    const resultName = state.lang === 'ru' ? item.result_name_ru : item.result_name_en;
+    const message = adviceMessage(item, sourceName, resultName);
+    const titleMarkup = adviceTitleMarkup(item, sourceName, resultName);
+    const basis = state.lang === 'ru' ? item.basis_ru : item.basis_en;
+    renderAdviceCard(
+      card,
+      `<div class="advice-title-row"><span class="advice-badge">${title}</span><strong>${titleMarkup}</strong></div><p>${message}</p>`,
+      miniSignalChart(item.result_sparkline || [], basis || t('resultChartBasis'), item.result_value),
+    );
+    list.appendChild(card);
+  });
+}
+
+function adviceTitleMarkup(item, sourceName, resultName) {
+  const sourceEntry = findAnyEntry(item.source);
+  const resultEntry = findAnyEntry(item.result);
+  if (sourceName && resultName) {
+    return `
+      <span class="advice-path">
+        ${entryIcon(sourceEntry) ? `<img src="${entryIcon(sourceEntry)}" alt="">` : ''}
+        <span>${sourceName}</span>
+        <span class="advice-arrow">→</span>
+        ${entryIcon(resultEntry) ? `<img src="${entryIcon(resultEntry)}" alt="">` : ''}
+        <span>${resultName}</span>
+      </span>
+    `;
+  }
+  return itemTitleMarkup(sourceName || resultName || '', entryIcon(sourceEntry) || entryIcon(resultEntry));
+}
+
+function emotionRiskText(item) {
+  if (state.lang !== 'ru') {
+    if (item.severity === 'signal') return 'Volume is acceptable and margin is meaningful.';
+    if (item.low_volume) return 'Low volume: check the order book manually before trading.';
+    if (item.severity === 'weak') return 'Estimated profit exists, but check the order book and price freshness.';
+    return 'Margin is too small or negative for action.';
+  }
+  if (item.severity === 'signal') return 'Объем достаточный, маржа заметная.';
+  if (item.low_volume) return 'Объем низкий: проверь стакан вручную перед сделкой.';
+  if (item.severity === 'weak') return 'Есть расчетная прибыль, но проверь стакан и свежесть цены.';
+  return 'Маржа слишком мала или отрицательная для действия.';
+}
+
+function adviceMessage(item, sourceName, resultName) {
+  if (item.kind === 'emotion_path' && sourceName && resultName) {
+    const target = currencyLabel(item.target);
+    if (state.lang === 'ru') {
+      return `${item.input_count} × ${sourceName} → ${resultName} (${item.path_steps} шаг.): прибыль ${formatAmount(item.profit)} ${target}, маржа ${formatChange(item.margin * 100)}, минимальный объем ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
+    }
+    const stepLabel = item.path_steps === 1 ? 'step' : 'steps';
+    return `${item.input_count} x ${sourceName} -> ${resultName} (${item.path_steps} ${stepLabel}): profit ${formatAmount(item.profit)} ${target}, margin ${formatChange(item.margin * 100)}, minimum volume ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
+  }
+  return state.lang === 'ru' ? item.message_ru : item.message_en;
+}
+
+function switchAdviceTab(tab) {
+  state.activeAdviceTab = tab;
+  document.querySelectorAll('.advice-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.adviceTab === tab);
+  });
+  ['buy', 'sell', 'ops', 'cross'].forEach(name => {
+    document.getElementById(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
+  });
+  if (tab === 'ops') renderOperationSignals();
+  if (tab === 'cross') loadCrossCurrencyDeals();
+}
+
+function renderCrossDeals() {
+  const list = document.getElementById('advice-list-cross');
+  if (!list) return;
+  list.innerHTML = '';
+  if (state.isLoadingCrossDeals) {
+    list.innerHTML = `<p class="text-secondary">${t('crossLoading')}</p>`;
+    return;
+  }
+  if (!state.crossDeals.length) {
+    list.innerHTML = `<p class="text-secondary">${t('noCrossDeals')}</p>`;
+    return;
+  }
+  state.crossDeals.forEach(deal => {
+    const card = document.createElement('article');
+    card.className = `advice-card ${deal.severity}`;
+    const badge = deal.severity === 'signal' ? t('signalLabel') : t('weakSignalLabel');
+    const entry = findAnyEntry(deal.id);
+    const name = entry ? entryName(entry) : deal.name;
+    renderAdviceCard(card, `
+      <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(name, entryIcon(entry))}</strong></div>
+      <p>${t('buyFor')} ${formatAmount(deal.buyValue)} ${currencyLabel(deal.buyTarget)} ${state.lang === 'ru' ? '→' : '->'} ${t('sellFor')} ${formatAmount(deal.sellValue)} ${currencyLabel(deal.sellTarget)}</p>
+      <div class="deal-meta"><span>${t('spread')}: ${formatAmount(deal.profit)} ${currencyLabel(deal.baseTarget)} (${formatChange(deal.margin * 100)})</span><span>${t('demandVolume')}: ${formatAmount(deal.volume)}</span></div>
+    `, miniSignalChart(deal.sparkline || [], t('priceChartBasis'), deal.sellValue));
+    list.appendChild(card);
+  });
+}
+
+function rateValue(row) {
+  const value = Number(row?.median ?? row?.best);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function medianNumber(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function inferConversionFactor(baseData, otherData) {
+  const baseRows = rowsById(baseData);
+  const ratios = [];
+  (otherData?.rows || []).forEach(row => {
+    const baseRow = baseRows.get(row.id);
+    const baseValue = rateValue(baseRow);
+    const otherValue = rateValue(row);
+    if (baseValue && otherValue) ratios.push(baseValue / otherValue);
+  });
+  return medianNumber(ratios);
+}
+
+function crossDealsKey() {
+  const league = document.getElementById('live-league')?.value || '';
+  const status = document.getElementById('live-status')?.value || '';
+  return `${league}|${state.selectedCategory}|${selectedTarget()}|${status}`;
+}
+
+function buildCrossCurrencyDeals(datasets, baseTarget) {
+  const baseData = datasets.get(baseTarget);
+  if (!baseData?.rows?.length) return [];
+  const factors = new Map([[baseTarget, 1]]);
+  datasets.forEach((data, target) => {
+    if (target === baseTarget) return;
+    const factor = inferConversionFactor(baseData, data);
+    if (factor) factors.set(target, factor);
+  });
+  const deals = [];
+  (state.categories[state.selectedCategory] || []).forEach(entry => {
+    const options = [];
+    datasets.forEach((data, target) => {
+      const factor = factors.get(target);
+      const row = rowsById(data).get(entry.id);
+      const value = rateValue(row);
+      const volume = Number(row?.volume || 0);
+      if (factor && value && volume >= CROSS_MIN_VOLUME) {
+        options.push({
+          target,
+          value,
+          baseValue: value * factor,
+          volume,
+        });
+      }
+    });
+    if (options.length < 2) return;
+    options.sort((left, right) => left.baseValue - right.baseValue);
+    const buy = options[0];
+    const sell = options[options.length - 1];
+    if (buy.target === sell.target) return;
+    const profit = sell.baseValue - buy.baseValue;
+    const margin = buy.baseValue ? profit / buy.baseValue : 0;
+    const volume = Math.min(buy.volume, sell.volume);
+    if (profit <= 0 || margin < 0.005 || volume < CROSS_MIN_VOLUME) return;
+    deals.push({
+      id: entry.id,
+      name: entryName(entry),
+      buyTarget: buy.target,
+      sellTarget: sell.target,
+      buyValue: buy.value,
+      sellValue: sell.value,
+      baseTarget,
+      profit,
+      margin,
+      volume,
+      sparkline: (rowsById(baseData).get(entry.id) || {}).sparkline || [],
+      severity: margin >= 0.08 ? 'signal' : 'weak',
+    });
+  });
+  return deals.sort((left, right) => right.margin - left.margin || right.profit - left.profit).slice(0, 30);
+}
+
+async function loadCrossCurrencyDeals() {
+  const key = crossDealsKey();
+  if (state.crossDealsKey === key || state.isLoadingCrossDeals) {
+    renderCrossDeals();
+    return;
+  }
+  const targets = availableTargetIds();
+  if (targets.length < 2) {
+    state.crossDeals = [];
+    state.crossDealsKey = key;
+    renderCrossDeals();
+    return;
+  }
+  state.isLoadingCrossDeals = true;
+  renderCrossDeals();
+  try {
+    const datasets = new Map();
+    for (const target of targets) {
+      datasets.set(target, await ensureRatesForTarget(target));
+    }
+    state.crossDeals = buildCrossCurrencyDeals(datasets, selectedTarget());
+    state.crossDealsKey = key;
+  } catch {
+    state.crossDeals = [];
+    state.crossDealsKey = key;
+  } finally {
+    state.isLoadingCrossDeals = false;
+    renderCrossDeals();
+  }
 }
 
 async function renderHistory() {
@@ -762,6 +1206,16 @@ async function initLiveTrade() {
       state.detailTarget = event.target.value;
       renderSelectedItemDetail();
     });
+    document.querySelectorAll('[data-advice-tab]').forEach(button => {
+      button.addEventListener('click', () => switchAdviceTab(button.dataset.adviceTab));
+    });
+    document.querySelectorAll('[data-main-tab]').forEach(button => {
+      button.addEventListener('click', () => switchMainView(button.dataset.mainTab));
+    });
+    document.getElementById('chain-max-steps')?.addEventListener('change', () => {
+      renderOperationSignals();
+      switchAdviceTab('ops');
+    });
     document.getElementById('auto-refresh-interval').addEventListener('change', event => {
       state.autoRefreshMs = Number(event.target.value || 0);
       localStorage.setItem('poe2-auto-refresh-ms', String(state.autoRefreshMs));
@@ -771,6 +1225,8 @@ async function initLiveTrade() {
       document.getElementById(id).addEventListener('change', () => {
         state.rates = {};
         state.detailRates = {};
+        state.crossDeals = [];
+        state.crossDealsKey = '';
         document.getElementById('last-snapshot').textContent = '-';
         document.getElementById('rate-source').textContent = '-';
         renderTargetCurrencyInfo();

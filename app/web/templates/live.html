@@ -49,7 +49,12 @@
       <span id="rate-status" class="muted-status"></span>
     </section>
 
-    <section class="summary-strip mb-3">
+    <section class="main-view-switch" role="tablist">
+      <button class="main-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
+      <button class="main-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
+    </section>
+
+    <section class="summary-strip mb-3" data-main-view="market">
       <div>
         <span class="summary-label" data-i18n="items">Позиций</span>
         <strong id="items-total">0</strong>
@@ -72,7 +77,7 @@
       </div>
     </section>
 
-    <section id="item-detail-panel" class="item-detail-panel d-none">
+    <section id="item-detail-panel" class="item-detail-panel d-none" data-main-view="market">
       <div class="detail-header">
         <div class="detail-title">
           <img id="detail-icon" alt="">
@@ -109,14 +114,39 @@
       <div id="detail-note" class="detail-note"></div>
     </section>
 
-    <section id="advice-panel" class="advice-panel d-none">
-      <h2 data-i18n="tradeAdvice">Советы по торгам</h2>
-      <div id="advice-list"></div>
+    <section id="advice-panel" class="advice-panel view-hidden" data-main-view="signals">
+      <div class="advice-header">
+        <h2 data-i18n="detailedSignals">Подробные сигналы</h2>
+        <div class="advice-controls">
+          <div class="advice-tabs" role="tablist">
+            <button id="advice-tab-buy" class="advice-tab active" type="button" data-advice-tab="buy" data-i18n="buySignals">Купить</button>
+            <button id="advice-tab-sell" class="advice-tab" type="button" data-advice-tab="sell" data-i18n="sellSignals">Продать</button>
+            <button id="advice-tab-ops" class="advice-tab" type="button" data-advice-tab="ops" data-i18n="bestOperations">Лучшие операции</button>
+            <button id="advice-tab-cross" class="advice-tab" type="button" data-advice-tab="cross" data-i18n="crossCurrency">Кросс-валюта</button>
+          </div>
+          <label class="chain-depth-field">
+            <span data-i18n="chainMaxSteps">Длина цепочки</span>
+            <select id="chain-max-steps" class="form-select">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5" selected>5</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div id="advice-list-buy" class="advice-list"></div>
+      <div id="advice-list-sell" class="advice-list d-none"></div>
+      <div id="advice-list-ops" class="advice-list d-none"></div>
+      <div id="advice-list-cross" class="advice-list d-none">
+        <p class="text-secondary" data-i18n="crossHint">Сравнение покупки за одну валюту и продажи за другую появится после расчета.</p>
+      </div>
     </section>
 
-    <div id="live-error" class="alert alert-danger d-none" role="alert"></div>
+    <div id="live-error" class="alert alert-danger d-none" role="alert" data-main-view="market"></div>
 
-    <div class="table-responsive market-table-wrap">
+    <div class="table-responsive market-table-wrap" data-main-view="market">
       <table class="market-table">
         <thead>
           <tr>
@@ -135,7 +165,7 @@
       </table>
     </div>
 
-    <section class="history-panel">
+    <section class="history-panel" data-main-view="market">
       <h2 data-i18n="history">Лог изменений курса</h2>
       <div id="history-list" class="history-list"></div>
     </section>
