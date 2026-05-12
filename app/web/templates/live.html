@@ -13,7 +13,7 @@
         <h1 data-i18n="market">Рынок</h1>
         <p data-i18n="marketHint">Публичная торговая и валютная площадка без OAuth. Сначала выводим все позиции, цены обновляем аккуратно для выбранной категории.</p>
       </div>
-      <div class="language-switch" role="group" aria-label="Language">
+      <div class="language-switch" role="group" aria-label="Язык">
         <button id="lang-ru" type="button" class="lang-btn active">RU</button>
         <button id="lang-en" type="button" class="lang-btn">EN</button>
       </div>
@@ -27,17 +27,19 @@
       <label class="form-field">
         <span data-i18n="targetCurrency">Валюта оценки</span>
         <select id="target-currency" class="form-select"></select>
+        <div id="target-currency-preview" class="currency-preview"></div>
       </label>
       <label class="form-field">
         <span data-i18n="status">Статус</span>
-        <select id="live-status" class="form-select">
-          <option value="any" selected>any</option>
-          <option value="online">online</option>
-        </select>
+        <select id="live-status" class="form-select"></select>
+      </label>
+      <label class="form-field">
+        <span data-i18n="autoRefresh">Автообновление</span>
+        <select id="auto-refresh-interval" class="form-select"></select>
       </label>
       <label class="form-field">
         <span data-i18n="search">Поиск</span>
-        <input id="market-search" class="form-control" type="search" placeholder="Название или id">
+        <input id="market-search" class="form-control" type="search" data-i18n-placeholder="searchPlaceholder" placeholder="Название или id">
       </label>
     </section>
 
@@ -64,6 +66,47 @@
         <span class="summary-label" data-i18n="source">Источник</span>
         <strong id="rate-source">-</strong>
       </div>
+      <div>
+        <span class="summary-label" data-i18n="pricedIn">Цены в валюте</span>
+        <strong id="summary-target-currency" class="currency-inline">-</strong>
+      </div>
+    </section>
+
+    <section id="item-detail-panel" class="item-detail-panel d-none">
+      <div class="detail-header">
+        <div class="detail-title">
+          <img id="detail-icon" alt="">
+          <div>
+            <h2 id="detail-name">-</h2>
+            <span id="detail-id" class="muted-id">-</span>
+          </div>
+        </div>
+        <label class="form-field detail-target-field">
+          <span data-i18n="detailTarget">Цена относительно</span>
+          <select id="detail-target-currency" class="form-select"></select>
+          <div id="detail-target-currency-preview" class="currency-preview"></div>
+        </label>
+      </div>
+      <div class="detail-stats">
+        <div>
+          <span class="summary-label"><span data-i18n="value">Цена</span> <span id="detail-value-target-label"></span></span>
+          <strong id="detail-value">-</strong>
+        </div>
+        <div>
+          <span class="summary-label"><span data-i18n="median">Медиана</span> <span id="detail-median-target-label"></span></span>
+          <strong id="detail-median">-</strong>
+        </div>
+        <div>
+          <span class="summary-label" data-i18n="volume">Объем</span>
+          <strong id="detail-volume">-</strong>
+        </div>
+        <div>
+          <span class="summary-label" data-i18n="last7days">7 дней</span>
+          <strong id="detail-change">-</strong>
+        </div>
+      </div>
+      <div id="detail-chart" class="detail-chart"></div>
+      <div id="detail-note" class="detail-note"></div>
     </section>
 
     <section id="advice-panel" class="advice-panel d-none">
@@ -79,15 +122,15 @@
           <tr>
             <th><button type="button" class="sort-button" data-sort-key="name"><span data-i18n="name">Название</span><span class="sort-icon"></span></button></th>
             <th><button type="button" class="sort-button" data-sort-key="id"><span>id</span><span class="sort-icon"></span></button></th>
-            <th><button type="button" class="sort-button" data-sort-key="best"><span data-i18n="value">Цена</span><span class="sort-icon"></span></button></th>
-            <th><button type="button" class="sort-button" data-sort-key="median"><span data-i18n="median">Медиана</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="best"><span><span data-i18n="value">Цена</span> <small id="best-target-label" class="target-header-label"></small></span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="median"><span><span data-i18n="median">Медиана</span> <small id="median-target-label" class="target-header-label"></small></span><span class="sort-icon"></span></button></th>
             <th><button type="button" class="sort-button" data-sort-key="change"><span data-i18n="last7days">7 дней</span><span class="sort-icon"></span></button></th>
             <th><button type="button" class="sort-button" data-sort-key="offers"><span data-i18n="offers">Лотов</span><span class="sort-icon"></span></button></th>
             <th><button type="button" class="sort-button" data-sort-key="volume"><span data-i18n="volume">Объем</span><span class="sort-icon"></span></button></th>
           </tr>
         </thead>
         <tbody id="market-results">
-          <tr><td colspan="7" class="text-secondary">Загрузка...</td></tr>
+          <tr><td colspan="7" class="text-secondary" data-i18n="loading">Загрузка...</td></tr>
         </tbody>
       </table>
     </div>

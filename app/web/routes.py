@@ -14,7 +14,7 @@ from app.db.models import Row, Snapshot
 from app.db.session import get_session
 from app.export.export_csv import export_rows_csv
 from app.export.export_jsonl import export_rows_jsonl
-from app.trade2 import build_category_meta, get_category_rates, get_exchange_offers, get_trade_leagues, get_trade_static, read_history
+from app.trade2 import build_category_meta, get_category_rates, get_exchange_offers, get_trade_leagues, get_trade_static, read_history, read_latest_rates
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
@@ -90,6 +90,19 @@ async def api_trade_category_rates(
         return await get_category_rates(league=league, category=category, target=target, status=status)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+@router.get("/api/trade/category-rates/latest")
+def api_trade_category_rates_latest(
+    league: str = Query(...),
+    category: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+):
+    latest = read_latest_rates(league=league, category=category, target=target, status=status)
+    if not latest:
+        return {"cached": False, "rows": []}
+    return latest
 
 
 @router.get("/api/trade/history")

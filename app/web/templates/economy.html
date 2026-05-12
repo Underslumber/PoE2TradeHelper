@@ -2,33 +2,33 @@
 {% block content %}
 <div class="row mb-3">
   <div class="col-md-2">
-    <label class="form-label">League</label>
+    <label class="form-label" data-i18n="league">Лига</label>
     <select id="league" class="form-select">
-      <option value="">All</option>
+      <option value="" data-i18n="all">Все</option>
       {% for l in leagues %}
       <option value="{{l}}" {% if default_snapshot and default_snapshot.league==l %}selected{% endif %}>{{l}}</option>
       {% endfor %}
     </select>
   </div>
   <div class="col-md-2">
-    <label class="form-label">Category</label>
+    <label class="form-label" data-i18n="category">Категория</label>
     <select id="category" class="form-select">
-      <option value="">All</option>
+      <option value="" data-i18n="all">Все</option>
       {% for c in categories %}
       <option value="{{c}}" {% if default_snapshot and default_snapshot.category==c %}selected{% endif %}>{{c}}</option>
       {% endfor %}
     </select>
   </div>
   <div class="col-md-3">
-    <label class="form-label">Search</label>
-    <input id="search" class="form-control" placeholder="filter by name" />
+    <label class="form-label" data-i18n="search">Поиск</label>
+    <input id="search" class="form-control" data-i18n-placeholder="searchPlaceholder" placeholder="Название или id" />
   </div>
 </div>
 <div class="table-responsive">
   <table id="economy-table" class="table table-dark table-striped align-middle" style="width:100%">
     <thead class="table-secondary sticky-top">
       <tr id="columns-header">
-        <th>Item</th>
+        <th data-i18n="item">Предмет</th>
       </tr>
     </thead>
     <tbody></tbody>

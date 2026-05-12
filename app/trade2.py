@@ -90,6 +90,8 @@ EMOTION_CHAIN = [
     "concentrated-liquid-isolation",
 ]
 
+LOW_VOLUME_THRESHOLD = 10.0
+
 
 def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -257,6 +259,16 @@ def _target_factor(core: dict[str, Any], target: str) -> float | None:
         return None
 
 
+def _scaled_sparkline(data: list[Any], factor: float) -> list[float]:
+    values = []
+    for point in data:
+        try:
+            values.append(float(point) * factor)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
 def normalize_poe_ninja_overview(payload: dict[str, Any], target: str) -> dict[str, Any]:
     factor = _target_factor(payload.get("core") or {}, target)
     if factor is None:
@@ -282,7 +294,7 @@ def normalize_poe_ninja_overview(payload: dict[str, Any], target: str) -> dict[s
                 "offers": 0,
                 "volume": volume,
                 "change": sparkline.get("totalChange"),
-                "sparkline": sparkline.get("data") or [],
+                "sparkline": _scaled_sparkline(sparkline.get("data") or [], factor),
                 "max_volume_currency": line.get("maxVolumeCurrency"),
                 "max_volume_rate": line.get("maxVolumeRate"),
             }
@@ -441,6 +453,20 @@ def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -
         profit = result_value - craft_cost
         margin = profit / craft_cost if craft_cost else 0
         if profit > 0:
+            try:
+                source_volume = float(source_row.get("volume") or 0)
+            except (TypeError, ValueError):
+                source_volume = 0
+            try:
+                result_volume = float(result_row.get("volume") or 0)
+            except (TypeError, ValueError):
+                result_volume = 0
+            min_volume = min(source_volume, result_volume)
+            volume_warning_ru = ""
+            volume_warning_en = ""
+            if min_volume < LOW_VOLUME_THRESHOLD:
+                volume_warning_ru = " Объем низкий: проверь стакан вручную перед сделкой."
+                volume_warning_en = " Low volume: check the order book manually before trading."
             advice.append(
                 {
                     "kind": "profit",
@@ -454,11 +480,23 @@ def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -
                     "result_value": result_value,
                     "profit": profit,
                     "margin": margin,
+                    "source_volume": source_volume,
+                    "result_volume": result_volume,
+                    "min_volume": min_volume,
+                    "low_volume": min_volume < LOW_VOLUME_THRESHOLD,
                     "target": target,
                     "title_ru": "Выгодная перековка эмоций",
                     "title_en": "Profitable emotion upgrade",
-                    "message_ru": f"3 x {source_row.get('text_ru')} -> {result_row.get('text_ru')}: расчетная прибыль {profit:.4f} {target}.",
-                    "message_en": f"3 x {source_row.get('text')} -> {result_row.get('text')}: estimated profit {profit:.4f} {target}.",
+                    "message_ru": (
+                        f"3 x {source_row.get('text_ru')} -> {result_row.get('text_ru')}: "
+                        f"расчетная прибыль {profit:.4f} {target}, маржа {margin:.1%}, "
+                        f"минимальный объем {min_volume:.1f}.{volume_warning_ru}"
+                    ),
+                    "message_en": (
+                        f"3 x {source_row.get('text')} -> {result_row.get('text')}: "
+                        f"estimated profit {profit:.4f} {target}, margin {margin:.1%}, "
+                        f"minimum volume {min_volume:.1f}.{volume_warning_en}"
+                    ),
                 }
             )
     return sorted(advice, key=lambda item: item.get("profit", 0), reverse=True)
@@ -475,3 +513,38 @@ def read_history(limit: int = 30) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return list(reversed(history))
+
+
+def read_latest_rates(
+    league: str,
+    category: str,
+    target: str = "exalted",
+    status: str = "any",
+) -> dict[str, Any] | None:
+    if not HISTORY_PATH.exists():
+        return None
+    for line in reversed(HISTORY_PATH.read_text(encoding="utf-8").splitlines()):
+        try:
+            snapshot = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            snapshot.get("league") == league
+            and snapshot.get("category") == category
+            and snapshot.get("target") == target
+            and snapshot.get("status") == status
+        ):
+            rows = snapshot.get("rows") or []
+            return {
+                "created_ts": snapshot.get("created_ts"),
+                "league": league,
+                "category": category,
+                "target": target,
+                "status": status,
+                "rows": rows,
+                "advice": build_trade_advice(category, rows, target),
+                "errors": snapshot.get("errors") or [],
+                "source": snapshot.get("source") or "cache",
+                "cached": True,
+            }
+    return None
