@@ -100,6 +100,26 @@ const i18n = {
     buySignals: 'Купить',
     sellSignals: 'Продать',
     bestOperations: 'Лучшие операции',
+    activeTrades: 'Активные товары',
+    activeTradesLoading: 'Собираю активные товары и варианты обмена...',
+    noActiveTrades: 'Нет активных товаров с достаточным объемом для таблицы.',
+    activeTradesHint: 'Самые ликвидные позиции и лучшие варианты покупки/продажи относительно доступных валют.',
+    marketChains: 'Многоходовые сделки',
+    noMarketChains: 'Пока нет многоходовых операций с положительной расчетной разницей.',
+    operationsLoading: 'Собираю лучшие операции...',
+    operationWatchHint: 'Положительных многоходовых цепочек сейчас нет. Ниже ближайшие операции для наблюдения.',
+    route: 'Маршрут',
+    step: 'Шаг',
+    start: 'Старт',
+    finish: 'Финиш',
+    profit: 'Прибыль',
+    margin: 'Маржа',
+    bestBuy: 'Купить дешевле',
+    bestSell: 'Продать дороже',
+    activeScore: 'Активность',
+    minVolume: 'Мин. объем',
+    pricesByCurrency: 'Цены по валютам',
+    tradedFor: 'Торгуется за',
     chainMaxSteps: 'Длина цепочки',
     noBuySignals: 'Нет позиций с заметным падением цены и достаточным объемом.',
     noSellSignals: 'Нет позиций с заметным ростом цены и достаточным объемом.',
@@ -115,8 +135,10 @@ const i18n = {
     crossHint: 'Сравнение покупки за одну валюту и продажи за другую появится после расчета.',
     crossLoading: 'Считаю кросс-валютные варианты...',
     noCrossDeals: 'Кросс-валютных вариантов с положительной разницей и объемом пока нет.',
+    crossWatchHint: 'Положительной разницы сейчас нет. Ниже ближайшие к выгодным сравнения для контроля рынка.',
     signalLabel: 'Сигнал',
     weakSignalLabel: 'Слабый сигнал',
+    watchLabel: 'Наблюдать',
     buyFor: 'Купить за',
     sellFor: 'Продать за',
     spread: 'Разница',
@@ -184,6 +206,26 @@ const i18n = {
     buySignals: 'Buy',
     sellSignals: 'Sell',
     bestOperations: 'Best operations',
+    activeTrades: 'Active items',
+    activeTradesLoading: 'Collecting active items and exchange variants...',
+    noActiveTrades: 'No active items with enough volume for the table.',
+    activeTradesHint: 'Most liquid items and best buy/sell variants across available currencies.',
+    marketChains: 'Multi-step deals',
+    noMarketChains: 'No positive calculated multi-step operations yet.',
+    operationsLoading: 'Collecting best operations...',
+    operationWatchHint: 'No positive multi-step chains right now. Closest operations are listed for monitoring.',
+    route: 'Route',
+    step: 'Step',
+    start: 'Start',
+    finish: 'Finish',
+    profit: 'Profit',
+    margin: 'Margin',
+    bestBuy: 'Cheapest buy',
+    bestSell: 'Best sell',
+    activeScore: 'Activity',
+    minVolume: 'Min. volume',
+    pricesByCurrency: 'Prices by currency',
+    tradedFor: 'Traded for',
     chainMaxSteps: 'Chain length',
     noBuySignals: 'No items with a notable price drop and enough volume.',
     noSellSignals: 'No items with a notable price rise and enough volume.',
@@ -199,8 +241,10 @@ const i18n = {
     crossHint: 'Buy-for-one-currency and sell-for-another comparison appears after calculation.',
     crossLoading: 'Calculating cross-currency variants...',
     noCrossDeals: 'No positive-spread cross-currency variants with volume yet.',
+    crossWatchHint: 'No positive spread right now. Closest comparisons are listed below for market monitoring.',
     signalLabel: 'Signal',
     weakSignalLabel: 'Weak signal',
+    watchLabel: 'Watch',
     buyFor: 'Buy for',
     sellFor: 'Sell for',
     spread: 'Spread',
@@ -251,6 +295,10 @@ const state = {
   crossDeals: [],
   crossDealsKey: '',
   isLoadingCrossDeals: false,
+  activeTrades: [],
+  marketChains: [],
+  activeTradesKey: '',
+  isLoadingActiveTrades: false,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
   autoRefreshTimer: null,
   isRefreshing: false,
@@ -486,6 +534,9 @@ function renderCategories() {
       state.selectedItemId = null;
       state.crossDeals = [];
       state.crossDealsKey = '';
+      state.activeTrades = [];
+      state.marketChains = [];
+      state.activeTradesKey = '';
       document.getElementById('category-title').textContent = categoryName(category);
       document.getElementById('item-detail-panel')?.classList.add('d-none');
       renderCategories();
@@ -795,6 +846,7 @@ function renderAdvice(advice) {
   renderTrendSignals();
   renderOperationSignals();
   renderCrossDeals();
+  renderActiveTrades();
   switchAdviceTab(state.activeAdviceTab);
 }
 
@@ -852,7 +904,42 @@ function renderOperationSignals() {
   if (!list) return;
   const maxSteps = Number(document.getElementById('chain-max-steps')?.value || 5);
   const operations = state.advice.filter(item => Number(item.path_steps || 1) <= maxSteps);
-  renderAdviceList(list, operations, t('noAdvice'));
+  if (operations.length) {
+    renderAdviceList(list, operations, t('noAdvice'));
+    return;
+  }
+  list.innerHTML = '';
+  if (state.isLoadingActiveTrades) {
+    list.innerHTML = `<p class="text-secondary">${t('operationsLoading')}</p>`;
+    return;
+  }
+  if (state.marketChains.length) {
+    list.innerHTML = state.marketChains.map(renderMarketChain).join('');
+    return;
+  }
+  if (state.activeTrades.length) {
+    list.innerHTML = `<p class="text-secondary">${t('operationWatchHint')}</p>${state.activeTrades.slice(0, 10).map(renderActiveTradeOperation).join('')}`;
+    return;
+  }
+  list.innerHTML = `<p class="text-secondary">${t('noMarketChains')}</p>`;
+}
+
+function renderActiveTradeOperation(item) {
+  return `
+    <article class="advice-card watch">
+      <div class="advice-card-layout">
+        <div class="advice-card-content">
+          <div class="advice-title-row"><span class="advice-badge">${t('watchLabel')}</span><strong>${itemTitleMarkup(item.name, item.image)}</strong></div>
+          <p>${t('buyFor')} ${formatAmount(item.buy.value)} ${currencyLabel(item.buy.target)} → ${t('sellFor')} ${formatAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</p>
+          <div class="deal-meta">
+            <span>${t('spread')}: ${formatAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</span>
+            <span>${t('demandVolume')}: ${formatAmount(item.volume)}</span>
+          </div>
+        </div>
+        ${miniSignalChart(item.sparkline || [], t('priceChartBasis'), item.sell.value)}
+      </div>
+    </article>
+  `;
 }
 
 function renderAdviceList(list, advice, emptyText) {
@@ -927,10 +1014,12 @@ function switchAdviceTab(tab) {
   document.querySelectorAll('.advice-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.adviceTab === tab);
   });
-  ['buy', 'sell', 'ops', 'cross'].forEach(name => {
+  ['buy', 'sell', 'ops', 'active', 'cross'].forEach(name => {
     document.getElementById(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
   });
   if (tab === 'ops') renderOperationSignals();
+  if (tab === 'ops') loadActiveTrades();
+  if (tab === 'active') loadActiveTrades();
   if (tab === 'cross') loadCrossCurrencyDeals();
 }
 
@@ -946,10 +1035,13 @@ function renderCrossDeals() {
     list.innerHTML = `<p class="text-secondary">${t('noCrossDeals')}</p>`;
     return;
   }
+  if (!state.crossDeals.some(deal => deal.profitable)) {
+    list.innerHTML = `<p class="text-secondary">${t('crossWatchHint')}</p>`;
+  }
   state.crossDeals.forEach(deal => {
     const card = document.createElement('article');
     card.className = `advice-card ${deal.severity}`;
-    const badge = deal.severity === 'signal' ? t('signalLabel') : t('weakSignalLabel');
+    const badge = deal.severity === 'signal' ? t('signalLabel') : deal.severity === 'weak' ? t('weakSignalLabel') : t('watchLabel');
     const entry = findAnyEntry(deal.id);
     const name = entry ? entryName(entry) : deal.name;
     renderAdviceCard(card, `
@@ -991,32 +1083,49 @@ function crossDealsKey() {
   return `${league}|${state.selectedCategory}|${selectedTarget()}|${status}`;
 }
 
-function buildCrossCurrencyDeals(datasets, baseTarget) {
+function multiTargetDealsKey() {
+  return `${crossDealsKey()}|${availableTargetIds().join(',')}`;
+}
+
+function datasetFactors(datasets, baseTarget) {
   const baseData = datasets.get(baseTarget);
-  if (!baseData?.rows?.length) return [];
   const factors = new Map([[baseTarget, 1]]);
+  if (!baseData?.rows?.length) return factors;
   datasets.forEach((data, target) => {
     if (target === baseTarget) return;
     const factor = inferConversionFactor(baseData, data);
     if (factor) factors.set(target, factor);
   });
+  return factors;
+}
+
+function tradeOptionsForEntry(entry, datasets, factors) {
+  const options = [];
+  datasets.forEach((data, target) => {
+    const factor = factors.get(target);
+    const row = rowsById(data).get(entry.id);
+    const value = rateValue(row);
+    const volume = Number(row?.volume || 0);
+    if (factor && value && volume >= CROSS_MIN_VOLUME) {
+      options.push({
+        target,
+        value,
+        baseValue: value * factor,
+        volume,
+        row,
+      });
+    }
+  });
+  return options;
+}
+
+function buildCrossCurrencyDeals(datasets, baseTarget) {
+  const baseData = datasets.get(baseTarget);
+  if (!baseData?.rows?.length) return [];
+  const factors = datasetFactors(datasets, baseTarget);
   const deals = [];
   (state.categories[state.selectedCategory] || []).forEach(entry => {
-    const options = [];
-    datasets.forEach((data, target) => {
-      const factor = factors.get(target);
-      const row = rowsById(data).get(entry.id);
-      const value = rateValue(row);
-      const volume = Number(row?.volume || 0);
-      if (factor && value && volume >= CROSS_MIN_VOLUME) {
-        options.push({
-          target,
-          value,
-          baseValue: value * factor,
-          volume,
-        });
-      }
-    });
+    const options = tradeOptionsForEntry(entry, datasets, factors);
     if (options.length < 2) return;
     options.sort((left, right) => left.baseValue - right.baseValue);
     const buy = options[0];
@@ -1025,7 +1134,7 @@ function buildCrossCurrencyDeals(datasets, baseTarget) {
     const profit = sell.baseValue - buy.baseValue;
     const margin = buy.baseValue ? profit / buy.baseValue : 0;
     const volume = Math.min(buy.volume, sell.volume);
-    if (profit <= 0 || margin < 0.005 || volume < CROSS_MIN_VOLUME) return;
+    if (volume < CROSS_MIN_VOLUME) return;
     deals.push({
       id: entry.id,
       name: entryName(entry),
@@ -1038,10 +1147,212 @@ function buildCrossCurrencyDeals(datasets, baseTarget) {
       margin,
       volume,
       sparkline: (rowsById(baseData).get(entry.id) || {}).sparkline || [],
-      severity: margin >= 0.08 ? 'signal' : 'weak',
+      profitable: profit > 0 && margin >= 0.005,
+      severity: profit > 0 && margin >= 0.08 ? 'signal' : profit > 0 && margin >= 0.005 ? 'weak' : 'watch',
     });
   });
-  return deals.sort((left, right) => right.margin - left.margin || right.profit - left.profit).slice(0, 30);
+  return deals.sort((left, right) => {
+    if (left.profitable !== right.profitable) return left.profitable ? -1 : 1;
+    return right.margin - left.margin || right.profit - left.profit;
+  }).slice(0, 30);
+}
+
+function buildActiveTradeTable(datasets, baseTarget) {
+  const baseData = datasets.get(baseTarget);
+  if (!baseData?.rows?.length) return [];
+  const factors = datasetFactors(datasets, baseTarget);
+  return (state.categories[state.selectedCategory] || [])
+    .map(entry => {
+      const options = tradeOptionsForEntry(entry, datasets, factors);
+      if (!options.length) return null;
+      options.sort((left, right) => left.baseValue - right.baseValue);
+      const buy = options[0];
+      const sell = options[options.length - 1];
+      const profit = sell.baseValue - buy.baseValue;
+      const margin = buy.baseValue ? profit / buy.baseValue : 0;
+      const volume = Math.min(...options.map(option => option.volume));
+      const baseRow = rowsById(baseData).get(entry.id);
+      const marketRow = baseRow || sell.row || buy.row;
+      const activity = Math.max(...options.map(option => option.volume));
+      return {
+        id: entry.id,
+        entry,
+        name: entryName(entry),
+        image: entryIcon(entry),
+        activity,
+        volume,
+        buy,
+        sell,
+        profit,
+        margin,
+        marketCurrency: marketRow?.max_volume_currency || '',
+        marketRate: Number(marketRow?.max_volume_rate || 0),
+        prices: options.sort((left, right) => availableTargetIds().indexOf(left.target) - availableTargetIds().indexOf(right.target)),
+        sparkline: baseRow?.sparkline || sell.row?.sparkline || [],
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.activity - left.activity)
+    .slice(0, 20);
+}
+
+function renderMarketBasis(item) {
+  if (!item.marketCurrency) return '-';
+  return currencyMarkup(item.marketCurrency);
+}
+
+function buildMarketChains(activeTrades, baseTarget, maxSteps) {
+  if (!activeTrades.length) return [];
+  const profitable = activeTrades
+    .filter(item => item.profit > 0 && item.margin >= 0.005 && item.buy.target !== item.sell.target)
+    .sort((left, right) => right.margin - left.margin || right.profit - left.profit)
+    .slice(0, 12);
+  const chains = [];
+  for (const start of profitable) {
+    let amount = start.buy.baseValue;
+    const steps = [];
+    let minVolume = Infinity;
+    for (let index = 0; index < Math.max(1, maxSteps); index += 1) {
+      const candidates = profitable
+        .filter(item => !steps.some(step => step.id === item.id))
+        .map(item => {
+          const nextAmount = amount * (item.sell.baseValue / item.buy.baseValue);
+          return { item, nextAmount, gain: nextAmount - amount };
+        })
+        .sort((left, right) => right.gain - left.gain);
+      const next = candidates[0];
+      if (!next || next.gain <= 0) break;
+      steps.push(next.item);
+      amount = next.nextAmount;
+      minVolume = Math.min(minVolume, next.item.volume);
+    }
+    if (!steps.length) continue;
+    const initial = steps[0].buy.baseValue;
+    const profit = amount - initial;
+    const margin = initial ? profit / initial : 0;
+    if (profit <= 0) continue;
+    chains.push({
+      steps,
+      startValue: initial,
+      finishValue: amount,
+      profit,
+      margin,
+      baseTarget,
+      minVolume: Number.isFinite(minVolume) ? minVolume : 0,
+    });
+  }
+  return chains
+    .sort((left, right) => right.margin - left.margin || right.profit - left.profit)
+    .slice(0, 10);
+}
+
+function renderActiveTrades() {
+  const panel = document.getElementById('advice-list-active');
+  if (!panel) return;
+  if (state.isLoadingActiveTrades) {
+    panel.innerHTML = `<p class="text-secondary">${t('activeTradesLoading')}</p>`;
+    return;
+  }
+  if (!state.activeTrades.length) {
+    panel.innerHTML = `<p class="text-secondary">${t('noActiveTrades')}</p>`;
+    return;
+  }
+  panel.innerHTML = `
+    <p class="text-secondary">${t('activeTradesHint')}</p>
+    <div class="active-trades-wrap">
+      <table class="active-trades-table">
+        <thead>
+          <tr>
+            <th>${t('name')}</th>
+            <th>${t('activeScore')}</th>
+            <th>${t('bestBuy')}</th>
+            <th>${t('bestSell')}</th>
+            <th>${t('tradedFor')}</th>
+            <th>${t('profit')}</th>
+            <th>${t('pricesByCurrency')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${state.activeTrades.map(item => `
+            <tr>
+              <td>${itemTitleMarkup(item.name, item.image)}</td>
+              <td>${formatAmount(item.activity)}</td>
+              <td>${formatAmount(item.buy.value)} ${currencyLabel(item.buy.target)}</td>
+              <td>${formatAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</td>
+              <td>${renderMarketBasis(item)}</td>
+              <td class="${item.profit > 0 ? 'change-up' : ''}">${formatAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</td>
+              <td>${item.prices.map(price => `${formatAmount(price.value)} ${currencyLabel(price.target)}`).join(' / ')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <h3 class="signals-subtitle">${t('marketChains')}</h3>
+    <div class="market-chain-list">
+      ${state.marketChains.length ? state.marketChains.map(renderMarketChain).join('') : `<p class="text-secondary">${t('noMarketChains')}</p>`}
+    </div>
+  `;
+}
+
+function renderMarketChain(chain) {
+  const route = chain.steps.map(step => itemTitleMarkup(step.name, step.image)).join('<span class="advice-arrow">→</span>');
+  const stepRows = chain.steps.map((step, index) => `
+    <div class="chain-step">
+      <strong>${t('step')} ${index + 1}</strong>
+      <span>${t('buyFor')} ${formatAmount(step.buy.value)} ${currencyLabel(step.buy.target)} → ${t('sellFor')} ${formatAmount(step.sell.value)} ${currencyLabel(step.sell.target)}</span>
+    </div>
+  `).join('');
+  return `
+    <article class="market-chain-card">
+      <div class="advice-title-row"><span class="advice-badge">${t('profit')}</span><strong>${route}</strong></div>
+      <div class="deal-meta">
+        <span>${t('start')}: ${formatAmount(chain.startValue)} ${currencyLabel(chain.baseTarget)}</span>
+        <span>${t('finish')}: ${formatAmount(chain.finishValue)} ${currencyLabel(chain.baseTarget)}</span>
+        <span>${t('profit')}: ${formatAmount(chain.profit)} ${currencyLabel(chain.baseTarget)} (${formatChange(chain.margin * 100)})</span>
+        <span>${t('minVolume')}: ${formatAmount(chain.minVolume)}</span>
+      </div>
+      <div class="chain-steps">${stepRows}</div>
+    </article>
+  `;
+}
+
+async function loadActiveTrades() {
+  const key = multiTargetDealsKey();
+  if (state.activeTradesKey === key || state.isLoadingActiveTrades) {
+    renderActiveTrades();
+    if (state.activeAdviceTab === 'ops') renderOperationSignals();
+    return;
+  }
+  const targets = availableTargetIds();
+  if (targets.length < 2) {
+    state.activeTrades = [];
+    state.marketChains = [];
+    state.activeTradesKey = key;
+    renderActiveTrades();
+    if (state.activeAdviceTab === 'ops') renderOperationSignals();
+    return;
+  }
+  state.isLoadingActiveTrades = true;
+  renderActiveTrades();
+  if (state.activeAdviceTab === 'ops') renderOperationSignals();
+  try {
+    const datasets = new Map();
+    for (const target of targets) {
+      datasets.set(target, await ensureRatesForTarget(target));
+    }
+    state.activeTrades = buildActiveTradeTable(datasets, selectedTarget());
+    const maxSteps = Number(document.getElementById('chain-max-steps')?.value || 5);
+    state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), maxSteps);
+    state.activeTradesKey = key;
+  } catch {
+    state.activeTrades = [];
+    state.marketChains = [];
+    state.activeTradesKey = key;
+  } finally {
+    state.isLoadingActiveTrades = false;
+    renderActiveTrades();
+    if (state.activeAdviceTab === 'ops') renderOperationSignals();
+  }
 }
 
 async function loadCrossCurrencyDeals() {
@@ -1214,7 +1525,12 @@ async function initLiveTrade() {
     });
     document.getElementById('chain-max-steps')?.addEventListener('change', () => {
       renderOperationSignals();
-      switchAdviceTab('ops');
+      if (state.activeAdviceTab === 'active') {
+        state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), Number(document.getElementById('chain-max-steps')?.value || 5));
+        renderActiveTrades();
+      } else {
+        switchAdviceTab('ops');
+      }
     });
     document.getElementById('auto-refresh-interval').addEventListener('change', event => {
       state.autoRefreshMs = Number(event.target.value || 0);
@@ -1227,6 +1543,9 @@ async function initLiveTrade() {
         state.detailRates = {};
         state.crossDeals = [];
         state.crossDealsKey = '';
+        state.activeTrades = [];
+        state.marketChains = [];
+        state.activeTradesKey = '';
         document.getElementById('last-snapshot').textContent = '-';
         document.getElementById('rate-source').textContent = '-';
         renderTargetCurrencyInfo();

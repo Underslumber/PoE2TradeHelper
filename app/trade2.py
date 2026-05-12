@@ -422,6 +422,8 @@ async def get_category_rates(
                 "volume": stats.get("volume", 0),
                 "change": stats.get("change"),
                 "sparkline": stats.get("sparkline", []),
+                "max_volume_currency": stats.get("max_volume_currency"),
+                "max_volume_rate": stats.get("max_volume_rate"),
             }
         )
 

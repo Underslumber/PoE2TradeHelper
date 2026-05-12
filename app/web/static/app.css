@@ -509,6 +509,66 @@ body {
   margin-top: 2px;
   text-align: right;
 }
+.active-trades-wrap {
+  border: 1px solid #2d3b45;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.active-trades-table {
+  border-collapse: collapse;
+  min-width: 1120px;
+  width: 100%;
+}
+.active-trades-table th,
+.active-trades-table td {
+  border-top: 1px solid #263741;
+  padding: 8px 10px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.active-trades-table .advice-item-title {
+  display: grid;
+  grid-template-columns: 34px auto;
+}
+.active-trades-table .advice-item-title img,
+.active-trades-table td > img {
+  height: 34px;
+  max-height: 34px;
+  max-width: 34px;
+  object-fit: contain;
+  width: 34px;
+}
+.active-trades-table thead th {
+  background: #17242d;
+  border-top: 0;
+  color: #dbe7ef;
+  font-size: 0.82rem;
+}
+.signals-subtitle {
+  font-size: 1rem;
+  margin: 16px 0 10px;
+}
+.market-chain-list {
+  display: grid;
+  gap: 10px;
+}
+.market-chain-card {
+  background: rgba(255, 255, 255, 0.014);
+  border-left: 3px solid #25e7a1;
+  padding: 10px 0 10px 12px;
+}
+.chain-steps {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+.chain-step {
+  color: #b8c4ce;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.84rem;
+  gap: 8px;
+}
 .market-table-wrap {
   border: 1px solid #2d3b45;
   border-radius: 4px;
