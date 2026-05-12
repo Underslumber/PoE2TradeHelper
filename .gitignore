@@ -1,8 +1,12 @@
 .env
 .venv/
 .idea/
+.pytest_cache/
 __pycache__/
 *.pyc
 *.log
+storage/
+data/
+*.sqlite
 Answer_API.txt
 PoE2 Trade Helper - Курс валют.html

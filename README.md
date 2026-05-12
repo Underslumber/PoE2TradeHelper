@@ -1,37 +1,87 @@
 # PoE2 Trade Helper
 
-Черновик помощника для торговли в Path of Exile 2.
+Локальный помощник для торговли в Path of Exile 2. Текущий фокус - работать без OAuth через публичную торговую площадку `trade2` и агрегированные данные poe.ninja, выбирать текущую лигу и смотреть live-обмен валют.
 
-## Что сейчас полезно
+## Что уже есть
 
-- `mcp_server.py` - заготовка MCP-инструментов для поиска предметов, получения деталей лотов и обмена валют через `https://www.pathofexile.com/api/trade2`.
-- `app.py` и `templates/index.html` - старая Flask-страница с курсами. Она оставлена как legacy, но сейчас содержит дублирующуюся логику, заглушки и старые PoE1 endpoint'ы. Для развития проекта лучше опираться на `mcp_server.py`, а UI писать заново поверх нормального API-слоя.
+- Live web UI на FastAPI: `/`
+  - загружает текущие PoE2-лиги из `trade2/data/leagues`;
+  - дает выбрать лигу;
+  - показывает все актуальные trade2-категории и позиции из `trade2/data/static`;
+  - поддерживает RU/EN-переключатель интерфейса;
+  - умеет сортировать таблицу по названию, id, цене, медиане, изменению за 7 дней, лотам и объему;
+  - обновляет цены выбранной категории через poe.ninja PoE2 exchange overview, если категория поддерживается, иначе откатывается к `trade2/exchange`;
+  - ведет локальный JSONL-лог снимков цен в `data/trade_rate_history.jsonl`;
+  - содержит первый анализатор цепочки жидких эмоций 3-в-1.
+- Заготовка poe.ninja economy collector: `/economy`
+  - discovery через Playwright;
+  - синхронизация лиг/категорий poe.ninja в SQLite;
+  - экспорт CSV/JSONL.
+- `mcp_server.py` - отдельная MCP-заготовка для trade2 и будущего официального API.
 
 ## Ключи и доступы
 
-Для обычного поиска сделок через `trade2/search`, `trade2/fetch` и `trade2/exchange` отдельный ключ обычно не нужен. Нужен корректный `USER_AGENT`.
+Для ближайшего MVP OAuth/API-заявка GGG не нужна.
 
-OAuth-токен Path of Exile нужен, если используем официальный API `https://api.pathofexile.com`, например:
+Публичные запросы, которые используются сейчас:
 
-- `service:cxapi` - исторические часовые сводки Currency Exchange;
-- `account:characters` - персонажи аккаунта;
-- `account:stashes` - в официальной документации помечен как PoE1 only, поэтому для анализа личных ящиков PoE2 на него пока нельзя надежно рассчитывать.
+- `https://www.pathofexile.com/api/trade2/data/leagues`
+- `https://www.pathofexile.com/api/trade2/data/static`
+- `https://www.pathofexile.com/api/trade2/exchange/poe2/<league>`
+- `https://poe.ninja/poe2/api/economy/exchange/current/overview?league=<league>&type=<type>`
 
-Клиент создается на странице:
+Нужен только корректный `USER_AGENT`.
 
-```text
-https://www.pathofexile.com/my-account/clients
-```
+poe.ninja endpoint используется как агрегированный источник для категорий, где он есть: `Currency`, `Fragments`, `Delirium` / Liquid Emotions, `Breach`, `Essences`, `Ritual`, `Expedition`, `Runes`, `Abyss`, `UncutGems`, `LineageSupportGems`, `SoulCores`, `Idols`. Он лучше подходит для цепочек эмоций и проходок, потому что возвращает нормализованные значения, объем и 7-дневное изменение.
 
-Для локального десктопного помощника нужен Public Client с Authorization Code + PKCE. Для сервисных scope вроде `service:cxapi` нужен Confidential Client и client credentials.
+OAuth пригодится позже только для официального `https://api.pathofexile.com`, например:
 
-## Локальный запуск MCP-сервера
+- `service:cxapi` - официальная историческая Currency Exchange API;
+- `account:characters` - персонажи и инвентарь аккаунта.
+
+Официальные stash endpoints в текущей документации помечены как PoE1 only, поэтому для PoE2 stash/listed-items анализа пока нельзя обещать рабочий официальный путь.
+
+## Установка
 
 ```powershell
-Copy-Item .env.example .env
 python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe mcp_server.py
 ```
 
-Команды выше создают локальное окружение, ставят зависимости и запускают MCP-сервер с торговыми инструментами.
+Эти команды создают локальное Python-окружение и ставят зависимости проекта.
+
+Для poe.ninja discovery дополнительно нужен Chromium Playwright:
+
+```powershell
+.\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+Эта команда ставит браузер, который нужен только для discovery/fallback-сбора poe.ninja.
+
+## Запуск
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli run
+```
+
+Команда запускает локальный веб-интерфейс на `http://127.0.0.1:8000`.
+
+## CLI
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli discover --league vaal --category runes
+.\.venv\Scripts\python.exe -m app.cli sync --league vaal --category runes
+.\.venv\Scripts\python.exe -m app.cli sync --all
+```
+
+Команды выше относятся к poe.ninja collector: найти endpoint, синхронизировать одну пару лига/категория или синхронизировать все найденные пары.
+
+## Проверка
+
+```powershell
+python -m pytest -q
+python -m py_compile app.py mcp_server.py
+```
+
+Первая команда запускает тесты, вторая проверяет синтаксис legacy/MCP-файлов.

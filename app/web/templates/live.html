@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="app-shell">
+  <aside class="side-panel">
+    <div class="side-title" data-i18n="categories">Категории</div>
+    <div id="category-list" class="category-list"></div>
+  </aside>
+
+  <main class="main-panel">
+    <section class="hero-bar">
+      <div>
+        <div class="crumbs">PoE2 Trade Helper / <span id="category-title">-</span></div>
+        <h1 data-i18n="market">Рынок</h1>
+        <p data-i18n="marketHint">Публичная торговая и валютная площадка без OAuth. Сначала выводим все позиции, цены обновляем аккуратно для выбранной категории.</p>
+      </div>
+      <div class="language-switch" role="group" aria-label="Language">
+        <button id="lang-ru" type="button" class="lang-btn active">RU</button>
+        <button id="lang-en" type="button" class="lang-btn">EN</button>
+      </div>
+    </section>
+
+    <section class="filters-grid market-filters">
+      <label class="form-field">
+        <span data-i18n="league">Лига</span>
+        <select id="live-league" class="form-select"></select>
+      </label>
+      <label class="form-field">
+        <span data-i18n="targetCurrency">Валюта оценки</span>
+        <select id="target-currency" class="form-select"></select>
+      </label>
+      <label class="form-field">
+        <span data-i18n="status">Статус</span>
+        <select id="live-status" class="form-select">
+          <option value="any" selected>any</option>
+          <option value="online">online</option>
+        </select>
+      </label>
+      <label class="form-field">
+        <span data-i18n="search">Поиск</span>
+        <input id="market-search" class="form-control" type="search" placeholder="Название или id">
+      </label>
+    </section>
+
+    <section class="action-row">
+      <button id="refresh-rates" class="btn btn-primary" type="button" data-i18n="refreshRates">Обновить цены категории</button>
+      <button id="refresh-static" class="btn btn-outline-light" type="button" data-i18n="refreshLists">Обновить списки</button>
+      <span id="rate-status" class="muted-status"></span>
+    </section>
+
+    <section class="summary-strip mb-3">
+      <div>
+        <span class="summary-label" data-i18n="items">Позиций</span>
+        <strong id="items-total">0</strong>
+      </div>
+      <div>
+        <span class="summary-label" data-i18n="priced">С ценой</span>
+        <strong id="priced-total">0</strong>
+      </div>
+      <div>
+        <span class="summary-label" data-i18n="lastSnapshot">Последний снимок</span>
+        <strong id="last-snapshot">-</strong>
+      </div>
+      <div>
+        <span class="summary-label" data-i18n="source">Источник</span>
+        <strong id="rate-source">-</strong>
+      </div>
+    </section>
+
+    <section id="advice-panel" class="advice-panel d-none">
+      <h2 data-i18n="tradeAdvice">Советы по торгам</h2>
+      <div id="advice-list"></div>
+    </section>
+
+    <div id="live-error" class="alert alert-danger d-none" role="alert"></div>
+
+    <div class="table-responsive market-table-wrap">
+      <table class="market-table">
+        <thead>
+          <tr>
+            <th><button type="button" class="sort-button" data-sort-key="name"><span data-i18n="name">Название</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="id"><span>id</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="best"><span data-i18n="value">Цена</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="median"><span data-i18n="median">Медиана</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="change"><span data-i18n="last7days">7 дней</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="offers"><span data-i18n="offers">Лотов</span><span class="sort-icon"></span></button></th>
+            <th><button type="button" class="sort-button" data-sort-key="volume"><span data-i18n="volume">Объем</span><span class="sort-icon"></span></button></th>
+          </tr>
+        </thead>
+        <tbody id="market-results">
+          <tr><td colspan="7" class="text-secondary">Загрузка...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section class="history-panel">
+      <h2 data-i18n="history">Лог изменений курса</h2>
+      <div id="history-list" class="history-list"></div>
+    </section>
+  </main>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+initLiveTrade();
+</script>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row mb-3">
+  <div class="col-md-2">
+    <label class="form-label">League</label>
+    <select id="league" class="form-select">
+      <option value="">All</option>
+      {% for l in leagues %}
+      <option value="{{l}}" {% if default_snapshot and default_snapshot.league==l %}selected{% endif %}>{{l}}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2">
+    <label class="form-label">Category</label>
+    <select id="category" class="form-select">
+      <option value="">All</option>
+      {% for c in categories %}
+      <option value="{{c}}" {% if default_snapshot and default_snapshot.category==c %}selected{% endif %}>{{c}}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label">Search</label>
+    <input id="search" class="form-control" placeholder="filter by name" />
+  </div>
+</div>
+<div class="table-responsive">
+  <table id="economy-table" class="table table-dark table-striped align-middle" style="width:100%">
+    <thead class="table-secondary sticky-top">
+      <tr id="columns-header">
+        <th>Item</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.datatables.net/2.0.8/js/dataTables.js"></script>
+<script>
+initEconomyTable();
+</script>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h5>{{ row.name }}</h5>
+<p class="text-muted">Snapshot: {{ row.snapshot_id }}</p>
+<div class="row">
+  <div class="col-md-6">
+    <h6>Columns</h6>
+    <pre class="bg-black text-light p-3 rounded" style="max-height:400px;overflow:auto">{{ columns | tojson(indent=2) }}</pre>
+  </div>
+  <div class="col-md-6">
+    <h6>Raw</h6>
+    <pre class="bg-black text-light p-3 rounded" style="max-height:400px;overflow:auto">{{ raw | tojson(indent=2) }}</pre>
+  </div>
+</div>
+{% endblock %}
