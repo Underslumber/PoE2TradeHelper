@@ -8,6 +8,12 @@ body {
 .navbar .btn {
   min-width: 84px;
 }
+.brand-icon {
+  flex: 0 0 auto;
+  height: 52px;
+  object-fit: contain;
+  width: 64px;
+}
 .app-shell {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
