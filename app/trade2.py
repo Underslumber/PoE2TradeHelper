@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import statistics
 import time
 from typing import Any
@@ -20,8 +21,19 @@ RATE_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 SELLER_LOTS_CACHE_TTL = 900
 SELLER_LOTS_FETCH_LIMIT = 100
 SELLER_MARKET_CACHE_TTL = 600
+SELLER_MARKET_FETCH_LIMIT = 60
+SELLER_MARKET_MIN_COMPARABLES = 3
+SELLER_MARKET_MAX_STAT_FILTERS = 12
 SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+COMPARABLE_STAT_TYPES = ("explicit", "fractured", "implicit", "rune", "desecrated")
+IMPORTANT_STAT_RE = re.compile(
+    r"spirit|дух|life|здоров|resistance|сопротив|speed|скорост|skill|умени|damage|урон|"
+    r"attribute|атрибут|strength|dexterity|intelligence|сил|ловк|инт|energy shield|энергет|"
+    r"evasion|уклон|armour|брон",
+    re.IGNORECASE,
+)
 
 POE_NINJA_CATEGORY_TYPES = {
     "Currency": "Currency",
@@ -328,6 +340,90 @@ def _rarity_option(rarity: str | None) -> str | None:
     return value if value in {"normal", "magic", "rare", "unique"} else None
 
 
+def _stat_filter(stat_id: str, weight: float | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"id": stat_id, "disabled": False}
+    if weight is not None:
+        payload["value"] = {"weight": weight}
+    return payload
+
+
+def _stat_mod_priority(mod: dict[str, Any]) -> int:
+    kind_score = {
+        "fractured": 90,
+        "explicit": 80,
+        "implicit": 60,
+        "rune": 45,
+        "desecrated": 40,
+    }.get(str(mod.get("type") or ""), 20)
+    text = " ".join(str(mod.get(key) or "") for key in ("id", "text", "name", "tier"))
+    return kind_score + (40 if IMPORTANT_STAT_RE.search(text) else 0)
+
+
+def _item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    groups = ((item.get("extended") or {}).get("mods") or {})
+    for kind in COMPARABLE_STAT_TYPES:
+        for mod in groups.get(kind) or []:
+            if not isinstance(mod, dict):
+                continue
+            text = mod.get("name") or mod.get("text") or ""
+            stat_ids = [mod.get("hash") or mod.get("id")]
+            stat_ids.extend(
+                magnitude.get("hash") or magnitude.get("id")
+                for magnitude in mod.get("magnitudes") or []
+                if isinstance(magnitude, dict)
+            )
+            for stat_id in stat_ids:
+                if stat_id:
+                    result.append(
+                        {
+                            "id": stat_id,
+                            "type": kind,
+                            "text": text,
+                            "tier": mod.get("tier"),
+                            "level": mod.get("level"),
+                        }
+                    )
+    return result
+
+
+def _lot_key_stat_mods(lot: dict[str, Any], max_count: int = SELLER_MARKET_MAX_STAT_FILTERS) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for mod in lot.get("stat_mods") or []:
+        stat_id = mod.get("id")
+        kind = mod.get("type")
+        if not stat_id or stat_id in seen or kind not in COMPARABLE_STAT_TYPES:
+            continue
+        seen.add(stat_id)
+        candidates.append(mod)
+
+    candidates.sort(key=_stat_mod_priority, reverse=True)
+    return candidates[:max_count]
+
+
+def _similar_lot_stat_group(lot: dict[str, Any], looseness: int) -> dict[str, Any]:
+    mods = _lot_key_stat_mods(lot)
+    if not mods:
+        return {"type": "and", "filters": []}
+
+    filters = [_stat_filter(mod["id"]) for mod in mods]
+    if looseness == 0 or len(filters) == 1:
+        return {"type": "and", "filters": filters}
+    if looseness == 1:
+        return {"type": "count", "value": {"min": max(1, len(filters) - 1)}, "filters": filters}
+
+    weighted_filters = [
+        _stat_filter(mod["id"], max(1.0, round(_stat_mod_priority(mod) / 20, 2)))
+        for mod in mods
+    ]
+    return {
+        "type": "weight",
+        "value": {"min": max(1, len(weighted_filters))},
+        "filters": weighted_filters,
+    }
+
+
 def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) -> dict[str, Any]:
     type_filters: dict[str, Any] = {}
     rarity = _rarity_option(lot.get("rarity"))
@@ -344,7 +440,7 @@ def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) ->
 
     query: dict[str, Any] = {
         "status": {"option": status},
-        "stats": [{"type": "and", "filters": []}],
+        "stats": [_similar_lot_stat_group(lot, looseness)],
         "filters": filters,
     }
     if rarity == "unique" and lot.get("name"):
@@ -385,6 +481,179 @@ def _listing_text_blob(lot: dict[str, Any]) -> str:
     ).lower()
 
 
+def _clean_trade_text(value: Any) -> str:
+    text = str(value or "")
+    return re.sub(r"\[[^\]|]*\|([^\]]+)\]", r"\1", text).strip()
+
+
+def _stat_mod_priority(mod: dict[str, Any]) -> int:
+    kind = mod.get("type") or ""
+    text = _clean_trade_text(mod.get("text") or mod.get("name") or "")
+    score = {
+        "pseudo": 95,
+        "explicit": 70,
+        "fractured": 75,
+        "implicit": 45,
+        "rune": 40,
+        "desecrated": 40,
+    }.get(kind, 20)
+    if IMPORTANT_STAT_RE.search(text):
+        score += 30
+    tier = str(mod.get("tier") or "")
+    tier_match = re.search(r"(\d+)", tier)
+    if tier_match:
+        tier_num = int(tier_match.group(1))
+        if tier_num <= 2:
+            score += 15
+        elif tier_num >= 7:
+            score -= 10
+    return score
+
+
+def _normalize_affix_text(value: Any) -> str:
+    text = _clean_trade_text(value).lower()
+    text = re.sub(r"[+-]?\d+(?:[.,]\d+)?", "#", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" .;:,")
+
+
+def _lot_affix_keys(lot: dict[str, Any]) -> tuple[str, ...]:
+    stat_ids = {
+        f"stat:{mod.get('id')}"
+        for mod in lot.get("stat_mods") or []
+        if mod.get("id") and mod.get("type") in COMPARABLE_STAT_TYPES
+    }
+    if stat_ids:
+        return tuple(sorted(stat_ids))
+    keys = {
+        key
+        for mod in (lot.get("explicit_mods") or [])
+        for key in [_normalize_affix_text(mod)]
+        if key
+    }
+    return tuple(sorted(keys))
+
+
+def _lot_base_key(lot: dict[str, Any]) -> str:
+    return _clean_trade_text(lot.get("base_type") or lot.get("type_line") or lot.get("display_name")).lower()
+
+
+def _item_level_matches(source: Any, candidate: Any, tolerance: int) -> bool:
+    if not isinstance(source, int) or source <= 0:
+        return True
+    if not isinstance(candidate, int) or candidate <= 0:
+        return True
+    return abs(source - candidate) <= tolerance
+
+
+def _extract_item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
+    extended = item.get("extended") or {}
+    extended_mods = extended.get("mods") or {}
+    extended_hashes = extended.get("hashes") or {}
+    lines_by_kind = {
+        "implicit": item.get("implicitMods") or [],
+        "explicit": item.get("explicitMods") or [],
+        "rune": item.get("runeMods") or [],
+        "desecrated": item.get("desecratedMods") or [],
+    }
+
+    mods: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, raw_mods in extended_mods.items():
+        if not isinstance(raw_mods, list):
+            continue
+        visible_lines = lines_by_kind.get(kind) or []
+        for index, raw_mod in enumerate(raw_mods):
+            if not isinstance(raw_mod, dict):
+                continue
+            line = visible_lines[index] if index < len(visible_lines) else ""
+            for magnitude in raw_mod.get("magnitudes") or []:
+                stat_id = magnitude.get("hash") if isinstance(magnitude, dict) else None
+                if not stat_id or (kind, stat_id) in seen:
+                    continue
+                seen.add((kind, stat_id))
+                mods.append(
+                    {
+                        "id": stat_id,
+                        "type": kind,
+                        "text": line,
+                        "name": raw_mod.get("name") or "",
+                        "tier": raw_mod.get("tier"),
+                        "level": raw_mod.get("level"),
+                        "min": _to_float(magnitude.get("min")),
+                        "max": _to_float(magnitude.get("max")),
+                    }
+                )
+
+    for kind, hash_entries in extended_hashes.items():
+        if not isinstance(hash_entries, list):
+            continue
+        for entry in hash_entries:
+            stat_id = entry[0] if isinstance(entry, list) and entry else None
+            if not stat_id or (kind, stat_id) in seen:
+                continue
+            seen.add((kind, stat_id))
+            mods.append({"id": stat_id, "type": kind, "text": "", "name": "", "tier": None, "level": None})
+
+    return mods
+
+
+def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, Any]:
+    affixes = _lot_affix_keys(lot)
+    if looseness == 0:
+        mode = "type-level-stat-ids"
+        required_affixes = len(affixes)
+        level_tolerance = 5
+    elif looseness == 1:
+        mode = "type-level-stat-ids-minus-one"
+        required_affixes = max(0, len(affixes) - 1)
+        level_tolerance = 10
+    else:
+        mode = "type-level-weighted-stats"
+        required_affixes = max(0, min(len(affixes), 2))
+        level_tolerance = 15
+    key_stats = _lot_key_stat_mods(lot)
+    return {
+        "mode": mode,
+        "base_type": lot.get("base_type") or lot.get("type_line") or lot.get("display_name"),
+        "rarity": lot.get("rarity") or "",
+        "item_level": lot.get("item_level"),
+        "level_tolerance": level_tolerance,
+        "affixes": list(affixes),
+        "required_affixes": required_affixes,
+        "stat_ids": [mod["id"] for mod in key_stats],
+    }
+
+
+def _filter_comparable_lots(target: dict[str, Any], lots: list[dict[str, Any]], looseness: int) -> list[dict[str, Any]]:
+    target_rarity = _rarity_option(target.get("rarity"))
+    target_base = _lot_base_key(target)
+    target_name = _clean_trade_text(target.get("name")).lower()
+    target_affixes = set(_lot_affix_keys(target))
+    profile = _comparable_lot_profile(target, looseness)
+    required_affixes = profile["required_affixes"]
+    comparable: list[dict[str, Any]] = []
+
+    for lot in lots:
+        candidate_rarity = _rarity_option(lot.get("rarity"))
+        if target_rarity and candidate_rarity != target_rarity:
+            continue
+        if target_rarity == "unique":
+            candidate_name = _clean_trade_text(lot.get("name")).lower()
+            if target_name and candidate_name != target_name:
+                continue
+        elif target_base and _lot_base_key(lot) != target_base:
+            continue
+        if not _item_level_matches(target.get("item_level"), lot.get("item_level"), profile["level_tolerance"]):
+            continue
+        if required_affixes:
+            overlap = len(target_affixes & set(_lot_affix_keys(lot)))
+            if overlap < required_affixes:
+                continue
+        comparable.append(lot)
+    return comparable
+
+
 def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
     listing = entry.get("listing") or {}
     item = entry.get("item") or {}
@@ -416,7 +685,9 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
         "corrupted": bool(item.get("corrupted")),
         "icon": item.get("icon") or "",
         "note": item.get("note") or "",
+        "implicit_mods": item.get("implicitMods") or [],
         "explicit_mods": item.get("explicitMods") or [],
+        "stat_mods": _item_stat_mods(item),
     }
 
 
@@ -533,16 +804,24 @@ async def _fetch_similar_market(
     last_payload: dict[str, Any] = {}
     for looseness in looseness_steps:
         market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
-        market_items = await _fetch_trade_items(market_search.get("result") or [], market_search.get("id") or "", limit=20)
+        market_items = await _fetch_trade_items(
+            market_search.get("result") or [],
+            market_search.get("id") or "",
+            limit=SELLER_MARKET_FETCH_LIMIT,
+        )
         market_lots = [_normalize_item_listing(item) for item in market_items]
         market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
-        stats = _market_price_stats(market_lots, seller)
+        comparable_lots = _filter_comparable_lots(lot, market_lots, looseness)
+        stats = _market_price_stats(comparable_lots, seller)
         last_payload = {
             "query_id": market_search.get("id"),
             "total": market_search.get("total") or len(market_lots),
-            "lots": market_lots,
+            "candidate_count": len(market_lots),
+            "filtered_count": len(comparable_lots),
+            "lots": comparable_lots,
             "stats": stats,
             "looseness": looseness,
+            "comparison": _comparable_lot_profile(lot, looseness),
         }
         if stats.get("count", 0) >= 3:
             return last_payload
@@ -552,6 +831,7 @@ async def _fetch_similar_market(
         "total": 0,
         "lots": [],
         "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None},
+        "comparison": _comparable_lot_profile(lot, 2),
     }
 
 
@@ -572,6 +852,7 @@ async def _get_cached_similar_market(
         lot.get("base_type"),
         lot.get("rarity"),
         lot.get("item_level") // 5 if isinstance(lot.get("item_level"), int) else None,
+        _lot_affix_keys(lot),
     )
     cached = SELLER_MARKET_CACHE.get(market_key)
     if cached and time.time() - cached["created_ts"] < SELLER_MARKET_CACHE_TTL:
@@ -618,14 +899,20 @@ async def get_seller_lots_analysis(
             market = {
                 "query_id": None,
                 "total": 0,
+                "candidate_count": 0,
+                "filtered_count": 0,
                 "lots": [],
                 "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None, "error": str(exc)},
+                "comparison": _comparable_lot_profile(lot, 2),
                 "cached": False,
             }
         lot["market"] = {
             "query_id": market.get("query_id"),
             "total": market.get("total"),
+            "candidate_count": market.get("candidate_count"),
+            "filtered_count": market.get("filtered_count"),
             "cached": market.get("cached", False),
+            "comparison": market.get("comparison"),
             **market.get("stats", {}),
         }
         lot["verdict"] = _verdict_for_lot(lot, lot["market"])

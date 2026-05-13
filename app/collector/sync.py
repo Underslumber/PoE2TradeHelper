@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import httpx
 from sqlalchemy.orm import Session

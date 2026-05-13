@@ -10,7 +10,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import SQLITE_PATH
 from app.db.models import Row, Snapshot
 from app.db.session import get_session
 from app.export.export_csv import export_rows_csv

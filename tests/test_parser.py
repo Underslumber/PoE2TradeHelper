@@ -1,5 +1,3 @@
-import json
-
 from app.collector.parse import build_row_id, extract_rows, normalize_row
 
 

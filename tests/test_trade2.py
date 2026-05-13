@@ -102,6 +102,16 @@ def test_normalize_item_listing_requires_stash_buyout_price():
             "rarity": "Rare",
             "ilvl": 82,
             "explicitMods": ["+10 to Strength"],
+            "extended": {
+                "mods": {
+                    "explicit": [
+                        {
+                            "name": "+10 to Strength",
+                            "magnitudes": [{"hash": "explicit.stat_3299347043"}],
+                        }
+                    ]
+                }
+            },
         },
     }
 
@@ -112,6 +122,15 @@ def test_normalize_item_listing_requires_stash_buyout_price():
     assert lot["display_name"] == "Expert Waxed Jacket"
     assert lot["price_amount"] == 2
     assert lot["price_currency"] == "divine"
+    assert lot["stat_mods"] == [
+        {
+            "id": "explicit.stat_3299347043",
+            "type": "explicit",
+            "text": "+10 to Strength",
+            "tier": None,
+            "level": None,
+        }
+    ]
 
 
 def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():
@@ -159,6 +178,58 @@ def test_similar_lots_query_starts_with_ilvl_window_for_non_unique():
     assert strict_filters["rarity"]["option"] == "rare"
     assert strict_filters["ilvl"] == {"min": 77, "max": 87}
     assert "ilvl" not in wider_filters
+
+
+def test_affix_keys_ignore_roll_values_and_trade_markup():
+    lot = {
+        "explicit_mods": [
+            "+35 к духу",
+            "[PhysicalDamage|26% увеличение уклонения]",
+        ]
+    }
+
+    assert trade2._lot_affix_keys(lot) == ("# к духу", "#% увеличение уклонения")
+
+
+def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
+    target = {
+        "base_type": "Одеяние аскета",
+        "rarity": "Magic",
+        "item_level": 52,
+        "explicit_mods": ["+35 к духу", "26% увеличение уклонения"],
+    }
+    lots = [
+        {
+            "seller": "Other#1",
+            "base_type": "Одеяние аскета",
+            "rarity": "Magic",
+            "item_level": 50,
+            "explicit_mods": ["+40 к духу", "30% увеличение уклонения"],
+            "price_target": 1.0,
+        },
+        {
+            "seller": "Other#2",
+            "base_type": "Одеяние аскета",
+            "rarity": "Magic",
+            "item_level": 54,
+            "explicit_mods": ["+30 к духу", "+10 к максимуму здоровья"],
+            "price_target": 2.0,
+        },
+        {
+            "seller": "Other#3",
+            "base_type": "Треуголка корсара",
+            "rarity": "Magic",
+            "item_level": 52,
+            "explicit_mods": ["+35 к духу", "26% увеличение уклонения"],
+            "price_target": 3.0,
+        },
+    ]
+
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0)
+    relaxed = trade2._filter_comparable_lots(target, lots, looseness=1)
+
+    assert [lot["price_target"] for lot in strict] == [1.0]
+    assert [lot["price_target"] for lot in relaxed] == [1.0, 2.0]
 
 
 def test_seller_lots_snapshot_uses_cache(monkeypatch):
