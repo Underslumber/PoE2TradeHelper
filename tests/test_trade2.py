@@ -122,15 +122,9 @@ def test_normalize_item_listing_requires_stash_buyout_price():
     assert lot["display_name"] == "Expert Waxed Jacket"
     assert lot["price_amount"] == 2
     assert lot["price_currency"] == "divine"
-    assert lot["stat_mods"] == [
-        {
-            "id": "explicit.stat_3299347043",
-            "type": "explicit",
-            "text": "+10 to Strength",
-            "tier": None,
-            "level": None,
-        }
-    ]
+    assert lot["stat_mods"][0]["id"] == "explicit.stat_3299347043"
+    assert lot["stat_mods"][0]["type"] == "explicit"
+    assert lot["stat_mods"][0]["text"] == "+10 to Strength"
 
 
 def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():

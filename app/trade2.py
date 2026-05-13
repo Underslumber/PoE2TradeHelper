@@ -348,42 +348,86 @@ def _stat_filter(stat_id: str, weight: float | None = None) -> dict[str, Any]:
 
 
 def _stat_mod_priority(mod: dict[str, Any]) -> int:
-    kind_score = {
-        "fractured": 90,
-        "explicit": 80,
-        "implicit": 60,
-        "rune": 45,
+    kind = mod.get("type") or ""
+    text = _clean_trade_text(mod.get("text") or mod.get("name") or "")
+    score = {
+        "pseudo": 95,
+        "explicit": 70,
+        "fractured": 75,
+        "implicit": 45,
+        "rune": 40,
         "desecrated": 40,
-    }.get(str(mod.get("type") or ""), 20)
-    text = " ".join(str(mod.get(key) or "") for key in ("id", "text", "name", "tier"))
-    return kind_score + (40 if IMPORTANT_STAT_RE.search(text) else 0)
+    }.get(kind, 20)
+    if IMPORTANT_STAT_RE.search(text):
+        score += 30
+    tier = str(mod.get("tier") or "")
+    tier_match = re.search(r"(\d+)", tier)
+    if tier_match:
+        tier_num = int(tier_match.group(1))
+        if tier_num <= 2:
+            score += 15
+        elif tier_num >= 7:
+            score -= 10
+    return score
 
 
 def _item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
+    extended = item.get("extended") or {}
+    extended_mods = extended.get("mods") or {}
+    extended_hashes = extended.get("hashes") or {}
+    lines_by_kind = {
+        "implicit": item.get("implicitMods") or [],
+        "explicit": item.get("explicitMods") or [],
+        "rune": item.get("runeMods") or [],
+        "desecrated": item.get("desecratedMods") or [],
+    }
+
     result: list[dict[str, Any]] = []
-    groups = ((item.get("extended") or {}).get("mods") or {})
-    for kind in COMPARABLE_STAT_TYPES:
-        for mod in groups.get(kind) or []:
-            if not isinstance(mod, dict):
+    seen: set[tuple[str, str]] = set()
+    for kind, raw_mods in extended_mods.items():
+        if not isinstance(raw_mods, list):
+            continue
+        visible_lines = lines_by_kind.get(kind) or []
+        for index, raw_mod in enumerate(raw_mods):
+            if not isinstance(raw_mod, dict):
                 continue
-            text = mod.get("name") or mod.get("text") or ""
-            stat_ids = [mod.get("hash") or mod.get("id")]
-            stat_ids.extend(
-                magnitude.get("hash") or magnitude.get("id")
-                for magnitude in mod.get("magnitudes") or []
-                if isinstance(magnitude, dict)
+            line = visible_lines[index] if index < len(visible_lines) else ""
+            for magnitude in raw_mod.get("magnitudes") or []:
+                stat_id = magnitude.get("hash") if isinstance(magnitude, dict) else None
+                if not stat_id or (kind, stat_id) in seen:
+                    continue
+                seen.add((kind, stat_id))
+                result.append(
+                    {
+                        "id": stat_id,
+                        "type": kind,
+                        "text": line,
+                        "name": raw_mod.get("name") or "",
+                        "tier": raw_mod.get("tier"),
+                        "level": raw_mod.get("level"),
+                        "min": _to_float(magnitude.get("min")),
+                        "max": _to_float(magnitude.get("max")),
+                    }
+                )
+
+    for kind, hash_entries in extended_hashes.items():
+        if not isinstance(hash_entries, list):
+            continue
+        for entry in hash_entries:
+            stat_id = entry[0] if isinstance(entry, list) and entry else None
+            if not stat_id or (kind, stat_id) in seen:
+                continue
+            seen.add((kind, stat_id))
+            result.append(
+                {
+                    "id": stat_id,
+                    "type": kind,
+                    "text": "",
+                    "name": "",
+                    "tier": None,
+                    "level": None,
+                }
             )
-            for stat_id in stat_ids:
-                if stat_id:
-                    result.append(
-                        {
-                            "id": stat_id,
-                            "type": kind,
-                            "text": text,
-                            "tier": mod.get("tier"),
-                            "level": mod.get("level"),
-                        }
-                    )
     return result
 
 
@@ -486,30 +530,6 @@ def _clean_trade_text(value: Any) -> str:
     return re.sub(r"\[[^\]|]*\|([^\]]+)\]", r"\1", text).strip()
 
 
-def _stat_mod_priority(mod: dict[str, Any]) -> int:
-    kind = mod.get("type") or ""
-    text = _clean_trade_text(mod.get("text") or mod.get("name") or "")
-    score = {
-        "pseudo": 95,
-        "explicit": 70,
-        "fractured": 75,
-        "implicit": 45,
-        "rune": 40,
-        "desecrated": 40,
-    }.get(kind, 20)
-    if IMPORTANT_STAT_RE.search(text):
-        score += 30
-    tier = str(mod.get("tier") or "")
-    tier_match = re.search(r"(\d+)", tier)
-    if tier_match:
-        tier_num = int(tier_match.group(1))
-        if tier_num <= 2:
-            score += 15
-        elif tier_num >= 7:
-            score -= 10
-    return score
-
-
 def _normalize_affix_text(value: Any) -> str:
     text = _clean_trade_text(value).lower()
     text = re.sub(r"[+-]?\d+(?:[.,]\d+)?", "#", text)
@@ -544,58 +564,6 @@ def _item_level_matches(source: Any, candidate: Any, tolerance: int) -> bool:
     if not isinstance(candidate, int) or candidate <= 0:
         return True
     return abs(source - candidate) <= tolerance
-
-
-def _extract_item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
-    extended = item.get("extended") or {}
-    extended_mods = extended.get("mods") or {}
-    extended_hashes = extended.get("hashes") or {}
-    lines_by_kind = {
-        "implicit": item.get("implicitMods") or [],
-        "explicit": item.get("explicitMods") or [],
-        "rune": item.get("runeMods") or [],
-        "desecrated": item.get("desecratedMods") or [],
-    }
-
-    mods: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for kind, raw_mods in extended_mods.items():
-        if not isinstance(raw_mods, list):
-            continue
-        visible_lines = lines_by_kind.get(kind) or []
-        for index, raw_mod in enumerate(raw_mods):
-            if not isinstance(raw_mod, dict):
-                continue
-            line = visible_lines[index] if index < len(visible_lines) else ""
-            for magnitude in raw_mod.get("magnitudes") or []:
-                stat_id = magnitude.get("hash") if isinstance(magnitude, dict) else None
-                if not stat_id or (kind, stat_id) in seen:
-                    continue
-                seen.add((kind, stat_id))
-                mods.append(
-                    {
-                        "id": stat_id,
-                        "type": kind,
-                        "text": line,
-                        "name": raw_mod.get("name") or "",
-                        "tier": raw_mod.get("tier"),
-                        "level": raw_mod.get("level"),
-                        "min": _to_float(magnitude.get("min")),
-                        "max": _to_float(magnitude.get("max")),
-                    }
-                )
-
-    for kind, hash_entries in extended_hashes.items():
-        if not isinstance(hash_entries, list):
-            continue
-        for entry in hash_entries:
-            stat_id = entry[0] if isinstance(entry, list) and entry else None
-            if not stat_id or (kind, stat_id) in seen:
-                continue
-            seen.add((kind, stat_id))
-            mods.append({"id": stat_id, "type": kind, "text": "", "name": "", "tier": None, "level": None})
-
-    return mods
 
 
 def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, Any]:
@@ -687,6 +655,8 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
         "note": item.get("note") or "",
         "implicit_mods": item.get("implicitMods") or [],
         "explicit_mods": item.get("explicitMods") or [],
+        "rune_mods": item.get("runeMods") or [],
+        "desecrated_mods": item.get("desecratedMods") or [],
         "stat_mods": _item_stat_mods(item),
     }
 
