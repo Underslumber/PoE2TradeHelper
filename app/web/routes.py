@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Iterator
 from typing import Optional
@@ -18,6 +19,7 @@ from app.trade2 import (
     build_category_meta,
     get_category_rates,
     get_exchange_offers,
+    get_seller_lot_market,
     get_seller_lots_analysis,
     get_trade_leagues,
     get_trade_static,
@@ -66,6 +68,11 @@ def economy_home(request: Request, db: Session = Depends(get_db)):
 async def api_trade_leagues():
     try:
         return {"leagues": await get_trade_leagues()}
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Поиск лотов занял слишком много времени. Попробуйте уменьшить число лотов или уточнить фильтр."},
+        )
     except Exception as exc:
         return trade_api_error(exc)
 
@@ -126,6 +133,7 @@ async def api_trade_seller_lots(
     target: str = Query("exalted"),
     status: str = Query("any", pattern="^(online|any)$"),
     limit: int = Query(10, ge=1, le=20),
+    analyze: bool = Query(True),
 ):
     try:
         return await get_seller_lots_analysis(
@@ -135,6 +143,32 @@ async def api_trade_seller_lots(
             target=target,
             status=status,
             limit=limit,
+            analyze=analyze,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
+
+
+@router.get("/api/trade/seller-lot-market")
+async def api_trade_seller_lot_market(
+    league: str = Query(...),
+    seller: str = Query(..., min_length=1),
+    lot_id: str = Query(..., min_length=1),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+):
+    try:
+        return await get_seller_lot_market(
+            league=league,
+            seller=seller,
+            lot_id=lot_id,
+            target=target,
+            status=status,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Оценка лота заняла слишком много времени."},
         )
     except Exception as exc:
         return trade_api_error(exc)

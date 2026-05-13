@@ -24,6 +24,10 @@ SELLER_MARKET_CACHE_TTL = 600
 SELLER_MARKET_FETCH_LIMIT = 60
 SELLER_MARKET_MIN_COMPARABLES = 3
 SELLER_MARKET_MAX_STAT_FILTERS = 12
+SELLER_SNAPSHOT_TIMEOUT = 30
+SELLER_CURRENCY_RATES_TIMEOUT = 20
+SELLER_MARKET_PER_LOT_TIMEOUT = 20
+SELLER_ANALYSIS_BUDGET = 70
 SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
@@ -457,15 +461,7 @@ def _similar_lot_stat_group(lot: dict[str, Any], looseness: int) -> dict[str, An
     if looseness == 1:
         return {"type": "count", "value": {"min": max(1, len(filters) - 1)}, "filters": filters}
 
-    weighted_filters = [
-        _stat_filter(mod["id"], max(1.0, round(_stat_mod_priority(mod) / 20, 2)))
-        for mod in mods
-    ]
-    return {
-        "type": "weight",
-        "value": {"min": max(1, len(weighted_filters))},
-        "filters": weighted_filters,
-    }
+    return {"type": "count", "value": {"min": max(1, min(2, len(filters)))}, "filters": filters}
 
 
 def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) -> dict[str, Any]:
@@ -578,7 +574,7 @@ def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, An
         required_affixes = max(0, len(affixes) - 1)
         level_tolerance = 10
     else:
-        mode = "type-level-weighted-stats"
+        mode = "type-level-loose-stats"
         required_affixes = max(0, min(len(affixes), 2))
         level_tolerance = 15
     key_stats = _lot_key_stat_mods(lot)
@@ -714,6 +710,37 @@ def _market_confidence(count: int, comparison: dict[str, Any] | None = None) -> 
     return "insufficient"
 
 
+def _empty_market_payload(
+    lot: dict[str, Any],
+    error: str | None = None,
+    looseness: int = 2,
+) -> dict[str, Any]:
+    stats: dict[str, Any] = {
+        "count": 0,
+        "raw_count": 0,
+        "outliers": 0,
+        "current": None,
+        "min": None,
+        "median": None,
+        "p25": None,
+        "p75": None,
+        "confidence": "insufficient",
+    }
+    if error:
+        stats["error"] = error
+    return {
+        "query_id": None,
+        "total": 0,
+        "candidate_count": 0,
+        "filtered_count": 0,
+        "lots": [],
+        "stats": stats,
+        "looseness": looseness,
+        "comparison": _comparable_lot_profile(lot, looseness),
+        "cached": False,
+    }
+
+
 def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, Any]:
     seller_key = seller.lower()
     raw_values = sorted(
@@ -817,27 +844,11 @@ async def _fetch_similar_market(
         try:
             market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
         except httpx.HTTPStatusError as exc:
-            last_payload = {
-                "query_id": None,
-                "total": 0,
-                "candidate_count": 0,
-                "filtered_count": 0,
-                "lots": [],
-                "stats": {
-                    "count": 0,
-                    "raw_count": 0,
-                    "outliers": 0,
-                    "current": None,
-                    "min": None,
-                    "median": None,
-                    "p25": None,
-                    "p75": None,
-                    "confidence": "insufficient",
-                    "error": f"search failed: {exc.response.status_code}",
-                },
-                "looseness": looseness,
-                "comparison": comparison,
-            }
+            last_payload = _empty_market_payload(lot, f"search failed: {exc.response.status_code}", looseness)
+            await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+            continue
+        except (httpx.TimeoutException, asyncio.TimeoutError):
+            last_payload = _empty_market_payload(lot, "market search timeout", looseness)
             await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
             continue
         market_items = await _fetch_trade_items(
@@ -863,23 +874,7 @@ async def _fetch_similar_market(
         if stats.get("count", 0) >= SELLER_MARKET_MIN_COMPARABLES:
             return last_payload
         await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
-    return last_payload or {
-        "query_id": None,
-        "total": 0,
-        "lots": [],
-        "stats": {
-            "count": 0,
-            "raw_count": 0,
-            "outliers": 0,
-            "current": None,
-            "min": None,
-            "median": None,
-            "p25": None,
-            "p75": None,
-            "confidence": "insufficient",
-        },
-        "comparison": _comparable_lot_profile(lot, 2),
-    }
+    return last_payload or _empty_market_payload(lot)
 
 
 async def _get_cached_similar_market(
@@ -919,6 +914,7 @@ async def get_seller_lots_analysis(
     target: str = "exalted",
     status: str = "any",
     limit: int = 10,
+    analyze: bool = True,
 ) -> dict[str, Any]:
     seller = seller.strip()
     text = text.strip()
@@ -926,7 +922,11 @@ async def get_seller_lots_analysis(
     if not seller:
         raise ValueError("seller is required")
 
-    seller_snapshot = await _get_seller_lots_snapshot(league, seller, status)
+    started = time.monotonic()
+    seller_snapshot = await asyncio.wait_for(
+        _get_seller_lots_snapshot(league, seller, status),
+        timeout=SELLER_SNAPSHOT_TIMEOUT,
+    )
     lots = list(seller_snapshot.get("lots") or [])
     if text:
         lowered = text.lower()
@@ -934,46 +934,51 @@ async def get_seller_lots_analysis(
     matched_total = len(lots)
     lots = lots[:limit]
 
-    currency_rates = await get_category_rates(league=league, category="Currency", target=target, status="any")
-    rates = _currency_rates_by_id(currency_rates, target)
+    try:
+        currency_rates = await asyncio.wait_for(
+            get_category_rates(league=league, category="Currency", target=target, status="any"),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        )
+        rates = _currency_rates_by_id(currency_rates, target)
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        rates = {target: 1.0}
     for lot in lots:
         _apply_target_price(lot, rates, target)
 
-    for lot in lots:
-        try:
-            market = await _get_cached_similar_market(league, lot, seller, target, status, rates)
-        except Exception as exc:
-            market = {
-                "query_id": None,
-                "total": 0,
-                "candidate_count": 0,
-                "filtered_count": 0,
-                "lots": [],
-                "stats": {
-                    "count": 0,
-                    "raw_count": 0,
-                    "outliers": 0,
-                    "current": None,
-                    "min": None,
-                    "median": None,
-                    "p25": None,
-                    "p75": None,
-                    "confidence": "insufficient",
-                    "error": str(exc),
-                },
-                "comparison": _comparable_lot_profile(lot, 2),
-                "cached": False,
+    analysis_timed_out = False
+    if analyze:
+        for lot in lots:
+            if time.monotonic() - started >= SELLER_ANALYSIS_BUDGET:
+                analysis_timed_out = True
+                market = _empty_market_payload(lot, "analysis budget exceeded")
+            else:
+                remaining = max(1.0, SELLER_ANALYSIS_BUDGET - (time.monotonic() - started))
+                timeout = min(SELLER_MARKET_PER_LOT_TIMEOUT, remaining)
+                try:
+                    market = await asyncio.wait_for(
+                        _get_cached_similar_market(league, lot, seller, target, status, rates),
+                        timeout=timeout,
+                    )
+                except (asyncio.TimeoutError, httpx.TimeoutException):
+                    analysis_timed_out = True
+                    market = _empty_market_payload(lot, "market analysis timeout")
+                except Exception as exc:
+                    market = _empty_market_payload(lot, str(exc))
+            lot["market"] = {
+                "query_id": market.get("query_id"),
+                "total": market.get("total"),
+                "candidate_count": market.get("candidate_count"),
+                "filtered_count": market.get("filtered_count"),
+                "cached": market.get("cached", False),
+                "comparison": market.get("comparison"),
+                **market.get("stats", {}),
             }
-        lot["market"] = {
-            "query_id": market.get("query_id"),
-            "total": market.get("total"),
-            "candidate_count": market.get("candidate_count"),
-            "filtered_count": market.get("filtered_count"),
-            "cached": market.get("cached", False),
-            "comparison": market.get("comparison"),
-            **market.get("stats", {}),
-        }
-        lot["verdict"] = _verdict_for_lot(lot, lot["market"])
+            lot["verdict"] = _verdict_for_lot(lot, lot["market"])
+    else:
+        for lot in lots:
+            market = _empty_market_payload(lot)
+            lot["market"] = {"pending": True, **market.get("stats", {}), "comparison": market.get("comparison")}
+            lot["verdict"] = {"kind": "unknown", "delta_pct": None}
 
     return {
         "league": league,
@@ -987,12 +992,63 @@ async def get_seller_lots_analysis(
         "fetched_total": seller_snapshot.get("fetched_total") or len(lots),
         "cached": seller_snapshot.get("cached", False),
         "created_ts": seller_snapshot.get("created_ts"),
+        "analysis_timed_out": analysis_timed_out,
+        "analysis_pending": not analyze,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
         "lots": lots,
         "source": "trade2/search+fetch",
         "search_mode": "cache-filter" if text else "account-cache",
         "basis": "priced stash listings only",
     }
 
+
+async def get_seller_lot_market(
+    league: str,
+    seller: str,
+    lot_id: str,
+    target: str = "exalted",
+    status: str = "any",
+) -> dict[str, Any]:
+    seller = seller.strip()
+    seller_snapshot = await asyncio.wait_for(
+        _get_seller_lots_snapshot(league, seller, status),
+        timeout=SELLER_SNAPSHOT_TIMEOUT,
+    )
+    lot = next((item for item in seller_snapshot.get("lots") or [] if item.get("id") == lot_id), None)
+    if not lot:
+        raise ValueError("lot not found in seller cache")
+    try:
+        currency_rates = await asyncio.wait_for(
+            get_category_rates(league=league, category="Currency", target=target, status="any"),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        )
+        rates = _currency_rates_by_id(currency_rates, target)
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        rates = {target: 1.0}
+    _apply_target_price(lot, rates, target)
+    try:
+        market = await asyncio.wait_for(
+            _get_cached_similar_market(league, lot, seller, target, status, rates),
+            timeout=SELLER_MARKET_PER_LOT_TIMEOUT,
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        market = _empty_market_payload(lot, "market analysis timeout")
+    lot_market = {
+        "query_id": market.get("query_id"),
+        "total": market.get("total"),
+        "candidate_count": market.get("candidate_count"),
+        "filtered_count": market.get("filtered_count"),
+        "cached": market.get("cached", False),
+        "comparison": market.get("comparison"),
+        **market.get("stats", {}),
+    }
+    return {
+        "lot_id": lot_id,
+        "target": target,
+        "price_target": lot.get("price_target"),
+        "market": lot_market,
+        "verdict": _verdict_for_lot(lot, lot_market),
+    }
 
 def _rate_stats(rows: list[dict[str, Any]], item_id: str) -> dict[str, Any]:
     ratios = [row["ratio"] for row in rows if row.get("have_currency") == item_id and isinstance(row.get("ratio"), float)]

@@ -92,7 +92,10 @@ const state = {
   isLoadingActiveTrades: false,
   sellerLots: null,
   sellerLotsCache: {},
+  sellerLotMarketCache: {},
   isLoadingSellerLots: false,
+  sellerLotsAbortController: null,
+  sellerLotsRequestId: 0,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
   autoRefreshTimer: null,
   isRefreshing: false,
@@ -468,6 +471,20 @@ function verdictLabel(kind) {
   return t('verdictUnknown');
 }
 
+function confidenceLabel(value) {
+  if (value === 'high') return t('confidenceHigh');
+  if (value === 'medium') return t('confidenceMedium');
+  if (value === 'low') return t('confidenceLow');
+  return t('confidenceInsufficient');
+}
+
+function comparisonLabel(mode) {
+  if (mode === 'type-level-stat-ids') return t('comparisonExactStats');
+  if (mode === 'type-level-stat-ids-minus-one') return t('comparisonStatsMinusOne');
+  if (mode === 'type-level-loose-stats') return t('comparisonLooseStats');
+  return t('comparisonTypeOnly');
+}
+
 function renderSellerLotCard(lot) {
   const market = lot.market || {};
   const verdict = lot.verdict || { kind: 'unknown' };
@@ -497,8 +514,11 @@ function renderSellerLotCard(lot) {
         </div>
         <div>
           <span class="lot-card-label">${t('currentMarketPrice')}</span>
-          <strong class="lot-card-value">${lotTargetPrice(market.current, target)}</strong>
-          <span class="lot-card-note">${t('marketLots')}: ${formatAmount(market.count || 0)}</span>
+          ${market.pending ? loadingMarkup(t('marketEvaluating'), 'inline') : `
+            <strong class="lot-card-value">${lotTargetPrice(market.current, target)}</strong>
+            <span class="lot-card-note">${t('marketLots')}: ${formatAmount(market.count || 0)}</span>
+            <span class="lot-card-note">${t('confidence')}: ${confidenceLabel(market.confidence)} · ${comparisonLabel(market.comparison?.mode)}</span>
+          `}
         </div>
         <div>
           <span class="lot-card-label">${t('marketRange')}</span>
@@ -518,7 +538,7 @@ function renderSellerLots() {
   const list = byId('lot-results');
   if (!list) return;
   if (state.isLoadingSellerLots) {
-    list.innerHTML = loadingMarkup(t('sellerLotsLoading'));
+    list.innerHTML = '';
     return;
   }
   if (!state.sellerLots) {
@@ -531,6 +551,64 @@ function renderSellerLots() {
     return;
   }
   list.innerHTML = lots.map(renderSellerLotCard).join('');
+}
+
+async function fetchSellerLotMarket(lot, params, requestId) {
+  if (!lot.id || state.sellerLotsRequestId !== requestId) return;
+  const marketParams = new URLSearchParams({
+    league: params.league,
+    seller: params.seller,
+    lot_id: lot.id,
+    target: params.target,
+    status: params.status,
+  });
+  const cacheKey = marketParams.toString();
+  try {
+    const cached = state.sellerLotMarketCache[cacheKey];
+    let data = cached;
+    if (!data) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 45000);
+      try {
+        const response = await fetch(`/api/trade/seller-lot-market?${marketParams.toString()}`, { signal: controller.signal });
+        data = await response.json();
+        if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
+    if (!cached) state.sellerLotMarketCache[cacheKey] = data;
+    if (state.sellerLotsRequestId !== requestId || !state.sellerLots?.lots) return;
+    const targetLot = state.sellerLots.lots.find(item => item.id === lot.id);
+    if (!targetLot) return;
+    targetLot.market = data.market || targetLot.market;
+    targetLot.verdict = data.verdict || targetLot.verdict;
+    targetLot.price_target = data.price_target ?? targetLot.price_target;
+    targetLot.target = data.target || targetLot.target;
+    renderSellerLots();
+  } catch (error) {
+    if (state.sellerLotsRequestId !== requestId || !state.sellerLots?.lots) return;
+    const targetLot = state.sellerLots.lots.find(item => item.id === lot.id);
+    if (!targetLot) return;
+    targetLot.market = { ...(targetLot.market || {}), pending: false, confidence: 'insufficient', error: error.message || String(error) };
+    renderSellerLots();
+  }
+}
+
+async function loadSellerLotMarkets(params, requestId) {
+  const lots = state.sellerLots?.lots || [];
+  const queue = lots.filter(lot => lot.id);
+  const workers = [0, 1].map(async () => {
+    while (queue.length && state.sellerLotsRequestId === requestId) {
+      const lot = queue.shift();
+      await fetchSellerLotMarket(lot, params, requestId);
+    }
+  });
+  await Promise.allSettled(workers);
+  const status = byId('lot-search-status');
+  if (state.sellerLotsRequestId === requestId && status && state.sellerLots) {
+    status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)}`;
+  }
 }
 
 async function searchSellerLots() {
@@ -546,36 +624,54 @@ async function searchSellerLots() {
   const liveStatus = byId('live-status')?.value || 'any';
   const query = (byId('lot-query')?.value || '').trim();
   const limit = byId('lot-limit')?.value || '10';
-  const params = new URLSearchParams({ league, seller, q: query, target, status: liveStatus, limit });
-  const cacheKey = params.toString();
+  const params = { league, seller, q: query, target, status: liveStatus, limit };
+  const searchParams = new URLSearchParams({ ...params, analyze: 'false' });
+  const cacheKey = searchParams.toString();
   if (state.sellerLotsCache[cacheKey]) {
     state.sellerLots = state.sellerLotsCache[cacheKey];
     if (status) status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)} · ${t('cacheLabel')}`;
     renderSellerLots();
     return;
   }
+  const requestId = Date.now();
+  state.sellerLotsRequestId = requestId;
+  if (state.sellerLotsAbortController) {
+    state.sellerLotsAbortController.abort();
+  }
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 90000);
+  state.sellerLotsAbortController = controller;
   state.isLoadingSellerLots = true;
   state.sellerLots = null;
   if (status) setLoadingStatus(status, t('sellerLotsLoading'));
   if (button) button.disabled = true;
   renderSellerLots();
   try {
-    const response = await fetch(`/api/trade/seller-lots?${params.toString()}`);
+    const response = await fetch(`/api/trade/seller-lots?${searchParams.toString()}`, { signal: controller.signal });
     const data = await response.json();
+    if (state.sellerLotsRequestId !== requestId) return;
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
     state.sellerLots = data;
     state.sellerLotsCache[cacheKey] = data;
     if (status) {
       const cacheLabel = data.cached ? ` · ${t('cacheLabel')}` : '';
-      status.textContent = `${t('marketLots')}: ${formatAmount(data.matched_total ?? data.total ?? data.lots?.length ?? 0)}${cacheLabel}`;
+      const timeoutLabel = data.analysis_timed_out ? ` · ${t('partialResults')}` : '';
+      status.textContent = `${t('marketLots')}: ${formatAmount(data.matched_total ?? data.total ?? data.lots?.length ?? 0)}${cacheLabel}${timeoutLabel}`;
     }
+    loadSellerLotMarkets(params, requestId);
   } catch (error) {
+    if (state.sellerLotsRequestId !== requestId) return;
     state.sellerLots = { lots: [] };
-    if (status) status.textContent = error.message || String(error);
+    const isAbort = error?.name === 'AbortError';
+    if (status) status.textContent = isAbort ? t('sellerLotsTimeout') : (error.message || String(error));
   } finally {
-    state.isLoadingSellerLots = false;
-    if (button) button.disabled = false;
-    renderSellerLots();
+    window.clearTimeout(timeoutId);
+    if (state.sellerLotsRequestId === requestId) {
+      state.isLoadingSellerLots = false;
+      state.sellerLotsAbortController = null;
+      if (button) button.disabled = false;
+      renderSellerLots();
+    }
   }
 }
 
