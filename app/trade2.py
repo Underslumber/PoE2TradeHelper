@@ -475,8 +475,9 @@ def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) ->
         type_filters["rarity"] = {"option": rarity}
 
     item_level = lot.get("item_level")
-    if looseness == 0 and rarity not in {"unique"} and isinstance(item_level, int) and item_level > 0:
-        type_filters["ilvl"] = {"min": max(1, item_level - 5), "max": item_level + 5}
+    if rarity not in {"unique"} and isinstance(item_level, int) and item_level > 0:
+        tolerance = 5 if looseness == 0 else 10 if looseness == 1 else 15
+        type_filters["ilvl"] = {"min": max(1, item_level - tolerance), "max": item_level + tolerance}
 
     filters = _priced_trade_filters()
     if type_filters:
@@ -686,18 +687,57 @@ def _percentile(sorted_values: list[float], position: float) -> float | None:
     return sorted_values[index]
 
 
+def _trim_price_outliers(values: list[float]) -> tuple[list[float], int]:
+    if len(values) < 5:
+        return values, 0
+    q1 = _percentile(values, 0.25)
+    q3 = _percentile(values, 0.75)
+    if q1 is None or q3 is None:
+        return values, 0
+    iqr = q3 - q1
+    if iqr <= 0:
+        return values, 0
+    low = q1 - 1.5 * iqr
+    high = q3 + 1.5 * iqr
+    trimmed = [value for value in values if low <= value <= high]
+    return trimmed or values, len(values) - len(trimmed)
+
+
+def _market_confidence(count: int, comparison: dict[str, Any] | None = None) -> str:
+    mode = (comparison or {}).get("mode") or ""
+    if count >= 8 and mode == "type-level-stat-ids":
+        return "high"
+    if count >= 5 and mode in {"type-level-stat-ids", "type-level-stat-ids-minus-one"}:
+        return "medium"
+    if count >= SELLER_MARKET_MIN_COMPARABLES:
+        return "low"
+    return "insufficient"
+
+
 def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, Any]:
     seller_key = seller.lower()
-    values = sorted(
+    raw_values = sorted(
         lot["price_target"]
         for lot in lots
         if isinstance(lot.get("price_target"), float) and lot.get("seller", "").lower() != seller_key
     )
+    values, outliers = _trim_price_outliers(raw_values)
     if not values:
-        return {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None}
+        return {
+            "count": 0,
+            "raw_count": len(raw_values),
+            "outliers": outliers,
+            "current": None,
+            "min": None,
+            "median": None,
+            "p25": None,
+            "p75": None,
+        }
     median = statistics.median(values)
     return {
         "count": len(values),
+        "raw_count": len(raw_values),
+        "outliers": outliers,
         "current": median,
         "min": values[0],
         "median": median,
@@ -773,7 +813,33 @@ async def _fetch_similar_market(
     looseness_steps = [0] if rarity == "unique" else [0, 1, 2]
     last_payload: dict[str, Any] = {}
     for looseness in looseness_steps:
-        market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
+        comparison = _comparable_lot_profile(lot, looseness)
+        try:
+            market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
+        except httpx.HTTPStatusError as exc:
+            last_payload = {
+                "query_id": None,
+                "total": 0,
+                "candidate_count": 0,
+                "filtered_count": 0,
+                "lots": [],
+                "stats": {
+                    "count": 0,
+                    "raw_count": 0,
+                    "outliers": 0,
+                    "current": None,
+                    "min": None,
+                    "median": None,
+                    "p25": None,
+                    "p75": None,
+                    "confidence": "insufficient",
+                    "error": f"search failed: {exc.response.status_code}",
+                },
+                "looseness": looseness,
+                "comparison": comparison,
+            }
+            await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+            continue
         market_items = await _fetch_trade_items(
             market_search.get("result") or [],
             market_search.get("id") or "",
@@ -783,6 +849,7 @@ async def _fetch_similar_market(
         market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
         comparable_lots = _filter_comparable_lots(lot, market_lots, looseness)
         stats = _market_price_stats(comparable_lots, seller)
+        stats["confidence"] = _market_confidence(stats.get("count", 0), comparison)
         last_payload = {
             "query_id": market_search.get("id"),
             "total": market_search.get("total") or len(market_lots),
@@ -791,16 +858,26 @@ async def _fetch_similar_market(
             "lots": comparable_lots,
             "stats": stats,
             "looseness": looseness,
-            "comparison": _comparable_lot_profile(lot, looseness),
+            "comparison": comparison,
         }
-        if stats.get("count", 0) >= 3:
+        if stats.get("count", 0) >= SELLER_MARKET_MIN_COMPARABLES:
             return last_payload
         await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
     return last_payload or {
         "query_id": None,
         "total": 0,
         "lots": [],
-        "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None},
+        "stats": {
+            "count": 0,
+            "raw_count": 0,
+            "outliers": 0,
+            "current": None,
+            "min": None,
+            "median": None,
+            "p25": None,
+            "p75": None,
+            "confidence": "insufficient",
+        },
         "comparison": _comparable_lot_profile(lot, 2),
     }
 
@@ -872,7 +949,18 @@ async def get_seller_lots_analysis(
                 "candidate_count": 0,
                 "filtered_count": 0,
                 "lots": [],
-                "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None, "error": str(exc)},
+                "stats": {
+                    "count": 0,
+                    "raw_count": 0,
+                    "outliers": 0,
+                    "current": None,
+                    "min": None,
+                    "median": None,
+                    "p25": None,
+                    "p75": None,
+                    "confidence": "insufficient",
+                    "error": str(exc),
+                },
                 "comparison": _comparable_lot_profile(lot, 2),
                 "cached": False,
             }

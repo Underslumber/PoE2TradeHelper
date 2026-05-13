@@ -144,9 +144,25 @@ def test_market_price_stats_excludes_same_seller_and_marks_verdict():
     verdict = trade2._verdict_for_lot({"price_target": 7.0}, market)
 
     assert market["count"] == 3
+    assert market["raw_count"] == 3
+    assert market["outliers"] == 0
     assert market["median"] == 10.0
     assert verdict["kind"] == "cheap"
     assert verdict["delta_pct"] == -30.0
+
+
+def test_market_price_stats_trims_outliers():
+    lots = [
+        {"seller": f"Other#{index}", "price_target": value}
+        for index, value in enumerate([8.0, 9.0, 10.0, 11.0, 12.0, 100.0], start=1)
+    ]
+
+    market = trade2._market_price_stats(lots, "Seller#1234")
+
+    assert market["raw_count"] == 6
+    assert market["count"] == 5
+    assert market["outliers"] == 1
+    assert market["median"] == 10.0
 
 
 def test_seller_lots_text_query_uses_type_before_term():
@@ -161,7 +177,12 @@ def test_seller_lots_text_query_uses_type_before_term():
 
 
 def test_similar_lots_query_starts_with_ilvl_window_for_non_unique():
-    lot = {"base_type": "Waxed Jacket", "rarity": "Rare", "item_level": 82}
+    lot = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [{"id": "explicit.stat_123", "type": "explicit", "text": "+10 to Strength"}],
+    }
 
     strict = trade2._similar_lots_query(lot, "any", looseness=0)
     wider = trade2._similar_lots_query(lot, "any", looseness=1)
@@ -171,7 +192,26 @@ def test_similar_lots_query_starts_with_ilvl_window_for_non_unique():
     assert strict["type"] == "Waxed Jacket"
     assert strict_filters["rarity"]["option"] == "rare"
     assert strict_filters["ilvl"] == {"min": 77, "max": 87}
-    assert "ilvl" not in wider_filters
+    assert strict["stats"][0]["filters"][0]["id"] == "explicit.stat_123"
+    assert wider_filters["ilvl"] == {"min": 72, "max": 92}
+
+
+def test_similar_lots_query_relaxes_stats_with_count_group():
+    lot = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [
+            {"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life"},
+            {"id": "explicit.stat_res", "type": "explicit", "text": "+30% to Fire Resistance"},
+        ],
+    }
+
+    query = trade2._similar_lots_query(lot, "any", looseness=1)
+
+    assert query["stats"][0]["type"] == "count"
+    assert query["stats"][0]["value"] == {"min": 1}
+    assert {item["id"] for item in query["stats"][0]["filters"]} == {"explicit.stat_life", "explicit.stat_res"}
 
 
 def test_affix_keys_ignore_roll_values_and_trade_markup():
@@ -191,6 +231,10 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
         "rarity": "Magic",
         "item_level": 52,
         "explicit_mods": ["+35 к духу", "26% увеличение уклонения"],
+        "stat_mods": [
+            {"id": "explicit.stat_spirit", "type": "explicit", "text": "+35 к духу"},
+            {"id": "explicit.stat_evasion", "type": "explicit", "text": "26% увеличение уклонения"},
+        ],
     }
     lots = [
         {
@@ -199,6 +243,10 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
             "rarity": "Magic",
             "item_level": 50,
             "explicit_mods": ["+40 к духу", "30% увеличение уклонения"],
+            "stat_mods": [
+                {"id": "explicit.stat_spirit", "type": "explicit", "text": "+40 к духу"},
+                {"id": "explicit.stat_evasion", "type": "explicit", "text": "30% увеличение уклонения"},
+            ],
             "price_target": 1.0,
         },
         {
@@ -207,6 +255,10 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
             "rarity": "Magic",
             "item_level": 54,
             "explicit_mods": ["+30 к духу", "+10 к максимуму здоровья"],
+            "stat_mods": [
+                {"id": "explicit.stat_spirit", "type": "explicit", "text": "+30 к духу"},
+                {"id": "explicit.stat_life", "type": "explicit", "text": "+10 к максимуму здоровья"},
+            ],
             "price_target": 2.0,
         },
         {
@@ -215,6 +267,10 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
             "rarity": "Magic",
             "item_level": 52,
             "explicit_mods": ["+35 к духу", "26% увеличение уклонения"],
+            "stat_mods": [
+                {"id": "explicit.stat_spirit", "type": "explicit", "text": "+35 к духу"},
+                {"id": "explicit.stat_evasion", "type": "explicit", "text": "26% увеличение уклонения"},
+            ],
             "price_target": 3.0,
         },
     ]
