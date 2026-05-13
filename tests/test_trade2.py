@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import app.trade2 as trade2
@@ -82,6 +83,116 @@ def test_normalize_exchange_result_flattens_offers():
     assert result["total"] == 1
     assert result["rows"][0]["seller"] == "Seller#1234"
     assert result["rows"][0]["ratio"] == 0.1
+
+
+def test_normalize_item_listing_requires_stash_buyout_price():
+    payload = {
+        "id": "item1",
+        "listing": {
+            "indexed": "2026-05-12T10:00:00Z",
+            "stash": {"name": "Buyout", "x": 1, "y": 2},
+            "price": {"type": "~price", "amount": 2, "currency": "divine"},
+            "account": {"name": "Seller#1234", "online": False},
+        },
+        "item": {
+            "icon": "icon.png",
+            "name": "",
+            "typeLine": "Expert Waxed Jacket",
+            "baseType": "Waxed Jacket",
+            "rarity": "Rare",
+            "ilvl": 82,
+            "explicitMods": ["+10 to Strength"],
+        },
+    }
+
+    lot = trade2._normalize_item_listing(payload)
+
+    assert lot["seller"] == "Seller#1234"
+    assert lot["stash"] == "Buyout"
+    assert lot["display_name"] == "Expert Waxed Jacket"
+    assert lot["price_amount"] == 2
+    assert lot["price_currency"] == "divine"
+
+
+def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():
+    assert trade2._normalize_item_listing({"listing": {"price": {"amount": 1, "currency": "exalted"}}, "item": {}}) is None
+    assert trade2._normalize_item_listing({"listing": {"stash": {"name": "Tab"}}, "item": {}}) is None
+
+
+def test_market_price_stats_excludes_same_seller_and_marks_verdict():
+    lots = [
+        {"seller": "Seller#1234", "price_target": 1.0},
+        {"seller": "Other#1", "price_target": 8.0},
+        {"seller": "Other#2", "price_target": 10.0},
+        {"seller": "Other#3", "price_target": 12.0},
+    ]
+
+    market = trade2._market_price_stats(lots, "Seller#1234")
+    verdict = trade2._verdict_for_lot({"price_target": 7.0}, market)
+
+    assert market["count"] == 3
+    assert market["median"] == 10.0
+    assert verdict["kind"] == "cheap"
+    assert verdict["delta_pct"] == -30.0
+
+
+def test_seller_lots_text_query_uses_type_before_term():
+    type_query = trade2._seller_lots_query("Seller#1234", "Waxed Jacket", "any")
+    term_query = trade2._seller_lots_query("Seller#1234", "Vengeance Veil", "any", text_field="term")
+
+    assert type_query["filters"]["trade_filters"]["filters"]["account"]["input"] == "Seller#1234"
+    assert type_query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
+    assert type_query["type"] == "Waxed Jacket"
+    assert "term" not in type_query
+    assert term_query["term"] == "Vengeance Veil"
+
+
+def test_similar_lots_query_starts_with_ilvl_window_for_non_unique():
+    lot = {"base_type": "Waxed Jacket", "rarity": "Rare", "item_level": 82}
+
+    strict = trade2._similar_lots_query(lot, "any", looseness=0)
+    wider = trade2._similar_lots_query(lot, "any", looseness=1)
+
+    strict_filters = strict["filters"]["type_filters"]["filters"]
+    wider_filters = wider["filters"]["type_filters"]["filters"]
+    assert strict["type"] == "Waxed Jacket"
+    assert strict_filters["rarity"]["option"] == "rare"
+    assert strict_filters["ilvl"] == {"min": 77, "max": 87}
+    assert "ilvl" not in wider_filters
+
+
+def test_seller_lots_snapshot_uses_cache(monkeypatch):
+    calls = {"search": 0, "fetch": 0}
+
+    async def fake_post_search(league, query, sort=None):
+        calls["search"] += 1
+        return {"id": "query1", "total": 1, "result": ["item1"]}
+
+    async def fake_fetch(ids, query_id, limit=60):
+        calls["fetch"] += 1
+        return [
+            {
+                "id": "item1",
+                "listing": {
+                    "stash": {"name": "Buyout"},
+                    "price": {"amount": 1, "currency": "exalted"},
+                    "account": {"name": "Seller#1234"},
+                },
+                "item": {"typeLine": "Waxed Jacket", "baseType": "Waxed Jacket", "rarity": "Rare"},
+            }
+        ]
+
+    monkeypatch.setattr(trade2, "SELLER_LOTS_CACHE", {})
+    monkeypatch.setattr(trade2, "_post_search", fake_post_search)
+    monkeypatch.setattr(trade2, "_fetch_trade_items", fake_fetch)
+
+    first = asyncio.run(trade2._get_seller_lots_snapshot("Fate", "Seller#1234", "any"))
+    second = asyncio.run(trade2._get_seller_lots_snapshot("Fate", "Seller#1234", "any"))
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["lots"][0]["display_name"] == "Waxed Jacket"
+    assert calls == {"search": 1, "fetch": 1}
 
 
 def test_normalize_poe_ninja_overview_converts_primary_value_to_target():

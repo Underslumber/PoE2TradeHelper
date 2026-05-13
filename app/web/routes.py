@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -14,13 +15,26 @@ from app.db.models import Row, Snapshot
 from app.db.session import get_session
 from app.export.export_csv import export_rows_csv
 from app.export.export_jsonl import export_rows_jsonl
-from app.trade2 import build_category_meta, get_category_rates, get_exchange_offers, get_trade_leagues, get_trade_static, read_history, read_latest_rates
+from app.trade2 import (
+    build_category_meta,
+    get_category_rates,
+    get_exchange_offers,
+    get_seller_lots_analysis,
+    get_trade_leagues,
+    get_trade_static,
+    read_history,
+    read_latest_rates,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
 
 
-def get_db():
+def trade_api_error(exc: Exception) -> JSONResponse:
+    return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+def get_db() -> Iterator[Session]:
     db = get_session()
     try:
         yield db
@@ -54,7 +68,7 @@ async def api_trade_leagues():
     try:
         return {"leagues": await get_trade_leagues()}
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/static")
@@ -63,7 +77,7 @@ async def api_trade_static():
         categories = await get_trade_static()
         return {"categories": categories, "category_meta": build_category_meta(categories)}
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/exchange")
@@ -76,7 +90,7 @@ async def api_trade_exchange(
     try:
         return await get_exchange_offers(league=league, have=have, want=want, status=status)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/category-rates")
@@ -89,7 +103,7 @@ async def api_trade_category_rates(
     try:
         return await get_category_rates(league=league, category=category, target=target, status=status)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/category-rates/latest")
@@ -103,6 +117,28 @@ def api_trade_category_rates_latest(
     if not latest:
         return {"cached": False, "rows": []}
     return latest
+
+
+@router.get("/api/trade/seller-lots")
+async def api_trade_seller_lots(
+    league: str = Query(...),
+    seller: str = Query(..., min_length=1),
+    q: str = Query(""),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    limit: int = Query(10, ge=1, le=20),
+):
+    try:
+        return await get_seller_lots_analysis(
+            league=league,
+            seller=seller,
+            text=q,
+            target=target,
+            status=status,
+            limit=limit,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/history")

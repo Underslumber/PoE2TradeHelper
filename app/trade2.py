@@ -17,6 +17,11 @@ POE_SITE_BASE = "https://www.pathofexile.com"
 HISTORY_PATH = DATA_DIR / "trade_rate_history.jsonl"
 RATE_CACHE_TTL = 300
 RATE_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+SELLER_LOTS_CACHE_TTL = 900
+SELLER_LOTS_FETCH_LIMIT = 100
+SELLER_MARKET_CACHE_TTL = 600
+SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 
 POE_NINJA_CATEGORY_TYPES = {
     "Currency": "Currency",
@@ -249,6 +254,399 @@ async def get_exchange_offers(
     status: str = "online",
 ) -> dict[str, Any]:
     return normalize_exchange_result(await _post_exchange(league, [have], [want], status=status))
+
+
+async def _post_search(
+    league: str,
+    query: dict[str, Any],
+    sort: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    body = {"query": query, "sort": sort or {"price": "asc"}}
+    async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
+        response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            wait = int(retry_after) if retry_after and retry_after.isdigit() else 4
+            await asyncio.sleep(wait)
+            response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+        response.raise_for_status()
+    return response.json()
+
+
+async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> list[dict[str, Any]]:
+    selected_ids = [item_id for item_id in ids[:limit] if item_id]
+    if not selected_ids:
+        return []
+    results: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+        chunks = _chunked(selected_ids, 10)
+        for index, chunk_ids in enumerate(chunks):
+            chunk = ",".join(chunk_ids)
+            response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                wait = int(retry_after) if retry_after and retry_after.isdigit() else 4
+                await asyncio.sleep(wait)
+                response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
+            response.raise_for_status()
+            results.extend(response.json().get("result") or [])
+            if index < len(chunks) - 1:
+                await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+    return results
+
+
+def _priced_trade_filters(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    filters = {
+        "trade_filters": {
+            "filters": {
+                "sale_type": {"option": "priced"},
+            }
+        }
+    }
+    if extra:
+        filters["trade_filters"]["filters"].update(extra)
+    return filters
+
+
+def _seller_lots_query(seller: str, text: str, status: str, text_field: str = "type") -> dict[str, Any]:
+    query: dict[str, Any] = {
+        "status": {"option": status},
+        "stats": [{"type": "and", "filters": []}],
+        "filters": _priced_trade_filters({"account": {"input": seller}}),
+    }
+    if text:
+        if text_field not in {"type", "term"}:
+            raise ValueError("text_field must be 'type' or 'term'")
+        query[text_field] = text
+    return query
+
+
+def _rarity_option(rarity: str | None) -> str | None:
+    if not rarity:
+        return None
+    value = rarity.lower()
+    return value if value in {"normal", "magic", "rare", "unique"} else None
+
+
+def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) -> dict[str, Any]:
+    type_filters: dict[str, Any] = {}
+    rarity = _rarity_option(lot.get("rarity"))
+    if rarity and looseness < 2:
+        type_filters["rarity"] = {"option": rarity}
+
+    item_level = lot.get("item_level")
+    if looseness == 0 and rarity not in {"unique"} and isinstance(item_level, int) and item_level > 0:
+        type_filters["ilvl"] = {"min": max(1, item_level - 5), "max": item_level + 5}
+
+    filters = _priced_trade_filters()
+    if type_filters:
+        filters["type_filters"] = {"filters": type_filters}
+
+    query: dict[str, Any] = {
+        "status": {"option": status},
+        "stats": [{"type": "and", "filters": []}],
+        "filters": filters,
+    }
+    if rarity == "unique" and lot.get("name"):
+        query["term"] = lot["name"]
+    else:
+        query["type"] = lot.get("base_type") or lot.get("type_line") or lot.get("display_name")
+    return query
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _item_display_name(item: dict[str, Any]) -> str:
+    name = (item.get("name") or "").strip()
+    type_line = (item.get("typeLine") or "").strip()
+    if name and type_line:
+        return f"{name} {type_line}"
+    return name or type_line or item.get("baseType") or "-"
+
+
+def _listing_text_blob(lot: dict[str, Any]) -> str:
+    return " ".join(
+        str(part)
+        for part in [
+            lot.get("display_name"),
+            lot.get("name"),
+            lot.get("type_line"),
+            lot.get("base_type"),
+            lot.get("rarity"),
+            " ".join(lot.get("explicit_mods") or []),
+        ]
+        if part
+    ).lower()
+
+
+def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
+    listing = entry.get("listing") or {}
+    item = entry.get("item") or {}
+    price = listing.get("price") or {}
+    stash = listing.get("stash") or {}
+    amount = _to_float(price.get("amount"))
+    currency = price.get("currency")
+    if not stash or amount is None or not currency:
+        return None
+    account = listing.get("account") or {}
+    return {
+        "id": entry.get("id") or item.get("id") or "",
+        "seller": account.get("name") or "",
+        "online": bool(account.get("online")),
+        "indexed": listing.get("indexed") or "",
+        "stash": stash.get("name") or "",
+        "stash_x": stash.get("x"),
+        "stash_y": stash.get("y"),
+        "price_amount": amount,
+        "price_currency": currency,
+        "price_type": price.get("type") or "",
+        "display_name": _item_display_name(item),
+        "name": item.get("name") or "",
+        "type_line": item.get("typeLine") or "",
+        "base_type": item.get("baseType") or item.get("typeLine") or "",
+        "rarity": item.get("rarity") or "",
+        "item_level": item.get("ilvl"),
+        "identified": item.get("identified"),
+        "corrupted": bool(item.get("corrupted")),
+        "icon": item.get("icon") or "",
+        "note": item.get("note") or "",
+        "explicit_mods": item.get("explicitMods") or [],
+    }
+
+
+def _currency_rates_by_id(currency_rates: dict[str, Any], target: str) -> dict[str, float]:
+    rates = {target: 1.0}
+    for row in currency_rates.get("rows") or []:
+        value = _to_float(row.get("median") if row.get("median") is not None else row.get("best"))
+        if row.get("id") and value:
+            rates[row["id"]] = value
+    return rates
+
+
+def _apply_target_price(lot: dict[str, Any], rates: dict[str, float], target: str) -> dict[str, Any]:
+    currency = lot.get("price_currency")
+    amount = _to_float(lot.get("price_amount"))
+    factor = rates.get(currency)
+    lot["target"] = target
+    lot["price_target"] = amount * factor if amount and factor else None
+    return lot
+
+
+def _percentile(sorted_values: list[float], position: float) -> float | None:
+    if not sorted_values:
+        return None
+    index = min(len(sorted_values) - 1, max(0, round((len(sorted_values) - 1) * position)))
+    return sorted_values[index]
+
+
+def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, Any]:
+    seller_key = seller.lower()
+    values = sorted(
+        lot["price_target"]
+        for lot in lots
+        if isinstance(lot.get("price_target"), float) and lot.get("seller", "").lower() != seller_key
+    )
+    if not values:
+        return {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None}
+    median = statistics.median(values)
+    return {
+        "count": len(values),
+        "current": median,
+        "min": values[0],
+        "median": median,
+        "p25": _percentile(values, 0.25),
+        "p75": _percentile(values, 0.75),
+    }
+
+
+def _verdict_for_lot(lot: dict[str, Any], market: dict[str, Any]) -> dict[str, Any]:
+    seller_price = lot.get("price_target")
+    current = market.get("current")
+    count = market.get("count") or 0
+    if not isinstance(seller_price, float) or not isinstance(current, float) or count < 3:
+        return {"kind": "unknown", "delta_pct": None}
+    delta_pct = ((seller_price - current) / current) * 100 if current else None
+    if delta_pct is not None and delta_pct <= -15:
+        kind = "cheap"
+    elif delta_pct is not None and delta_pct >= 15:
+        kind = "expensive"
+    else:
+        kind = "fair"
+    return {"kind": kind, "delta_pct": delta_pct}
+
+
+def _cache_copy(data: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(data, ensure_ascii=False))
+
+
+def _seller_cache_key(league: str, seller: str, status: str) -> tuple[str, str, str]:
+    return (league, seller.strip().lower(), status)
+
+
+async def _get_seller_lots_snapshot(league: str, seller: str, status: str) -> dict[str, Any]:
+    cache_key = _seller_cache_key(league, seller, status)
+    cached = SELLER_LOTS_CACHE.get(cache_key)
+    if cached and time.time() - cached["created_ts"] < SELLER_LOTS_CACHE_TTL:
+        snapshot = _cache_copy(cached["data"])
+        snapshot["cached"] = True
+        return snapshot
+
+    seller_search = await _post_search(league, _seller_lots_query(seller, "", status))
+    seller_items = await _fetch_trade_items(
+        seller_search.get("result") or [],
+        seller_search.get("id") or "",
+        limit=SELLER_LOTS_FETCH_LIMIT,
+    )
+    lots = [_normalize_item_listing(item) for item in seller_items]
+    lots = [lot for lot in lots if lot]
+    snapshot = {
+        "created_ts": time.time(),
+        "league": league,
+        "seller": seller,
+        "status": status,
+        "query_id": seller_search.get("id"),
+        "total": seller_search.get("total") or len(lots),
+        "fetched_total": len(lots),
+        "lots": lots,
+        "cached": False,
+    }
+    SELLER_LOTS_CACHE[cache_key] = {"created_ts": time.time(), "data": snapshot}
+    return _cache_copy(snapshot)
+
+
+async def _fetch_similar_market(
+    league: str,
+    lot: dict[str, Any],
+    seller: str,
+    target: str,
+    status: str,
+    rates: dict[str, float],
+) -> dict[str, Any]:
+    rarity = _rarity_option(lot.get("rarity"))
+    looseness_steps = [0] if rarity == "unique" else [0, 1, 2]
+    last_payload: dict[str, Any] = {}
+    for looseness in looseness_steps:
+        market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
+        market_items = await _fetch_trade_items(market_search.get("result") or [], market_search.get("id") or "", limit=20)
+        market_lots = [_normalize_item_listing(item) for item in market_items]
+        market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
+        stats = _market_price_stats(market_lots, seller)
+        last_payload = {
+            "query_id": market_search.get("id"),
+            "total": market_search.get("total") or len(market_lots),
+            "lots": market_lots,
+            "stats": stats,
+            "looseness": looseness,
+        }
+        if stats.get("count", 0) >= 3:
+            return last_payload
+        await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+    return last_payload or {
+        "query_id": None,
+        "total": 0,
+        "lots": [],
+        "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None},
+    }
+
+
+async def _get_cached_similar_market(
+    league: str,
+    lot: dict[str, Any],
+    seller: str,
+    target: str,
+    status: str,
+    rates: dict[str, float],
+) -> dict[str, Any]:
+    market_key = (
+        league,
+        status,
+        target,
+        seller.strip().lower(),
+        lot.get("name") if lot.get("rarity") == "Unique" else "",
+        lot.get("base_type"),
+        lot.get("rarity"),
+        lot.get("item_level") // 5 if isinstance(lot.get("item_level"), int) else None,
+    )
+    cached = SELLER_MARKET_CACHE.get(market_key)
+    if cached and time.time() - cached["created_ts"] < SELLER_MARKET_CACHE_TTL:
+        payload = _cache_copy(cached["data"])
+        payload["cached"] = True
+        return payload
+    payload = await _fetch_similar_market(league, lot, seller, target, status, rates)
+    payload["cached"] = False
+    SELLER_MARKET_CACHE[market_key] = {"created_ts": time.time(), "data": payload}
+    return _cache_copy(payload)
+
+
+async def get_seller_lots_analysis(
+    league: str,
+    seller: str,
+    text: str = "",
+    target: str = "exalted",
+    status: str = "any",
+    limit: int = 10,
+) -> dict[str, Any]:
+    seller = seller.strip()
+    text = text.strip()
+    limit = max(1, min(limit, 20))
+    if not seller:
+        raise ValueError("seller is required")
+
+    seller_snapshot = await _get_seller_lots_snapshot(league, seller, status)
+    lots = list(seller_snapshot.get("lots") or [])
+    if text:
+        lowered = text.lower()
+        lots = [lot for lot in lots if lowered in _listing_text_blob(lot)]
+    matched_total = len(lots)
+    lots = lots[:limit]
+
+    currency_rates = await get_category_rates(league=league, category="Currency", target=target, status="any")
+    rates = _currency_rates_by_id(currency_rates, target)
+    for lot in lots:
+        _apply_target_price(lot, rates, target)
+
+    for lot in lots:
+        try:
+            market = await _get_cached_similar_market(league, lot, seller, target, status, rates)
+        except Exception as exc:
+            market = {
+                "query_id": None,
+                "total": 0,
+                "lots": [],
+                "stats": {"count": 0, "current": None, "min": None, "median": None, "p25": None, "p75": None, "error": str(exc)},
+                "cached": False,
+            }
+        lot["market"] = {
+            "query_id": market.get("query_id"),
+            "total": market.get("total"),
+            "cached": market.get("cached", False),
+            **market.get("stats", {}),
+        }
+        lot["verdict"] = _verdict_for_lot(lot, lot["market"])
+
+    return {
+        "league": league,
+        "seller": seller,
+        "query": text,
+        "target": target,
+        "status": status,
+        "query_id": seller_snapshot.get("query_id"),
+        "total": seller_snapshot.get("total") or len(lots),
+        "matched_total": matched_total,
+        "fetched_total": seller_snapshot.get("fetched_total") or len(lots),
+        "cached": seller_snapshot.get("cached", False),
+        "created_ts": seller_snapshot.get("created_ts"),
+        "lots": lots,
+        "source": "trade2/search+fetch",
+        "search_mode": "cache-filter" if text else "account-cache",
+        "basis": "priced stash listings only",
+    }
 
 
 def _rate_stats(rows: list[dict[str, Any]], item_id: str) -> dict[str, Any]:

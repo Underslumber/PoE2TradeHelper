@@ -132,6 +132,31 @@ body {
   color: #a7adb5;
   font-size: 0.85rem;
 }
+.loading-inline,
+.loading-block {
+  align-items: center;
+  color: #aab6c2;
+  display: inline-flex;
+  gap: 8px;
+}
+.loading-block {
+  display: flex;
+  padding: 8px 0;
+}
+.loading-spinner {
+  animation: loading-spin 0.8s linear infinite;
+  border: 2px solid #2a3a45;
+  border-radius: 50%;
+  border-top-color: #00d19a;
+  flex: none;
+  height: 16px;
+  width: 16px;
+}
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .form-control,
 .form-select {
   background-color: #101920;
@@ -179,6 +204,84 @@ body {
 .summary-strip strong {
   display: block;
   font-size: 1.15rem;
+  margin-top: 4px;
+}
+.lot-panel {
+  background: #101920;
+  border: 1px solid #2d3b45;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  padding: 16px;
+}
+.lot-panel-header {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.lot-panel h2 {
+  font-size: 1.1rem;
+  margin: 0 0 6px;
+}
+.lot-panel p {
+  color: #91a7b7;
+  margin: 0;
+}
+.lot-search-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.4fr) 120px;
+}
+.lot-results {
+  display: grid;
+  gap: 12px;
+}
+.lot-card {
+  background: rgba(255, 255, 255, 0.014);
+  border-left: 3px solid #7f8e99;
+  padding: 12px 0 12px 12px;
+}
+.lot-card.cheap {
+  border-left-color: #25e7a1;
+}
+.lot-card.expensive {
+  border-left-color: #ffd166;
+}
+.lot-card.fair {
+  border-left-color: #7bb7ff;
+}
+.lot-card-grid {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 1.2fr) repeat(3, minmax(150px, 0.7fr)) minmax(160px, 0.8fr);
+}
+.lot-title {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 42px minmax(0, 1fr);
+}
+.lot-title img {
+  height: 42px;
+  object-fit: contain;
+  width: 42px;
+}
+.lot-title strong,
+.lot-title small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lot-title small,
+.lot-card-label,
+.lot-card-note {
+  color: #91a7b7;
+  font-size: 0.82rem;
+}
+.lot-card-value {
+  display: block;
   margin-top: 4px;
 }
 .currency-preview,
@@ -678,6 +781,7 @@ body {
     grid-template-columns: 1fr;
   }
   .filters-grid,
+  .lot-search-grid,
   .summary-strip {
     grid-template-columns: 1fr;
   }
@@ -702,6 +806,9 @@ body {
     flex: 1;
   }
   .advice-card-layout {
+    grid-template-columns: 1fr;
+  }
+  .lot-card-grid {
     grid-template-columns: 1fr;
   }
   .advice-list {

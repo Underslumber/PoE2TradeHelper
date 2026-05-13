@@ -1,3 +1,5 @@
+// Economy table page
+
 function buildColumns(data) {
   const cols = [
     { data: 'name', title: t('item'), render: (data, type, row) => {
@@ -14,9 +16,9 @@ function buildColumns(data) {
 }
 
 function loadTable() {
-  const league = document.getElementById('league').value;
-  const category = document.getElementById('category').value;
-  const search = document.getElementById('search').value;
+  const league = byId('league').value;
+  const category = byId('category').value;
+  const search = byId('search').value;
   const params = new URLSearchParams();
   if (league) params.append('league', league);
   if (category) params.append('category', category);
@@ -29,7 +31,7 @@ function loadTable() {
         window.economyTable.clear();
         window.economyTable.destroy();
       }
-      const header = document.getElementById('columns-header');
+      const header = byId('columns-header');
       header.innerHTML = '';
       columns.forEach(col => {
         const th = document.createElement('th');
@@ -50,7 +52,7 @@ function loadTable() {
 function initEconomyTable() {
   applyLanguage();
   ['league', 'category', 'search'].forEach(id => {
-    const el = document.getElementById(id);
+    const el = byId(id);
     el.addEventListener('change', loadTable);
     if (id === 'search') {
       el.addEventListener('keyup', () => {
@@ -64,220 +66,9 @@ function initEconomyTable() {
 
 window.initEconomyTable = initEconomyTable;
 
-const i18n = {
-  ru: {
-    navLive: 'Рынок',
-    all: 'Все',
-    category: 'Категория',
-    categories: 'Категории',
-    market: 'Рынок',
-    marketHint: 'Публичная торговая и валютная площадка без OAuth. Сначала выводим все позиции, цены обновляем аккуратно для выбранной категории.',
-    league: 'Лига',
-    targetCurrency: 'Валюта оценки',
-    pricedIn: 'Цены в валюте',
-    status: 'Статус',
-    statusAny: 'Любой',
-    statusOnline: 'В сети',
-    autoRefresh: 'Автообновление',
-    autoRefreshOff: 'Выкл',
-    autoRefresh1m: '1 мин',
-    autoRefresh5m: '5 мин',
-    autoRefresh30m: '30 мин',
-    autoRefresh1h: '1 час',
-    search: 'Поиск',
-    searchPlaceholder: 'Название или id',
-    refreshRates: 'Обновить цены категории',
-    refreshLists: 'Обновить списки',
-    items: 'Позиций',
-    priced: 'С ценой',
-    lastSnapshot: 'Последний снимок',
-    marketTab: 'Рынок',
-    signalsTab: 'Сигналы',
-    tradeAdvice: 'Советы по торгам',
-    detailedSignals: 'Подробные сигналы',
-    topSignals: 'Лучшие 5',
-    allSignals: 'Все',
-    buySignals: 'Купить',
-    sellSignals: 'Продать',
-    bestOperations: 'Лучшие операции',
-    activeTrades: 'Активные товары',
-    activeTradesLoading: 'Собираю активные товары и варианты обмена...',
-    noActiveTrades: 'Нет активных товаров с достаточным объемом для таблицы.',
-    activeTradesHint: 'Самые ликвидные позиции и лучшие варианты покупки/продажи относительно доступных валют.',
-    marketChains: 'Многоходовые сделки',
-    noMarketChains: 'Пока нет многоходовых операций с положительной расчетной разницей.',
-    operationsLoading: 'Собираю лучшие операции...',
-    operationWatchHint: 'Положительных многоходовых цепочек сейчас нет. Ниже ближайшие операции для наблюдения.',
-    route: 'Маршрут',
-    step: 'Шаг',
-    start: 'Старт',
-    finish: 'Финиш',
-    profit: 'Прибыль',
-    margin: 'Маржа',
-    bestBuy: 'Купить дешевле',
-    bestSell: 'Продать дороже',
-    activeScore: 'Активность',
-    minVolume: 'Мин. объем',
-    pricesByCurrency: 'Цены по валютам',
-    tradedFor: 'Торгуется за',
-    chainMaxSteps: 'Длина цепочки',
-    noBuySignals: 'Нет позиций с заметным падением цены и достаточным объемом.',
-    noSellSignals: 'Нет позиций с заметным ростом цены и достаточным объемом.',
-    priceDrop: 'Падение',
-    priceRise: 'Рост',
-    currentPoint: 'Сейчас',
-    signalBasis: 'Основа',
-    resultChartBasis: 'результат за 7 дней',
-    priceChartBasis: 'цена за 7 дней',
-    noSignalChart: 'Нет графика',
-    sevenDayChange: '7д',
-    crossCurrency: 'Кросс-валюта',
-    crossHint: 'Сравнение покупки за одну валюту и продажи за другую появится после расчета.',
-    crossLoading: 'Считаю кросс-валютные варианты...',
-    noCrossDeals: 'Кросс-валютных вариантов с положительной разницей и объемом пока нет.',
-    crossWatchHint: 'Положительной разницы сейчас нет. Ниже ближайшие к выгодным сравнения для контроля рынка.',
-    signalLabel: 'Сигнал',
-    weakSignalLabel: 'Слабый сигнал',
-    watchLabel: 'Наблюдать',
-    buyFor: 'Купить за',
-    sellFor: 'Продать за',
-    spread: 'Разница',
-    demandVolume: 'Объем',
-    item: 'Предмет',
-    name: 'Название',
-    value: 'Цена',
-    median: 'Медиана',
-    offers: 'Лотов',
-    volume: 'Объем',
-    last7days: '7 дней',
-    source: 'Источник',
-    detailTarget: 'Цена относительно',
-    history: 'Лог изменений курса',
-    loading: 'Загрузка...',
-    noItems: 'Нет позиций',
-    noAdvice: 'Пока нет рекомендаций для выбранной категории',
-    noHistory: 'Истории пока нет',
-    autoTarget: 'Авто',
-    cacheLabel: 'кэш',
-    chartNoData: 'Для этой позиции пока нет графика изменения цены.',
-    detailSourceNote: 'График строится по 7-дневным данным poe.ninja, когда они доступны.',
-    tradeError: 'Ошибка торгового API',
-    cacheLoadError: 'Не удалось загрузить сохраненный снимок',
-    leaguesLoadError: 'Не удалось загрузить лиги',
-    staticLoadError: 'Не удалось загрузить справочник валют',
-    priceChartLabel: 'график цены',
-    snapshot: 'Снимок',
-    columns: 'Колонки',
-    rawData: 'Сырые данные',
-    updateLong: 'Обновляю цены. Для больших категорий это может занять время из-за rate limit...',
-  },
-  en: {
-    navLive: 'Market',
-    all: 'All',
-    category: 'Category',
-    categories: 'Categories',
-    market: 'Market',
-    marketHint: 'Public trade and exchange data without OAuth. All items are listed first; prices are refreshed carefully for the selected category.',
-    league: 'League',
-    targetCurrency: 'Value currency',
-    pricedIn: 'Prices in',
-    status: 'Status',
-    statusAny: 'Any',
-    statusOnline: 'Online',
-    autoRefresh: 'Auto refresh',
-    autoRefreshOff: 'Off',
-    autoRefresh1m: '1 min',
-    autoRefresh5m: '5 min',
-    autoRefresh30m: '30 min',
-    autoRefresh1h: '1 hour',
-    search: 'Search',
-    searchPlaceholder: 'Name or id',
-    refreshRates: 'Refresh category prices',
-    refreshLists: 'Refresh lists',
-    items: 'Items',
-    priced: 'Priced',
-    lastSnapshot: 'Last snapshot',
-    marketTab: 'Market',
-    signalsTab: 'Signals',
-    tradeAdvice: 'Trade advice',
-    detailedSignals: 'Detailed signals',
-    topSignals: 'Top 5',
-    allSignals: 'All',
-    buySignals: 'Buy',
-    sellSignals: 'Sell',
-    bestOperations: 'Best operations',
-    activeTrades: 'Active items',
-    activeTradesLoading: 'Collecting active items and exchange variants...',
-    noActiveTrades: 'No active items with enough volume for the table.',
-    activeTradesHint: 'Most liquid items and best buy/sell variants across available currencies.',
-    marketChains: 'Multi-step deals',
-    noMarketChains: 'No positive calculated multi-step operations yet.',
-    operationsLoading: 'Collecting best operations...',
-    operationWatchHint: 'No positive multi-step chains right now. Closest operations are listed for monitoring.',
-    route: 'Route',
-    step: 'Step',
-    start: 'Start',
-    finish: 'Finish',
-    profit: 'Profit',
-    margin: 'Margin',
-    bestBuy: 'Cheapest buy',
-    bestSell: 'Best sell',
-    activeScore: 'Activity',
-    minVolume: 'Min. volume',
-    pricesByCurrency: 'Prices by currency',
-    tradedFor: 'Traded for',
-    chainMaxSteps: 'Chain length',
-    noBuySignals: 'No items with a notable price drop and enough volume.',
-    noSellSignals: 'No items with a notable price rise and enough volume.',
-    priceDrop: 'Drop',
-    priceRise: 'Rise',
-    currentPoint: 'Now',
-    signalBasis: 'Basis',
-    resultChartBasis: '7-day result',
-    priceChartBasis: '7-day price',
-    noSignalChart: 'No chart',
-    sevenDayChange: '7d',
-    crossCurrency: 'Cross-currency',
-    crossHint: 'Buy-for-one-currency and sell-for-another comparison appears after calculation.',
-    crossLoading: 'Calculating cross-currency variants...',
-    noCrossDeals: 'No positive-spread cross-currency variants with volume yet.',
-    crossWatchHint: 'No positive spread right now. Closest comparisons are listed below for market monitoring.',
-    signalLabel: 'Signal',
-    weakSignalLabel: 'Weak signal',
-    watchLabel: 'Watch',
-    buyFor: 'Buy for',
-    sellFor: 'Sell for',
-    spread: 'Spread',
-    demandVolume: 'Volume',
-    item: 'Item',
-    name: 'Name',
-    value: 'Value',
-    median: 'Median',
-    offers: 'Offers',
-    volume: 'Volume',
-    last7days: '7 days',
-    source: 'Source',
-    detailTarget: 'Value currency',
-    history: 'Rate history log',
-    loading: 'Loading...',
-    noItems: 'No items',
-    noAdvice: 'No recommendations for the selected category yet',
-    noHistory: 'No history yet',
-    autoTarget: 'Auto',
-    cacheLabel: 'cache',
-    chartNoData: 'No price change chart is available for this item yet.',
-    detailSourceNote: 'The chart uses 7-day poe.ninja data when available.',
-    tradeError: 'Trade API error',
-    cacheLoadError: 'Failed to load saved snapshot',
-    leaguesLoadError: 'Failed to load leagues',
-    staticLoadError: 'Failed to load currency data',
-    priceChartLabel: 'price chart',
-    snapshot: 'Snapshot',
-    columns: 'Columns',
-    rawData: 'Raw data',
-    updateLong: 'Refreshing prices. Large categories can take time because of rate limits...',
-  },
-};
+// Shared live page state
+
+const i18n = window.POE2_I18N || { ru: {}, en: {} };
 
 const state = {
   lang: localStorage.getItem('poe2-lang') || 'ru',
@@ -299,6 +90,9 @@ const state = {
   marketChains: [],
   activeTradesKey: '',
   isLoadingActiveTrades: false,
+  sellerLots: null,
+  sellerLotsCache: {},
+  isLoadingSellerLots: false,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
   autoRefreshTimer: null,
   isRefreshing: false,
@@ -307,6 +101,19 @@ const state = {
 
 const preferredTargets = ['exalted', 'divine', 'chaos'];
 const CROSS_MIN_VOLUME = 10;
+
+// DOM helpers
+
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, value) {
+  const element = byId(id);
+  if (element) element.textContent = value;
+}
+
+// Localization
 
 function t(key) {
   const messages = i18n[state.lang] || {};
@@ -322,8 +129,8 @@ function applyLanguage() {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
   document.querySelector('.language-switch')?.setAttribute('aria-label', state.lang === 'ru' ? 'Язык' : 'Language');
-  document.getElementById('lang-ru')?.classList.toggle('active', state.lang === 'ru');
-  document.getElementById('lang-en')?.classList.toggle('active', state.lang === 'en');
+  byId('lang-ru')?.classList.toggle('active', state.lang === 'ru');
+  byId('lang-en')?.classList.toggle('active', state.lang === 'en');
   fillStatusSelect();
   fillTargetCurrencySelect();
   fillAutoRefreshSelect();
@@ -331,6 +138,7 @@ function applyLanguage() {
   renderCategories();
   renderMarket();
   renderAdvice(state.advice);
+  renderSellerLots();
   switchMainView(state.mainView);
   fillDetailTargetSelect();
   renderSelectedItemDetail();
@@ -345,8 +153,10 @@ function categoryName(category) {
   return state.lang === 'ru' ? (category.label_ru || category.label) : category.label;
 }
 
+// Page feedback
+
 function setLiveError(message) {
-  const error = document.getElementById('live-error');
+  const error = byId('live-error');
   if (!error) return;
   if (!message) {
     error.classList.add('d-none');
@@ -356,6 +166,8 @@ function setLiveError(message) {
   error.textContent = message;
   error.classList.remove('d-none');
 }
+
+// Formatting
 
 function formatAmount(value) {
   if (value === null || value === undefined || value === '') return '-';
@@ -372,6 +184,43 @@ function formatChange(value) {
   const sign = number > 0 ? '+' : '';
   return `${sign}${number.toFixed(1).replace(/\.0$/, '')}%`;
 }
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function loadingMarkup(message, mode = 'block') {
+  const className = mode === 'inline' ? 'loading-inline' : 'loading-block';
+  return `<span class="${className}"><span class="loading-spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span></span>`;
+}
+
+function cleanPoeText(value) {
+  return String(value ?? '').replace(/\[[^\]|]+\|([^\]]+)\]/g, '$1');
+}
+
+function rarityLabel(rarity) {
+  const key = `rarity${String(rarity || '').toLowerCase().replace(/^\w/, char => char.toUpperCase())}`;
+  return t(key) === key ? (rarity || '-') : t(key);
+}
+
+function setLoadingStatus(element, message) {
+  if (!element) return;
+  element.innerHTML = loadingMarkup(message, 'inline');
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
+}
+
+// Currency and filter options
 
 function hasTarget(target) {
   return (state.categories.Currency || []).some(entry => entry.id === target);
@@ -406,7 +255,7 @@ function currencyMarkup(target) {
 }
 
 function selectedTarget() {
-  return document.getElementById('target-currency')?.value || defaultTarget();
+  return byId('target-currency')?.value || defaultTarget();
 }
 
 function renderCurrencyElement(element, target) {
@@ -415,13 +264,11 @@ function renderCurrencyElement(element, target) {
 }
 
 function renderTargetCurrencyInfo(target = selectedTarget()) {
-  renderCurrencyElement(document.getElementById('target-currency-preview'), target);
-  renderCurrencyElement(document.getElementById('summary-target-currency'), target);
+  renderCurrencyElement(byId('target-currency-preview'), target);
+  renderCurrencyElement(byId('summary-target-currency'), target);
   const shortLabel = target ? `(${currencyLabel(target)})` : '';
-  const bestLabel = document.getElementById('best-target-label');
-  const medianLabel = document.getElementById('median-target-label');
-  if (bestLabel) bestLabel.textContent = shortLabel;
-  if (medianLabel) medianLabel.textContent = shortLabel;
+  setText('best-target-label', shortLabel);
+  setText('median-target-label', shortLabel);
 }
 
 function targetOptions(includeAuto = false) {
@@ -454,6 +301,8 @@ function autoRefreshOptions() {
     { id: '3600000', text: t('autoRefresh1h') },
   ];
 }
+
+// Market table
 
 function sortValue(row, key) {
   if (key === 'name') return row.name.toLowerCase();
@@ -497,27 +346,27 @@ function fillSelect(select, entries, selectedId) {
 }
 
 function fillStatusSelect() {
-  const select = document.getElementById('live-status');
+  const select = byId('live-status');
   if (!select) return;
   const selected = select.value || 'any';
   fillSelect(select, statusOptions(), selected);
 }
 
 function fillTargetCurrencySelect() {
-  const select = document.getElementById('target-currency');
+  const select = byId('target-currency');
   if (!select) return;
   const selected = select.value || defaultTarget();
   fillSelect(select, targetOptions(false), selected);
 }
 
 function fillAutoRefreshSelect() {
-  const select = document.getElementById('auto-refresh-interval');
+  const select = byId('auto-refresh-interval');
   if (!select) return;
   fillSelect(select, autoRefreshOptions(), String(state.autoRefreshMs || 0));
 }
 
 function renderCategories() {
-  const list = document.getElementById('category-list');
+  const list = byId('category-list');
   if (!list) return;
   list.innerHTML = '';
   state.categoryMeta.forEach(category => {
@@ -537,8 +386,8 @@ function renderCategories() {
       state.activeTrades = [];
       state.marketChains = [];
       state.activeTradesKey = '';
-      document.getElementById('category-title').textContent = categoryName(category);
-      document.getElementById('item-detail-panel')?.classList.add('d-none');
+      setText('category-title', categoryName(category));
+      byId('item-detail-panel')?.classList.add('d-none');
       renderCategories();
       renderMarket();
       renderAdvice((state.rates[state.selectedCategory] || {}).advice || []);
@@ -549,10 +398,10 @@ function renderCategories() {
 }
 
 function renderMarket() {
-  const body = document.getElementById('market-results');
+  const body = byId('market-results');
   if (!body) return;
   renderTargetCurrencyInfo((state.rates[state.selectedCategory] || {}).target || selectedTarget());
-  const search = (document.getElementById('market-search').value || '').toLowerCase();
+  const search = (byId('market-search').value || '').toLowerCase();
   const entries = (state.categories[state.selectedCategory] || [])
     .filter(entry => !search || entry.text.toLowerCase().includes(search) || (entry.text_ru || '').toLowerCase().includes(search) || entry.id.toLowerCase().includes(search));
   const categoryRates = state.rates[state.selectedCategory] || {};
@@ -571,12 +420,12 @@ function renderMarket() {
       volume: priced.volume || 0,
     };
   }).sort(compareRows);
-  document.getElementById('items-total').textContent = entries.length;
-  document.getElementById('priced-total').textContent = [...rateRows.values()].filter(row => row.best !== null && row.best !== undefined).length;
-  document.getElementById('rate-source').textContent = categoryRates.source || '-';
-  document.getElementById('last-snapshot').textContent = categoryRates.created_ts
+  setText('items-total', entries.length);
+  setText('priced-total', [...rateRows.values()].filter(row => row.best !== null && row.best !== undefined).length);
+  setText('rate-source', categoryRates.source || '-');
+  setText('last-snapshot', categoryRates.created_ts
     ? `${new Date(categoryRates.created_ts * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US')}${categoryRates.cached ? ` ${t('cacheLabel')}` : ''}`
-    : '-';
+    : '-');
   renderSortIndicators();
   body.innerHTML = '';
   if (!entries.length) {
@@ -602,8 +451,138 @@ function renderMarket() {
   });
 }
 
+// Seller lots
+
+function lotNativePrice(lot) {
+  return `${formatAmount(lot.price_amount)} ${currencyLabel(lot.price_currency)}`;
+}
+
+function lotTargetPrice(value, target = selectedTarget()) {
+  return value === null || value === undefined ? '-' : `${formatAmount(value)} ${currencyLabel(target)}`;
+}
+
+function verdictLabel(kind) {
+  if (kind === 'cheap') return t('verdictCheap');
+  if (kind === 'fair') return t('verdictFair');
+  if (kind === 'expensive') return t('verdictExpensive');
+  return t('verdictUnknown');
+}
+
+function renderSellerLotCard(lot) {
+  const market = lot.market || {};
+  const verdict = lot.verdict || { kind: 'unknown' };
+  const target = lot.target || selectedTarget();
+  const mods = (lot.explicit_mods || []).slice(0, 2).map(cleanPoeText).map(escapeHtml).join(' · ');
+  const delta = verdict.delta_pct === null || verdict.delta_pct === undefined ? '' : ` (${formatChange(verdict.delta_pct)})`;
+  const lotName = cleanPoeText(lot.display_name);
+  const lotBase = cleanPoeText(lot.base_type);
+  return `
+    <article class="lot-card ${escapeHtml(verdict.kind || 'unknown')}">
+      <div class="lot-card-grid">
+        <div>
+          <div class="lot-title">
+            ${lot.icon ? `<img src="${escapeHtml(lot.icon)}" alt="">` : '<span class="category-placeholder"></span>'}
+            <div>
+              <strong>${escapeHtml(lotName)}</strong>
+              <small>${escapeHtml([rarityLabel(lot.rarity), lotBase, lot.item_level ? `ilvl ${lot.item_level}` : ''].filter(Boolean).join(' / '))}</small>
+            </div>
+          </div>
+          ${mods ? `<div class="lot-card-note">${mods}</div>` : ''}
+          <div class="lot-card-note">${t('stashSection')}: ${escapeHtml(lot.stash || '-')} · ${t('listed')}: ${formatDateTime(lot.indexed)}</div>
+        </div>
+        <div>
+          <span class="lot-card-label">${t('sellerPrice')}</span>
+          <strong class="lot-card-value">${lotNativePrice(lot)}</strong>
+          <span class="lot-card-note">${lotTargetPrice(lot.price_target, target)}</span>
+        </div>
+        <div>
+          <span class="lot-card-label">${t('currentMarketPrice')}</span>
+          <strong class="lot-card-value">${lotTargetPrice(market.current, target)}</strong>
+          <span class="lot-card-note">${t('marketLots')}: ${formatAmount(market.count || 0)}</span>
+        </div>
+        <div>
+          <span class="lot-card-label">${t('marketRange')}</span>
+          <strong class="lot-card-value">${lotTargetPrice(market.min, target)} - ${lotTargetPrice(market.p75, target)}</strong>
+          <span class="lot-card-note">${t('similarBasis')}</span>
+        </div>
+        <div>
+          <span class="advice-badge">${verdictLabel(verdict.kind)}</span>
+          <strong class="lot-card-value">${delta || '-'}</strong>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderSellerLots() {
+  const list = byId('lot-results');
+  if (!list) return;
+  if (state.isLoadingSellerLots) {
+    list.innerHTML = loadingMarkup(t('sellerLotsLoading'));
+    return;
+  }
+  if (!state.sellerLots) {
+    list.innerHTML = `<p class="text-secondary">${t('sellerLotsEmpty')}</p>`;
+    return;
+  }
+  const lots = state.sellerLots.lots || [];
+  if (!lots.length) {
+    list.innerHTML = `<p class="text-secondary">${t('sellerLotsNoResults')}</p>`;
+    return;
+  }
+  list.innerHTML = lots.map(renderSellerLotCard).join('');
+}
+
+async function searchSellerLots() {
+  const seller = (byId('lot-seller')?.value || '').trim();
+  const status = byId('lot-search-status');
+  const button = byId('search-lots');
+  if (!seller) {
+    if (status) status.textContent = t('sellerRequired');
+    return;
+  }
+  const league = byId('live-league')?.value || '';
+  const target = selectedTarget();
+  const liveStatus = byId('live-status')?.value || 'any';
+  const query = (byId('lot-query')?.value || '').trim();
+  const limit = byId('lot-limit')?.value || '10';
+  const params = new URLSearchParams({ league, seller, q: query, target, status: liveStatus, limit });
+  const cacheKey = params.toString();
+  if (state.sellerLotsCache[cacheKey]) {
+    state.sellerLots = state.sellerLotsCache[cacheKey];
+    if (status) status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)} · ${t('cacheLabel')}`;
+    renderSellerLots();
+    return;
+  }
+  state.isLoadingSellerLots = true;
+  state.sellerLots = null;
+  if (status) setLoadingStatus(status, t('sellerLotsLoading'));
+  if (button) button.disabled = true;
+  renderSellerLots();
+  try {
+    const response = await fetch(`/api/trade/seller-lots?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    state.sellerLots = data;
+    state.sellerLotsCache[cacheKey] = data;
+    if (status) {
+      const cacheLabel = data.cached ? ` · ${t('cacheLabel')}` : '';
+      status.textContent = `${t('marketLots')}: ${formatAmount(data.matched_total ?? data.total ?? data.lots?.length ?? 0)}${cacheLabel}`;
+    }
+  } catch (error) {
+    state.sellerLots = { lots: [] };
+    if (status) status.textContent = error.message || String(error);
+  } finally {
+    state.isLoadingSellerLots = false;
+    if (button) button.disabled = false;
+    renderSellerLots();
+  }
+}
+
+// Item detail and charts
+
 function fillDetailTargetSelect() {
-  const select = document.getElementById('detail-target-currency');
+  const select = byId('detail-target-currency');
   if (!select) return;
   const previous = select.value || state.detailTarget || 'auto';
   fillSelect(select, targetOptions(true), previous);
@@ -633,8 +612,8 @@ function itemTitleMarkup(name, icon) {
 }
 
 function ratesCacheKey(target) {
-  const league = document.getElementById('live-league')?.value || '';
-  const status = document.getElementById('live-status')?.value || 'any';
+  const league = byId('live-league')?.value || '';
+  const status = byId('live-status')?.value || 'any';
   return `${league}|${state.selectedCategory}|${target}|${status}`;
 }
 
@@ -648,7 +627,7 @@ function currentRowFor(itemId) {
 }
 
 function autoTargetFor(row) {
-  const currentTarget = (state.rates[state.selectedCategory] || {}).target || document.getElementById('target-currency')?.value || defaultTarget();
+  const currentTarget = (state.rates[state.selectedCategory] || {}).target || byId('target-currency')?.value || defaultTarget();
   const value = Number(row?.best ?? row?.median);
   if (currentTarget === 'exalted' && Number.isFinite(value) && value >= 250 && hasTarget('divine')) return 'divine';
   if (currentTarget === 'divine' && Number.isFinite(value) && value > 0 && value < 0.25 && hasTarget('exalted')) return 'exalted';
@@ -661,8 +640,8 @@ async function ensureRatesForTarget(target) {
   const key = ratesCacheKey(target);
   if (state.detailRates[key]) return state.detailRates[key];
 
-  const league = document.getElementById('live-league').value;
-  const status = document.getElementById('live-status').value;
+  const league = byId('live-league').value;
+  const status = byId('live-status').value;
   const params = new URLSearchParams({ league, category: state.selectedCategory, target, status });
   const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
   const data = await response.json();
@@ -672,7 +651,7 @@ async function ensureRatesForTarget(target) {
 }
 
 function renderSparkline(values) {
-  const chart = document.getElementById('detail-chart');
+  const chart = byId('detail-chart');
   if (!chart) return;
   const data = (values || []).map(Number).filter(Number.isFinite);
   if (data.length < 2) {
@@ -779,7 +758,7 @@ function renderAdviceCard(card, contentHtml, chartHtml) {
 }
 
 async function renderSelectedItemDetail() {
-  const panel = document.getElementById('item-detail-panel');
+  const panel = byId('item-detail-panel');
   if (!panel || !state.selectedItemId) return;
   const entry = findEntry(state.selectedItemId);
   if (!entry) {
@@ -787,35 +766,38 @@ async function renderSelectedItemDetail() {
     return;
   }
   panel.classList.remove('d-none');
-  document.getElementById('detail-name').textContent = entryName(entry);
-  document.getElementById('detail-id').textContent = entry.id;
-  const detailIcon = document.getElementById('detail-icon');
+  setText('detail-name', entryName(entry));
+  setText('detail-id', entry.id);
+  const detailIcon = byId('detail-icon');
   if (entry.image) {
     detailIcon.src = entry.image;
   } else {
     detailIcon.removeAttribute('src');
   }
 
-  const select = document.getElementById('detail-target-currency');
+  const select = byId('detail-target-currency');
   state.detailTarget = select?.value || 'auto';
   const baseRow = currentRowFor(entry.id);
   const target = state.detailTarget === 'auto' ? autoTargetFor(baseRow) : state.detailTarget;
-  renderCurrencyElement(document.getElementById('detail-target-currency-preview'), target);
-  document.getElementById('detail-value-target-label').textContent = `(${currencyLabel(target)})`;
-  document.getElementById('detail-median-target-label').textContent = `(${currencyLabel(target)})`;
-  document.getElementById('detail-note').textContent = t('loading');
+  renderCurrencyElement(byId('detail-target-currency-preview'), target);
+  setText('detail-value-target-label', `(${currencyLabel(target)})`);
+  setText('detail-median-target-label', `(${currencyLabel(target)})`);
+  byId('detail-note').innerHTML = loadingMarkup(t('loading'));
   try {
     const data = await ensureRatesForTarget(target);
     const row = rowsById(data).get(entry.id) || entry;
-    document.getElementById('detail-value').textContent = `${formatAmount(row.best)} ${currencyLabel(target)}`;
-    document.getElementById('detail-median').textContent = `${formatAmount(row.median)} ${currencyLabel(target)}`;
-    document.getElementById('detail-volume').textContent = formatAmount(row.volume || 0);
-    document.getElementById('detail-change').textContent = formatChange(row.change);
-    document.getElementById('detail-change').className = Number(row.change) > 0 ? 'change-up' : Number(row.change) < 0 ? 'change-down' : '';
+    setText('detail-value', `${formatAmount(row.best)} ${currencyLabel(target)}`);
+    setText('detail-median', `${formatAmount(row.median)} ${currencyLabel(target)}`);
+    setText('detail-volume', formatAmount(row.volume || 0));
+    const detailChange = byId('detail-change');
+    if (detailChange) {
+      detailChange.textContent = formatChange(row.change);
+      detailChange.className = Number(row.change) > 0 ? 'change-up' : Number(row.change) < 0 ? 'change-down' : '';
+    }
     renderSparkline(row.sparkline || []);
-    document.getElementById('detail-note').textContent = `${t('detailSourceNote')} ${t('source')}: ${data.source || '-'}.`;
+    setText('detail-note', `${t('detailSourceNote')} ${t('source')}: ${data.source || '-'}.`);
   } catch (error) {
-    document.getElementById('detail-note').textContent = error.message || String(error);
+    setText('detail-note', error.message || String(error));
     renderSparkline([]);
   }
 }
@@ -828,7 +810,7 @@ function openItemDetail(itemId) {
 }
 
 function switchMainView(view) {
-  state.mainView = view === 'signals' ? 'signals' : 'market';
+  state.mainView = ['signals', 'lots'].includes(view) ? view : 'market';
   document.querySelectorAll('.main-view-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.mainTab === state.mainView);
   });
@@ -836,10 +818,13 @@ function switchMainView(view) {
     element.classList.toggle('view-hidden', element.dataset.mainView !== state.mainView);
   });
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
+  if (state.mainView === 'lots') renderSellerLots();
 }
 
+// Signal rendering
+
 function renderAdvice(advice) {
-  const panel = document.getElementById('advice-panel');
+  const panel = byId('advice-panel');
   if (!panel) return;
   state.advice = advice || [];
   panel.classList.remove('d-none');
@@ -874,8 +859,8 @@ function trendSignals(direction) {
 }
 
 function renderTrendSignals() {
-  renderTrendSignalList(document.getElementById('advice-list-buy'), trendSignals('buy'), 'buy');
-  renderTrendSignalList(document.getElementById('advice-list-sell'), trendSignals('sell'), 'sell');
+  renderTrendSignalList(byId('advice-list-buy'), trendSignals('buy'), 'buy');
+  renderTrendSignalList(byId('advice-list-sell'), trendSignals('sell'), 'sell');
 }
 
 function renderTrendSignalList(list, signals, direction) {
@@ -900,9 +885,9 @@ function renderTrendSignalList(list, signals, direction) {
 }
 
 function renderOperationSignals() {
-  const list = document.getElementById('advice-list-ops');
+  const list = byId('advice-list-ops');
   if (!list) return;
-  const maxSteps = Number(document.getElementById('chain-max-steps')?.value || 5);
+  const maxSteps = Number(byId('chain-max-steps')?.value || 5);
   const operations = state.advice.filter(item => Number(item.path_steps || 1) <= maxSteps);
   if (operations.length) {
     renderAdviceList(list, operations, t('noAdvice'));
@@ -910,7 +895,7 @@ function renderOperationSignals() {
   }
   list.innerHTML = '';
   if (state.isLoadingActiveTrades) {
-    list.innerHTML = `<p class="text-secondary">${t('operationsLoading')}</p>`;
+    list.innerHTML = loadingMarkup(t('operationsLoading'));
     return;
   }
   if (state.marketChains.length) {
@@ -1015,7 +1000,7 @@ function switchAdviceTab(tab) {
     button.classList.toggle('active', button.dataset.adviceTab === tab);
   });
   ['buy', 'sell', 'ops', 'active', 'cross'].forEach(name => {
-    document.getElementById(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
+    byId(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
   });
   if (tab === 'ops') renderOperationSignals();
   if (tab === 'ops') loadActiveTrades();
@@ -1024,11 +1009,11 @@ function switchAdviceTab(tab) {
 }
 
 function renderCrossDeals() {
-  const list = document.getElementById('advice-list-cross');
+  const list = byId('advice-list-cross');
   if (!list) return;
   list.innerHTML = '';
   if (state.isLoadingCrossDeals) {
-    list.innerHTML = `<p class="text-secondary">${t('crossLoading')}</p>`;
+    list.innerHTML = loadingMarkup(t('crossLoading'));
     return;
   }
   if (!state.crossDeals.length) {
@@ -1052,6 +1037,8 @@ function renderCrossDeals() {
     list.appendChild(card);
   });
 }
+
+// Cross-currency and active trades
 
 function rateValue(row) {
   const value = Number(row?.median ?? row?.best);
@@ -1078,8 +1065,8 @@ function inferConversionFactor(baseData, otherData) {
 }
 
 function crossDealsKey() {
-  const league = document.getElementById('live-league')?.value || '';
-  const status = document.getElementById('live-status')?.value || '';
+  const league = byId('live-league')?.value || '';
+  const status = byId('live-status')?.value || '';
   return `${league}|${state.selectedCategory}|${selectedTarget()}|${status}`;
 }
 
@@ -1247,10 +1234,10 @@ function buildMarketChains(activeTrades, baseTarget, maxSteps) {
 }
 
 function renderActiveTrades() {
-  const panel = document.getElementById('advice-list-active');
+  const panel = byId('advice-list-active');
   if (!panel) return;
   if (state.isLoadingActiveTrades) {
-    panel.innerHTML = `<p class="text-secondary">${t('activeTradesLoading')}</p>`;
+    panel.innerHTML = loadingMarkup(t('activeTradesLoading'));
     return;
   }
   if (!state.activeTrades.length) {
@@ -1341,7 +1328,7 @@ async function loadActiveTrades() {
       datasets.set(target, await ensureRatesForTarget(target));
     }
     state.activeTrades = buildActiveTradeTable(datasets, selectedTarget());
-    const maxSteps = Number(document.getElementById('chain-max-steps')?.value || 5);
+    const maxSteps = Number(byId('chain-max-steps')?.value || 5);
     state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), maxSteps);
     state.activeTradesKey = key;
   } catch {
@@ -1386,8 +1373,10 @@ async function loadCrossCurrencyDeals() {
   }
 }
 
+// History and data loading
+
 async function renderHistory() {
-  const list = document.getElementById('history-list');
+  const list = byId('history-list');
   if (!list) return;
   try {
     const response = await fetch('/api/trade/history?limit=12');
@@ -1408,7 +1397,7 @@ async function renderHistory() {
 
 function applyRatesData(data) {
   state.rates[state.selectedCategory] = data;
-  document.getElementById('rate-source').textContent = data.source || '-';
+  setText('rate-source', data.source || '-');
   renderMarket();
   renderAdvice(data.advice || []);
   renderSelectedItemDetail();
@@ -1416,9 +1405,9 @@ function applyRatesData(data) {
 }
 
 async function loadLatestCachedRates() {
-  const league = document.getElementById('live-league')?.value;
-  const target = document.getElementById('target-currency')?.value;
-  const status = document.getElementById('live-status')?.value;
+  const league = byId('live-league')?.value;
+  const target = byId('target-currency')?.value;
+  const status = byId('live-status')?.value;
   if (!league || !target || !status) return false;
   const category = state.selectedCategory;
   const params = new URLSearchParams({ league, category, target, status });
@@ -1452,19 +1441,19 @@ function scheduleAutoRefresh() {
 async function refreshRates(options = {}) {
   if (state.isRefreshing) return;
   state.isRefreshing = true;
-  const league = document.getElementById('live-league').value;
-  const target = document.getElementById('target-currency').value;
-  const status = document.getElementById('live-status').value;
-  const statusEl = document.getElementById('rate-status');
+  const league = byId('live-league').value;
+  const target = byId('target-currency').value;
+  const status = byId('live-status').value;
+  const statusEl = byId('rate-status');
   setLiveError('');
-  if (!options.silent) statusEl.textContent = t('updateLong');
+  if (!options.silent) setLoadingStatus(statusEl, t('updateLong'));
   const params = new URLSearchParams({ league, category: state.selectedCategory, target, status });
   try {
     const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
     const stamp = new Date(data.created_ts * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
-    document.getElementById('last-snapshot').textContent = data.cached ? `${stamp} ${t('cacheLabel')}` : stamp;
+    setText('last-snapshot', data.cached ? `${stamp} ${t('cacheLabel')}` : stamp);
     applyRatesData(data);
     statusEl.textContent = data.cached ? t('cacheLabel') : '';
   } catch (error) {
@@ -1476,16 +1465,16 @@ async function refreshRates(options = {}) {
 }
 
 async function initLiveTrade() {
-  const leagueSelect = document.getElementById('live-league');
+  const leagueSelect = byId('live-league');
   if (!leagueSelect) return;
   try {
     setLiveError('');
-    document.getElementById('lang-ru').addEventListener('click', () => {
+    byId('lang-ru').addEventListener('click', () => {
       state.lang = 'ru';
       localStorage.setItem('poe2-lang', state.lang);
       applyLanguage();
     });
-    document.getElementById('lang-en').addEventListener('click', () => {
+    byId('lang-en').addEventListener('click', () => {
       state.lang = 'en';
       localStorage.setItem('poe2-lang', state.lang);
       applyLanguage();
@@ -1509,11 +1498,17 @@ async function initLiveTrade() {
     fillAutoRefreshSelect();
     fillDetailTargetSelect();
 
-    document.getElementById('category-title').textContent = categoryName(state.categoryMeta.find(c => c.id === state.selectedCategory) || { label: state.selectedCategory });
-    document.getElementById('refresh-rates').addEventListener('click', refreshRates);
-    document.getElementById('refresh-static').addEventListener('click', () => window.location.reload());
-    document.getElementById('market-search').addEventListener('input', renderMarket);
-    document.getElementById('detail-target-currency').addEventListener('change', event => {
+    setText('category-title', categoryName(state.categoryMeta.find(c => c.id === state.selectedCategory) || { label: state.selectedCategory }));
+    byId('refresh-rates').addEventListener('click', refreshRates);
+    byId('refresh-static').addEventListener('click', () => window.location.reload());
+    byId('market-search').addEventListener('input', renderMarket);
+    byId('search-lots')?.addEventListener('click', searchSellerLots);
+    ['lot-seller', 'lot-query'].forEach(id => {
+      byId(id)?.addEventListener('keydown', event => {
+        if (event.key === 'Enter') searchSellerLots();
+      });
+    });
+    byId('detail-target-currency').addEventListener('change', event => {
       state.detailTarget = event.target.value;
       renderSelectedItemDetail();
     });
@@ -1523,22 +1518,22 @@ async function initLiveTrade() {
     document.querySelectorAll('[data-main-tab]').forEach(button => {
       button.addEventListener('click', () => switchMainView(button.dataset.mainTab));
     });
-    document.getElementById('chain-max-steps')?.addEventListener('change', () => {
+    byId('chain-max-steps')?.addEventListener('change', () => {
       renderOperationSignals();
       if (state.activeAdviceTab === 'active') {
-        state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), Number(document.getElementById('chain-max-steps')?.value || 5));
+        state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), Number(byId('chain-max-steps')?.value || 5));
         renderActiveTrades();
       } else {
         switchAdviceTab('ops');
       }
     });
-    document.getElementById('auto-refresh-interval').addEventListener('change', event => {
+    byId('auto-refresh-interval').addEventListener('change', event => {
       state.autoRefreshMs = Number(event.target.value || 0);
       localStorage.setItem('poe2-auto-refresh-ms', String(state.autoRefreshMs));
       scheduleAutoRefresh();
     });
     ['live-league', 'target-currency', 'live-status'].forEach(id => {
-      document.getElementById(id).addEventListener('change', () => {
+      byId(id).addEventListener('change', () => {
         state.rates = {};
         state.detailRates = {};
         state.crossDeals = [];
@@ -1546,8 +1541,9 @@ async function initLiveTrade() {
         state.activeTrades = [];
         state.marketChains = [];
         state.activeTradesKey = '';
-        document.getElementById('last-snapshot').textContent = '-';
-        document.getElementById('rate-source').textContent = '-';
+        state.sellerLots = null;
+        setText('last-snapshot', '-');
+        setText('rate-source', '-');
         renderTargetCurrencyInfo();
         renderMarket();
         renderAdvice([]);

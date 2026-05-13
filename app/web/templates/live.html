@@ -52,6 +52,42 @@
     <section class="main-view-switch" role="tablist">
       <button class="main-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
       <button class="main-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
+      <button class="main-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
+    </section>
+
+    <section id="lot-search-panel" class="lot-panel view-hidden" data-main-view="lots">
+      <div class="lot-panel-header">
+        <div>
+          <h2 data-i18n="sellerLotsTitle">Поиск лотов продавца</h2>
+          <p data-i18n="sellerLotsHint">Ищем priced-лоты из секций сундука-выкупа и сравниваем с похожими лотами рынка.</p>
+        </div>
+      </div>
+      <div class="lot-search-grid">
+        <label class="form-field">
+          <span data-i18n="sellerAccount">Продавец</span>
+          <input id="lot-seller" class="form-control" type="search" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
+        </label>
+        <label class="form-field">
+          <span data-i18n="lotNameFilter">Название или тип</span>
+          <input id="lot-query" class="form-control" type="search" data-i18n-placeholder="lotNameFilterPlaceholder" placeholder="Необязательно">
+        </label>
+        <label class="form-field">
+          <span data-i18n="lotLimit">Лотов</span>
+          <select id="lot-limit" class="form-select">
+            <option value="3" selected>3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+      </div>
+      <div class="action-row">
+        <button id="search-lots" class="btn btn-primary" type="button" data-i18n="searchSellerLots">Найти лоты</button>
+        <span id="lot-search-status" class="muted-status"></span>
+      </div>
+      <div id="lot-results" class="lot-results">
+        <p class="text-secondary" data-i18n="sellerLotsEmpty">Введите имя продавца и запустите поиск.</p>
+      </div>
     </section>
 
     <section class="summary-strip mb-3" data-main-view="market">
@@ -162,7 +198,7 @@
           </tr>
         </thead>
         <tbody id="market-results">
-          <tr><td colspan="7" class="text-secondary" data-i18n="loading">Загрузка...</td></tr>
+          <tr><td colspan="7"><span class="loading-inline"><span class="loading-spinner" aria-hidden="true"></span><span data-i18n="loading">Загрузка...</span></span></td></tr>
         </tbody>
       </table>
     </div>
