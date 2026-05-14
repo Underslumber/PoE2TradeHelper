@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
@@ -242,6 +243,59 @@ def _benchmark_price(league: str, target_currency: str | None, benchmark_currenc
     return _row_price(row)
 
 
+def _iso_timestamp(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _benchmark_price_at(
+    league: str,
+    target_currency: str | None,
+    benchmark_currency: str | None,
+    timestamp: float | None,
+) -> float | None:
+    if not target_currency or not benchmark_currency or timestamp is None:
+        return None
+    if target_currency == benchmark_currency:
+        return 1.0
+    snapshots = read_history(
+        limit=1000,
+        league=league,
+        category="Currency",
+        target=target_currency,
+        status="any",
+    ) or read_history(
+        limit=1000,
+        league=league,
+        category="Currency",
+        target=target_currency,
+        status="online",
+    )
+    candidates = []
+    for snapshot in snapshots:
+        created_ts = snapshot.get("created_ts")
+        if not isinstance(created_ts, (int, float)):
+            continue
+        row = next((item for item in snapshot.get("rows") or [] if item.get("id") == benchmark_currency), None)
+        price = _row_price(row)
+        if price is not None:
+            candidates.append((float(created_ts), price))
+    if not candidates:
+        return None
+    before = [item for item in candidates if item[0] <= timestamp]
+    if before:
+        return max(before, key=lambda item: item[0])[1]
+    nearest_ts, nearest_price = min(candidates, key=lambda item: abs(item[0] - timestamp))
+    return nearest_price if abs(nearest_ts - timestamp) <= 36 * 60 * 60 else None
+
+
 def _prefixed(prefix: str, values: dict) -> dict:
     return {f"{prefix}_{key}": value for key, value in values.items()}
 
@@ -277,7 +331,17 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
     benchmark_currency = trade.benchmark_currency or "divine"
     market = _latest_item_market(trade.league, trade.category, trade.entry_currency, trade.item_id)
     current_price = market.get("price")
-    current_benchmark_price = _benchmark_price(trade.league, trade.entry_currency, benchmark_currency)
+    current_benchmark_price = 1.0 if trade.item_id == benchmark_currency else _benchmark_price(trade.league, trade.entry_currency, benchmark_currency)
+    entry_benchmark_price = trade.entry_benchmark_price
+    if entry_benchmark_price is None and trade.item_id == benchmark_currency:
+        entry_benchmark_price = 1.0
+    if entry_benchmark_price is None:
+        entry_benchmark_price = _benchmark_price_at(
+            trade.league,
+            trade.entry_currency,
+            benchmark_currency,
+            _iso_timestamp(trade.entry_at),
+        )
     current_pnl = calculate_trade_pnl(
         quantity=trade.quantity,
         entry_price=trade.entry_price,
@@ -292,7 +356,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         current_price=current_price,
         current_currency=trade.entry_currency if current_price is not None else None,
         benchmark_currency=benchmark_currency,
-        entry_benchmark_price=trade.entry_benchmark_price,
+        entry_benchmark_price=entry_benchmark_price,
         current_benchmark_price=current_benchmark_price,
     )
     real_pnl = calculate_benchmark_adjusted_pnl(
@@ -302,7 +366,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         current_price=trade.exit_price,
         current_currency=trade.exit_currency,
         benchmark_currency=benchmark_currency,
-        entry_benchmark_price=trade.entry_benchmark_price,
+        entry_benchmark_price=entry_benchmark_price,
         current_benchmark_price=trade.exit_benchmark_price,
     )
     return {
@@ -319,7 +383,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         "entry_currency": trade.entry_currency,
         "entry_at": trade.entry_at,
         "benchmark_currency": benchmark_currency,
-        "entry_benchmark_price": trade.entry_benchmark_price,
+        "entry_benchmark_price": entry_benchmark_price,
         "exit_price": trade.exit_price,
         "exit_currency": trade.exit_currency,
         "exit_at": trade.exit_at,
@@ -600,6 +664,8 @@ def api_account_trade_create(
     if entry_price is None or entry_price <= 0 or quantity <= 0 or not entry_currency:
         return account_api_error("Укажите положительную цену входа, количество и валюту.", key="accountErrorTradePrice")
     entry_benchmark_price = _float_value(payload, "entry_benchmark_price")
+    if entry_benchmark_price is None and item_id == benchmark_currency:
+        entry_benchmark_price = 1.0
     if entry_benchmark_price is None:
         entry_benchmark_price = _benchmark_price(league, entry_currency, benchmark_currency)
     now = now_iso()
@@ -666,6 +732,8 @@ def api_account_trade_update(
         trade.exit_currency = _text(payload, "exit_currency") or trade.entry_currency
         trade.exit_at = _text(payload, "exit_at") or now_iso()
         trade.exit_benchmark_price = _float_value(payload, "exit_benchmark_price")
+        if trade.exit_benchmark_price is None and trade.item_id == (trade.benchmark_currency or "divine"):
+            trade.exit_benchmark_price = 1.0
         if trade.exit_benchmark_price is None:
             trade.exit_benchmark_price = _benchmark_price(
                 trade.league,

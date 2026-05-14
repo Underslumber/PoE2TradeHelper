@@ -884,6 +884,83 @@ function pnlBadge(available, amount, percent, currency, unavailableText) {
   return `<span class="trade-pnl ${pnlClass(amount)}">${priceWithCurrency(amount, currency)} (${formatChange(percent)})</span>`;
 }
 
+function openTradeCurrentPnl(trade, market) {
+  if (trade.current_pnl_available) {
+    return {
+      available: true,
+      amount: trade.current_pnl_amount,
+      percent: trade.current_pnl_percent,
+      currency: trade.current_pnl_currency,
+    };
+  }
+  const entryPrice = Number(trade.entry_price);
+  const quantity = Number(trade.quantity);
+  const currentPrice = Number(market?.price);
+  const entryCurrency = trade.entry_currency;
+  const currentCurrency = market?.target_currency || trade.entry_currency;
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(quantity) || !Number.isFinite(currentPrice) || currentPrice <= 0 || !entryCurrency || currentCurrency !== entryCurrency) {
+    return {
+      available: false,
+      amount: trade.current_pnl_amount,
+      percent: trade.current_pnl_percent,
+      currency: trade.current_pnl_currency || entryCurrency,
+    };
+  }
+  return {
+    available: true,
+    amount: (currentPrice - entryPrice) * quantity,
+    percent: ((currentPrice - entryPrice) / entryPrice) * 100,
+    currency: entryCurrency,
+  };
+}
+
+function openTradeRealCurrentPnl(trade, market) {
+  if (trade.current_real_pnl_available) {
+    return {
+      available: true,
+      amount: trade.current_real_pnl_amount,
+      percent: trade.current_real_pnl_percent,
+      currency: trade.current_real_pnl_currency,
+    };
+  }
+  const entryPrice = Number(trade.entry_price);
+  const quantity = Number(trade.quantity);
+  const currentPrice = Number(market?.price);
+  const benchmarkCurrency = trade.benchmark_currency || state.account.benchmarkCurrency || 'divine';
+  const isBenchmarkItem = trade.item_id && trade.item_id === benchmarkCurrency;
+  const entryBenchmark = isBenchmarkItem ? 1 : Number(trade.entry_benchmark_price);
+  const currentBenchmark = isBenchmarkItem ? 1 : Number(trade.current_benchmark_price);
+  const entryCurrency = trade.entry_currency;
+  const currentCurrency = market?.target_currency || trade.entry_currency;
+  if (
+    !Number.isFinite(entryPrice) || entryPrice <= 0
+    || !Number.isFinite(quantity)
+    || !Number.isFinite(currentPrice) || currentPrice <= 0
+    || !Number.isFinite(entryBenchmark) || entryBenchmark <= 0
+    || !Number.isFinite(currentBenchmark) || currentBenchmark <= 0
+    || !entryCurrency
+    || currentCurrency !== entryCurrency
+  ) {
+    return {
+      available: false,
+      amount: trade.current_real_pnl_amount,
+      percent: trade.current_real_pnl_percent,
+      currency: trade.current_real_pnl_currency || entryCurrency,
+    };
+  }
+  const nominalRatio = currentPrice / entryPrice;
+  const benchmarkRatio = currentBenchmark / entryBenchmark;
+  const entryTotal = entryPrice * quantity;
+  const currentTotal = currentPrice * quantity;
+  const realCurrentTotal = currentTotal / benchmarkRatio;
+  return {
+    available: true,
+    amount: realCurrentTotal - entryTotal,
+    percent: (nominalRatio / benchmarkRatio - 1) * 100,
+    currency: entryCurrency,
+  };
+}
+
 function benchmarkSummary(trade, mode) {
   const benchmark = trade.benchmark_currency || 'divine';
   const currentBenchmark = mode === 'closed' ? trade.exit_benchmark_price : trade.current_benchmark_price;
@@ -956,6 +1033,8 @@ function renderTradePnl(trade) {
 
 function renderOpenTradeSnapshot(trade) {
   const market = accountMarketForItem(trade);
+  const currentPnl = openTradeCurrentPnl(trade, market);
+  const realCurrentPnl = openTradeRealCurrentPnl(trade, market);
   return `
     <div class="trade-metric-grid">
       <div>
@@ -964,11 +1043,11 @@ function renderOpenTradeSnapshot(trade) {
       </div>
       <div>
         <span class="summary-label">${t('currentMargin')}</span>
-        ${pnlBadge(trade.current_pnl_available, trade.current_pnl_amount, trade.current_pnl_percent, trade.current_pnl_currency, t('currentPnlUnavailable'))}
+        ${pnlBadge(currentPnl.available, currentPnl.amount, currentPnl.percent, currentPnl.currency, t('currentPnlUnavailable'))}
       </div>
       <div>
         <span class="summary-label">${t('realCurrentMargin')}</span>
-        ${pnlBadge(trade.current_real_pnl_available, trade.current_real_pnl_amount, trade.current_real_pnl_percent, trade.current_real_pnl_currency, t('realPnlUnavailable'))}
+        ${pnlBadge(realCurrentPnl.available, realCurrentPnl.amount, realCurrentPnl.percent, realCurrentPnl.currency, t('realPnlUnavailable'))}
       </div>
     </div>
     <div class="pin-meta">${benchmarkSummary(trade, 'open')}</div>
