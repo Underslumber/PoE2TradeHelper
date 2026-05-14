@@ -499,6 +499,14 @@ def _to_float(value: Any) -> float | None:
     return number if number > 0 else None
 
 
+def _to_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def _item_display_name(item: dict[str, Any]) -> str:
     name = (item.get("name") or "").strip()
     type_line = (item.get("typeLine") or "").strip()
@@ -640,6 +648,7 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
         "price_amount": amount,
         "price_currency": currency,
         "price_type": price.get("type") or "",
+        "stack_size": _to_int(item.get("stackSize")) or 1,
         "display_name": _item_display_name(item),
         "name": item.get("name") or "",
         "type_line": item.get("typeLine") or "",
@@ -673,6 +682,8 @@ def _apply_target_price(lot: dict[str, Any], rates: dict[str, float], target: st
     factor = rates.get(currency)
     lot["target"] = target
     lot["price_target"] = amount * factor if amount and factor else None
+    stack_size = _to_int(lot.get("stack_size")) or 1
+    lot["price_unit_target"] = lot["price_target"] / stack_size if lot.get("price_target") and stack_size > 1 else lot.get("price_target")
     return lot
 
 
@@ -708,6 +719,96 @@ def _market_confidence(count: int, comparison: dict[str, Any] | None = None) -> 
     if count >= SELLER_MARKET_MIN_COMPARABLES:
         return "low"
     return "insufficient"
+
+
+def _lookup_text_key(value: Any) -> str:
+    text = _clean_trade_text(value).lower()
+    text = re.sub(r"[-_]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _static_entry_lookup(
+    categories: dict[str, list[dict[str, str | None]]],
+) -> dict[str, tuple[str, dict[str, str | None]]]:
+    lookup: dict[str, tuple[str, dict[str, str | None]]] = {}
+    for category, entries in categories.items():
+        if category not in POE_NINJA_CATEGORY_TYPES:
+            continue
+        for entry in entries:
+            for value in (entry.get("id"), entry.get("text"), entry.get("text_ru")):
+                key = _lookup_text_key(value)
+                if key:
+                    lookup[key] = (category, entry)
+    return lookup
+
+
+def _lot_static_match(
+    lot: dict[str, Any],
+    lookup: dict[str, tuple[str, dict[str, str | None]]],
+) -> tuple[str, dict[str, str | None]] | None:
+    for value in (lot.get("base_type"), lot.get("type_line"), lot.get("display_name"), lot.get("name")):
+        key = _lookup_text_key(value)
+        if key and key in lookup:
+            return lookup[key]
+    return None
+
+
+async def _stackable_market_payload(
+    league: str,
+    lot: dict[str, Any],
+    target: str,
+    status: str,
+    static_lookup: dict[str, tuple[str, dict[str, str | None]]],
+    category_rate_cache: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    match = _lot_static_match(lot, static_lookup)
+    if not match:
+        return None
+    category, entry = match
+    if category not in category_rate_cache:
+        category_rate_cache[category] = await get_category_rates(
+            league=league,
+            category=category,
+            target=target,
+            status=status,
+        )
+    category_rates = category_rate_cache[category]
+    row = next((item for item in category_rates.get("rows") or [] if item.get("id") == entry.get("id")), None)
+    if not row:
+        return None
+    value = _to_float(row.get("median") if row.get("median") is not None else row.get("best"))
+    if value is None:
+        return None
+    volume = _to_float(row.get("volume")) or 0.0
+    stats = {
+        "count": 0,
+        "raw_count": 0,
+        "outliers": 0,
+        "current": value,
+        "min": value,
+        "median": value,
+        "p25": value,
+        "p75": value,
+        "volume": volume,
+        "change": row.get("change"),
+        "confidence": "medium" if volume >= LOW_VOLUME_THRESHOLD else "low",
+        "source": "poe.ninja",
+        "category": category,
+        "item_id": entry.get("id"),
+        "unit_priced": True,
+    }
+    return {
+        "query_id": None,
+        "total": 0,
+        "candidate_count": 0,
+        "filtered_count": 0,
+        "lots": [],
+        "stats": stats,
+        "looseness": 0,
+        "comparison": {"mode": "poe-ninja-aggregate", "category": category, "item_id": entry.get("id")},
+        "cached": bool(category_rates.get("cached")),
+    }
 
 
 def _empty_market_payload(
@@ -774,10 +875,11 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
 
 
 def _verdict_for_lot(lot: dict[str, Any], market: dict[str, Any]) -> dict[str, Any]:
-    seller_price = lot.get("price_target")
+    seller_price = lot.get("price_unit_target") if market.get("unit_priced") else lot.get("price_target")
     current = market.get("current")
     count = market.get("count") or 0
-    if not isinstance(seller_price, float) or not isinstance(current, float) or count < 3:
+    aggregate_source = market.get("source") == "poe.ninja"
+    if not isinstance(seller_price, float) or not isinstance(current, float) or (count < 3 and not aggregate_source):
         return {"kind": "unknown", "delta_pct": None}
     delta_pct = ((seller_price - current) / current) * 100 if current else None
     if delta_pct is not None and delta_pct <= -15:
@@ -941,7 +1043,13 @@ async def get_seller_lots_analysis(
         )
         rates = _currency_rates_by_id(currency_rates, target)
     except (asyncio.TimeoutError, httpx.HTTPError):
+        currency_rates = {"rows": [], "cached": False}
         rates = {target: 1.0}
+    try:
+        static_lookup = _static_entry_lookup(await asyncio.wait_for(get_trade_static(), timeout=SELLER_CURRENCY_RATES_TIMEOUT))
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        static_lookup = {}
+    category_rate_cache: dict[str, dict[str, Any]] = {"Currency": currency_rates}
     for lot in lots:
         _apply_target_price(lot, rates, target)
 
@@ -956,9 +1064,14 @@ async def get_seller_lots_analysis(
                 timeout = min(SELLER_MARKET_PER_LOT_TIMEOUT, remaining)
                 try:
                     market = await asyncio.wait_for(
-                        _get_cached_similar_market(league, lot, seller, target, status, rates),
-                        timeout=timeout,
+                        _stackable_market_payload(league, lot, target, status, static_lookup, category_rate_cache),
+                        timeout=min(SELLER_CURRENCY_RATES_TIMEOUT, timeout),
                     )
+                    if market is None:
+                        market = await asyncio.wait_for(
+                            _get_cached_similar_market(league, lot, seller, target, status, rates),
+                            timeout=timeout,
+                        )
                 except (asyncio.TimeoutError, httpx.TimeoutException):
                     analysis_timed_out = True
                     market = _empty_market_payload(lot, "market analysis timeout")
@@ -1024,13 +1137,30 @@ async def get_seller_lot_market(
         )
         rates = _currency_rates_by_id(currency_rates, target)
     except (asyncio.TimeoutError, httpx.HTTPError):
+        currency_rates = {"rows": [], "cached": False}
         rates = {target: 1.0}
     _apply_target_price(lot, rates, target)
     try:
+        try:
+            static_lookup = _static_entry_lookup(await asyncio.wait_for(get_trade_static(), timeout=SELLER_CURRENCY_RATES_TIMEOUT))
+        except (asyncio.TimeoutError, httpx.HTTPError):
+            static_lookup = {}
         market = await asyncio.wait_for(
-            _get_cached_similar_market(league, lot, seller, target, status, rates),
-            timeout=SELLER_MARKET_PER_LOT_TIMEOUT,
+            _stackable_market_payload(
+                league,
+                lot,
+                target,
+                status,
+                static_lookup,
+                {"Currency": currency_rates},
+            ),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
         )
+        if market is None:
+            market = await asyncio.wait_for(
+                _get_cached_similar_market(league, lot, seller, target, status, rates),
+                timeout=SELLER_MARKET_PER_LOT_TIMEOUT,
+            )
     except (asyncio.TimeoutError, httpx.TimeoutException):
         market = _empty_market_payload(lot, "market analysis timeout")
     lot_market = {
@@ -1384,17 +1514,34 @@ def _build_emotion_path_advice(
     }
 
 
-def read_history(limit: int = 30) -> list[dict[str, Any]]:
+def read_history(
+    limit: int = 30,
+    league: str | None = None,
+    category: str | None = None,
+    target: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
     if not HISTORY_PATH.exists():
         return []
-    lines = HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-limit:]
+    lines = reversed(HISTORY_PATH.read_text(encoding="utf-8").splitlines())
     history = []
     for line in lines:
         try:
-            history.append(json.loads(line))
+            snapshot = json.loads(line)
         except json.JSONDecodeError:
             continue
-    return list(reversed(history))
+        if league and snapshot.get("league") != league:
+            continue
+        if category and snapshot.get("category") != category:
+            continue
+        if target and snapshot.get("target") != target:
+            continue
+        if status and snapshot.get("status") != status:
+            continue
+        history.append(snapshot)
+        if len(history) >= limit:
+            break
+    return history
 
 
 def read_latest_rates(

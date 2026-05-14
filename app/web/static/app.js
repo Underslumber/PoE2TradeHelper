@@ -82,7 +82,7 @@ const state = {
   detailRates: {},
   advice: [],
   mainView: 'market',
-  activeAdviceTab: 'buy',
+  activeAdviceTab: 'market',
   crossDeals: [],
   crossDealsKey: '',
   isLoadingCrossDeals: false,
@@ -90,12 +90,26 @@ const state = {
   marketChains: [],
   activeTradesKey: '',
   isLoadingActiveTrades: false,
+  historyTrends: [],
+  historyTrendsKey: '',
+  isLoadingHistoryTrends: false,
   sellerLots: null,
   sellerLotsCache: {},
   sellerLotMarketCache: {},
   isLoadingSellerLots: false,
   sellerLotsAbortController: null,
   sellerLotsRequestId: 0,
+  account: {
+    authenticated: false,
+    user: null,
+    pins: [],
+    trades: [],
+    notifications: [],
+    telegramConfigured: false,
+    benchmarkCurrency: localStorage.getItem('poe2-account-benchmark') || 'divine',
+    benchmarkRates: {},
+  },
+  isAccountLoading: false,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
   autoRefreshTimer: null,
   isRefreshing: false,
@@ -104,6 +118,11 @@ const state = {
 
 const preferredTargets = ['exalted', 'divine', 'chaos'];
 const CROSS_MIN_VOLUME = 10;
+const MARKET_SIGNAL_MIN_VOLUME = 10;
+const MARKET_SIGNAL_MEDIUM_VOLUME = 50;
+const MARKET_SIGNAL_NOTABLE_CHANGE = 8;
+const MARKET_SIGNAL_STRONG_CHANGE = 25;
+const MARKET_SIGNAL_TOP_CANDIDATES = 8;
 
 // DOM helpers
 
@@ -136,16 +155,18 @@ function applyLanguage() {
   byId('lang-en')?.classList.toggle('active', state.lang === 'en');
   fillStatusSelect();
   fillTargetCurrencySelect();
+  fillBenchmarkCurrencySelect();
   fillAutoRefreshSelect();
   renderTargetCurrencyInfo();
   renderCategories();
   renderMarket();
   renderAdvice(state.advice);
   renderSellerLots();
+  renderCabinet();
+  renderDetailAccountStatus();
   switchMainView(state.mainView);
   fillDetailTargetSelect();
   renderSelectedItemDetail();
-  renderHistory();
 }
 
 function entryName(entry) {
@@ -221,6 +242,796 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
+}
+
+// Account, pins, and trade journal
+
+function setAccountStatus(message) {
+  ['account-status', 'auth-status'].forEach(id => {
+    const element = byId(id);
+    if (element) element.textContent = message || '';
+  });
+}
+
+function setAuthStatusHtml(html) {
+  const element = byId('auth-status');
+  if (element) element.innerHTML = html || '';
+}
+
+function setDetailAccountStatus(message) {
+  const element = byId('detail-account-status');
+  if (element) element.textContent = message || '';
+}
+
+function renderDetailAccountStatus() {
+  if (!byId('detail-account-status')) return;
+  setDetailAccountStatus(state.account.authenticated ? '' : t('loginToUseCabinet'));
+}
+
+async function fetchAccountJson(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'same-origin',
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+    },
+  });
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+  if (!response.ok || data.error) {
+    const localized = data.error_key && t(data.error_key) !== data.error_key ? t(data.error_key) : '';
+    throw new Error(localized || data.error || data.detail || t('accountRequestError'));
+  }
+  return data;
+}
+
+function sendAccountJson(url, body, method = 'POST') {
+  return fetchAccountJson(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+}
+
+function accountItemName(item) {
+  return state.lang === 'ru' ? (item.item_name_ru || item.item_name) : item.item_name;
+}
+
+function selectedItemPayload() {
+  if (!state.selectedItemId) return null;
+  const entry = findEntry(state.selectedItemId);
+  if (!entry) return null;
+  const categoryRates = state.rates[state.selectedCategory] || {};
+  const row = rowsById(categoryRates).get(entry.id) || {};
+  const target = categoryRates.target || selectedTarget();
+  return {
+    league: byId('live-league')?.value || '',
+    category: state.selectedCategory,
+    item_id: entry.id,
+    item_name: entry.text || entryName(entry),
+    item_name_ru: entry.text_ru || entry.text || entryName(entry),
+    icon_url: entry.image || '',
+    target_currency: target,
+    last_price: rateValue(row),
+    last_source: categoryRates.source || '',
+  };
+}
+
+async function loadAccountCollections() {
+  if (!state.account.authenticated) return;
+  const [pinsData, tradesData] = await Promise.all([
+    fetchAccountJson('/api/account/pins'),
+    fetchAccountJson('/api/account/trades'),
+  ]);
+  state.account.pins = pinsData.pins || [];
+  state.account.trades = tradesData.trades || [];
+  const notificationsData = await fetchAccountJson('/api/account/notifications');
+  state.account.notifications = notificationsData.notifications || [];
+  state.account.telegramConfigured = Boolean(notificationsData.telegram_configured);
+}
+
+async function loadAccountState() {
+  state.isAccountLoading = true;
+  try {
+    const data = await fetchAccountJson('/api/auth/me');
+    state.account.authenticated = Boolean(data.authenticated);
+    state.account.user = data.user || null;
+    state.account.pins = [];
+    state.account.trades = [];
+    state.account.notifications = [];
+    state.account.telegramConfigured = false;
+    if (state.account.authenticated) {
+      await loadAccountCollections();
+    }
+  } catch (error) {
+    state.account.authenticated = false;
+    state.account.user = null;
+    state.account.pins = [];
+    state.account.trades = [];
+    state.account.notifications = [];
+    state.account.telegramConfigured = false;
+    setAccountStatus(error.message || String(error));
+  } finally {
+    state.isAccountLoading = false;
+    renderCabinet();
+    renderDetailAccountStatus();
+  }
+}
+
+async function refreshAccountData(message = '') {
+  if (!state.account.authenticated) return;
+  await loadAccountCollections();
+  renderCabinet();
+  renderDetailAccountStatus();
+  if (message) setAccountStatus(message);
+}
+
+async function handleLogin(event) {
+  event.preventDefault();
+  setAccountStatus('');
+  try {
+    const data = await sendAccountJson('/api/auth/login', {
+      username: byId('login-username')?.value || '',
+      password: byId('login-password')?.value || '',
+    });
+    state.account.authenticated = Boolean(data.authenticated);
+    state.account.user = data.user || null;
+    await refreshAccountData(t('loginDone'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function handleRegister(event) {
+  event.preventDefault();
+  setAccountStatus('');
+  try {
+    const data = await sendAccountJson('/api/auth/register', {
+      username: byId('register-username')?.value || '',
+      email: byId('register-email')?.value || '',
+      display_name: byId('register-display-name')?.value || '',
+      password: byId('register-password')?.value || '',
+    });
+    state.account.authenticated = Boolean(data.authenticated);
+    state.account.user = data.user || null;
+    if (data.verification_required) {
+      renderCabinet();
+      renderVerificationStatus(data, t('registerCheckEmail'));
+      return;
+    }
+    await refreshAccountData(t('registerDone'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function resendVerification() {
+  setAccountStatus('');
+  try {
+    const data = await sendAccountJson('/api/auth/resend-verification', {
+      username: byId('login-username')?.value || '',
+      password: byId('login-password')?.value || '',
+    });
+    if (data.verification_required) {
+      renderVerificationStatus(data, t('verificationResent'));
+    } else {
+      setAccountStatus(t('emailAlreadyVerified'));
+    }
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+function renderVerificationStatus(data, message) {
+  const email = escapeHtml(data.email || '');
+  if (data.dev_verification_url) {
+    setAuthStatusHtml(`${escapeHtml(message)} ${email}<br><a href="${escapeHtml(data.dev_verification_url)}">${t('devVerificationLink')}</a>`);
+    return;
+  }
+  setAccountStatus(`${message} ${email}`);
+}
+
+function showVerificationQueryStatus() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('verified') === '1') {
+    switchMainView('cabinet');
+    setAccountStatus(t('emailVerified'));
+  } else if (params.get('verify') === 'invalid') {
+    switchMainView('cabinet');
+    setAccountStatus(t('emailVerificationInvalid'));
+  }
+}
+
+async function logoutAccount() {
+  try {
+    await fetchAccountJson('/api/auth/logout', { method: 'POST' });
+  } finally {
+    state.account.authenticated = false;
+    state.account.user = null;
+    state.account.pins = [];
+    state.account.trades = [];
+    state.account.notifications = [];
+    state.account.telegramConfigured = false;
+    renderCabinet();
+    renderDetailAccountStatus();
+  }
+}
+
+function matchingPin(payload) {
+  return state.account.pins.find(pin => (
+    pin.league === payload.league
+    && pin.category === payload.category
+    && pin.item_id === payload.item_id
+  ));
+}
+
+async function pinSelectedPosition() {
+  if (!state.account.authenticated) {
+    switchMainView('cabinet');
+    setAccountStatus(t('loginRequiredForPin'));
+    return;
+  }
+  const payload = selectedItemPayload();
+  if (!payload) {
+    setDetailAccountStatus(t('selectItemFirst'));
+    return;
+  }
+  try {
+    await sendAccountJson('/api/account/pins', payload);
+    await refreshAccountData(t('pinSaved'));
+    setDetailAccountStatus(t('pinSaved'));
+  } catch (error) {
+    setDetailAccountStatus(error.message || String(error));
+  }
+}
+
+async function accountBenchmarkPrice(targetCurrency, benchmarkCurrency, leagueOverride = '') {
+  if (!targetCurrency || !benchmarkCurrency) return null;
+  if (targetCurrency === benchmarkCurrency) return 1;
+  const league = leagueOverride || byId('live-league')?.value || '';
+  const status = byId('live-status')?.value || 'any';
+  const key = `${league}|${targetCurrency}|${benchmarkCurrency}|${status}`;
+  if (Object.prototype.hasOwnProperty.call(state.account.benchmarkRates, key)) {
+    return state.account.benchmarkRates[key];
+  }
+  const params = new URLSearchParams({ league, category: 'Currency', target: targetCurrency, status });
+  try {
+    const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    const price = rateValue(rowsById(data).get(benchmarkCurrency));
+    state.account.benchmarkRates[key] = price;
+    return price;
+  } catch {
+    state.account.benchmarkRates[key] = null;
+    return null;
+  }
+}
+
+async function withEntryBenchmark(payload) {
+  const benchmarkCurrency = payload.benchmark_currency || state.account.benchmarkCurrency || 'divine';
+  const entryBenchmarkPrice = await accountBenchmarkPrice(payload.entry_currency, benchmarkCurrency, payload.league);
+  return {
+    ...payload,
+    benchmark_currency: benchmarkCurrency,
+    ...(entryBenchmarkPrice ? { entry_benchmark_price: entryBenchmarkPrice } : {}),
+  };
+}
+
+async function createTradeFromPayload(payload, message) {
+  if (!state.account.authenticated) {
+    switchMainView('cabinet');
+    setAccountStatus(t('loginRequiredForTrade'));
+    return;
+  }
+  if (!payload.entry_price || payload.entry_price <= 0) {
+    setAccountStatus(t('entryPriceRequired'));
+    setDetailAccountStatus(t('entryPriceRequired'));
+    return;
+  }
+  try {
+    await sendAccountJson('/api/account/trades', await withEntryBenchmark(payload));
+    await refreshAccountData(message);
+    setDetailAccountStatus(message);
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+    setDetailAccountStatus(error.message || String(error));
+  }
+}
+
+async function markSelectedEntry() {
+  const payload = selectedItemPayload();
+  if (!payload) {
+    setDetailAccountStatus(t('selectItemFirst'));
+    return;
+  }
+  const pin = matchingPin(payload);
+  await createTradeFromPayload({
+    ...payload,
+    pin_id: pin?.id,
+    quantity: 1,
+    entry_price: payload.last_price,
+    entry_currency: payload.target_currency,
+    benchmark_currency: state.account.benchmarkCurrency || 'divine',
+  }, t('tradeOpened'));
+}
+
+async function startTradeFromPin(pinId) {
+  const pin = state.account.pins.find(item => item.id === pinId);
+  if (!pin) return;
+  const price = Number(document.querySelector(`[data-pin-entry-price="${pinId}"]`)?.value || pin.last_price || 0);
+  const quantity = Number(document.querySelector(`[data-pin-quantity="${pinId}"]`)?.value || 1);
+  await createTradeFromPayload({
+    pin_id: pin.id,
+    league: pin.league,
+    category: pin.category,
+    item_id: pin.item_id,
+    item_name: pin.item_name,
+    item_name_ru: pin.item_name_ru,
+    icon_url: pin.icon_url,
+    quantity,
+    entry_price: price,
+    entry_currency: pin.target_currency,
+    benchmark_currency: state.account.benchmarkCurrency || 'divine',
+  }, t('tradeOpened'));
+}
+
+async function closeTrade(tradeId) {
+  const trade = state.account.trades.find(item => item.id === tradeId);
+  if (!trade) return;
+  const exitPrice = Number(document.querySelector(`[data-trade-exit-price="${tradeId}"]`)?.value || 0);
+  if (!exitPrice || exitPrice <= 0) {
+    setAccountStatus(t('exitPriceRequired'));
+    return;
+  }
+  try {
+    const exitBenchmarkPrice = await accountBenchmarkPrice(trade.entry_currency, trade.benchmark_currency || state.account.benchmarkCurrency || 'divine', trade.league);
+    await sendAccountJson(`/api/account/trades/${tradeId}`, {
+      exit_price: exitPrice,
+      exit_currency: trade.entry_currency,
+      ...(exitBenchmarkPrice ? { exit_benchmark_price: exitBenchmarkPrice } : {}),
+    }, 'PATCH');
+    await refreshAccountData(t('tradeClosed'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function deletePin(pinId) {
+  try {
+    await fetchAccountJson(`/api/account/pins/${pinId}`, { method: 'DELETE' });
+    await refreshAccountData(t('pinDeleted'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function deleteTrade(tradeId) {
+  try {
+    await fetchAccountJson(`/api/account/trades/${tradeId}`, { method: 'DELETE' });
+    await refreshAccountData(t('tradeDeleted'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+function notificationEventOptions() {
+  return [
+    { id: 'price_above', text: t('notificationPriceAbove') },
+    { id: 'price_below', text: t('notificationPriceBelow') },
+    { id: 'change_pct', text: t('notificationChangePct') },
+    { id: 'any_update', text: t('notificationAnyUpdate') },
+  ];
+}
+
+function notificationEventLabel(eventType) {
+  return (notificationEventOptions().find(item => item.id === eventType) || {}).text || eventType;
+}
+
+function fillNotificationControls() {
+  const pinSelect = byId('notification-pin');
+  const eventSelect = byId('notification-event');
+  if (pinSelect) {
+    fillSelect(
+      pinSelect,
+      state.account.pins.map(pin => ({ id: String(pin.id), text: accountItemName(pin) })),
+      pinSelect.value || String(state.account.pins[0]?.id || ''),
+    );
+  }
+  if (eventSelect) {
+    fillSelect(eventSelect, notificationEventOptions(), eventSelect.value || 'price_above');
+  }
+}
+
+async function createNotification(event) {
+  event.preventDefault();
+  if (!state.account.authenticated) return;
+  const eventType = byId('notification-event')?.value || 'price_above';
+  try {
+    await sendAccountJson('/api/account/notifications', {
+      pin_id: byId('notification-pin')?.value || '',
+      event_type: eventType,
+      threshold_value: eventType === 'any_update' ? null : byId('notification-threshold')?.value || '',
+      chat_id: byId('notification-chat-id')?.value || '',
+    });
+    await refreshAccountData(t('notificationCreated'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function deleteNotification(ruleId) {
+  try {
+    await fetchAccountJson(`/api/account/notifications/${ruleId}`, { method: 'DELETE' });
+    await refreshAccountData(t('notificationDeleted'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function toggleNotification(ruleId) {
+  const rule = state.account.notifications.find(item => item.id === ruleId);
+  if (!rule) return;
+  try {
+    await sendAccountJson(`/api/account/notifications/${ruleId}`, { enabled: !rule.enabled }, 'PATCH');
+    await refreshAccountData(t('notificationUpdated'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+async function testNotification(ruleId) {
+  try {
+    await fetchAccountJson(`/api/account/notifications/${ruleId}/test`, { method: 'POST' });
+    await refreshAccountData(t('notificationTestSent'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
+function bindAccountEvents() {
+  byId('login-form')?.addEventListener('submit', handleLogin);
+  byId('register-form')?.addEventListener('submit', handleRegister);
+  byId('resend-verification')?.addEventListener('click', resendVerification);
+  byId('logout-button')?.addEventListener('click', logoutAccount);
+  byId('pin-selected')?.addEventListener('click', pinSelectedPosition);
+  byId('entry-selected')?.addEventListener('click', markSelectedEntry);
+  byId('benchmark-currency')?.addEventListener('change', event => {
+    state.account.benchmarkCurrency = event.target.value || defaultTarget();
+    localStorage.setItem('poe2-account-benchmark', state.account.benchmarkCurrency);
+    renderCabinet();
+  });
+  byId('notification-form')?.addEventListener('submit', createNotification);
+  byId('cabinet-panel')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-account-action]');
+    if (!button) return;
+    event.preventDefault();
+    const action = button.dataset.accountAction;
+    const pinId = Number(button.dataset.pinId || 0);
+    const tradeId = Number(button.dataset.tradeId || 0);
+    const ruleId = Number(button.dataset.ruleId || 0);
+    if (action === 'start-trade') startTradeFromPin(pinId);
+    if (action === 'remove-pin') deletePin(pinId);
+    if (action === 'close-trade') closeTrade(tradeId);
+    if (action === 'remove-trade') deleteTrade(tradeId);
+    if (action === 'remove-notification') deleteNotification(ruleId);
+    if (action === 'toggle-notification') toggleNotification(ruleId);
+    if (action === 'test-notification') testNotification(ruleId);
+  });
+}
+
+function priceWithCurrency(value, currency) {
+  return value === null || value === undefined || value === '' ? t('priceUnknown') : `${formatAmount(value)} ${currencyLabel(currency)}`;
+}
+
+function accountMarketForItem(item) {
+  const serverMarket = item.market || {};
+  const serverPrice = Number(serverMarket.price);
+  if (Number.isFinite(serverPrice) && serverPrice > 0) {
+    return {
+      ...serverMarket,
+      price: serverPrice,
+      target_currency: serverMarket.target_currency || item.target_currency || item.entry_currency,
+    };
+  }
+  if (item.category === state.selectedCategory) {
+    const categoryRates = state.rates[state.selectedCategory] || {};
+    const row = rowsById(categoryRates).get(item.item_id);
+    const price = rateValue(row);
+    if (price) {
+      return {
+        price,
+        target_currency: categoryRates.target || item.target_currency || item.entry_currency || selectedTarget(),
+        source: categoryRates.source || '',
+        created_ts: categoryRates.created_ts,
+        change: row?.change,
+        sparkline: row?.sparkline || [],
+        volume: row?.volume || 0,
+      };
+    }
+  }
+  const fallbackPrice = Number(item.last_price);
+  return {
+    price: Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : null,
+    target_currency: item.target_currency || item.entry_currency,
+    source: item.last_source || '',
+    created_ts: null,
+    change: null,
+    sparkline: [],
+    volume: 0,
+  };
+}
+
+function accountMarketTime(market) {
+  if (!market?.created_ts) return '';
+  return formatDateTime(Number(market.created_ts) * 1000);
+}
+
+function renderAccountMarketMeta(item) {
+  const market = accountMarketForItem(item);
+  const target = market.target_currency || item.target_currency || item.entry_currency;
+  const timestamp = accountMarketTime(market);
+  return `
+    <span>${t('currentMarketPrice')}: ${priceWithCurrency(market.price, target)}</span>
+    ${market.change !== null && market.change !== undefined ? `<span>${t('last7days')}: ${formatChange(market.change)}</span>` : ''}
+    ${market.volume ? `<span>${t('volume')}: ${formatAmount(market.volume)}</span>` : ''}
+    ${market.source ? `<span>${t('source')}: ${escapeHtml(market.source)}</span>` : ''}
+    ${timestamp ? `<span>${t('marketSnapshot')}: ${escapeHtml(timestamp)}</span>` : ''}
+  `;
+}
+
+function renderAccountChart(item) {
+  const market = accountMarketForItem(item);
+  const values = (market.sparkline || []).map(Number).filter(Number.isFinite);
+  if (values.length < 2) {
+    return `<div class="account-market-chart empty">${t('chartNoData')}</div>`;
+  }
+  return `<div class="account-market-chart">${miniSignalChart(values, t('priceChartBasis'), market.price, market.change)}</div>`;
+}
+
+function pnlClass(value) {
+  const number = Number(value);
+  if (number > 0) return 'positive';
+  if (number < 0) return 'negative';
+  return 'neutral';
+}
+
+function pnlBadge(available, amount, percent, currency, unavailableText) {
+  if (!available) return `<span class="trade-pnl neutral">${unavailableText}</span>`;
+  return `<span class="trade-pnl ${pnlClass(amount)}">${priceWithCurrency(amount, currency)} (${formatChange(percent)})</span>`;
+}
+
+function benchmarkSummary(trade, mode) {
+  const benchmark = trade.benchmark_currency || 'divine';
+  const currentBenchmark = mode === 'closed' ? trade.exit_benchmark_price : trade.current_benchmark_price;
+  const change = mode === 'closed' ? trade.benchmark_change_percent : trade.current_benchmark_change_percent;
+  const currentLabel = mode === 'closed' ? t('benchmarkExit') : t('benchmarkCurrent');
+  if (!trade.entry_benchmark_price || !currentBenchmark) {
+    return `<span>${t('benchmarkBasis')}: ${currencyLabel(benchmark)} · ${t('benchmarkMissing')}</span>`;
+  }
+  return `
+    <span>${t('benchmarkBasis')}: ${currencyLabel(benchmark)}</span>
+    <span>${t('benchmarkEntry')}: ${priceWithCurrency(trade.entry_benchmark_price, trade.entry_currency)}</span>
+    <span>${currentLabel}: ${priceWithCurrency(currentBenchmark, trade.entry_currency)}</span>
+    ${change !== null && change !== undefined ? `<span>${t('benchmarkChange')}: ${formatChange(change)}</span>` : ''}
+  `;
+}
+
+function renderPinCard(pin) {
+  const name = accountItemName(pin);
+  const market = accountMarketForItem(pin);
+  const target = market.target_currency || pin.target_currency;
+  const priceValue = market.price ?? pin.last_price ?? '';
+  return `
+    <article class="pin-card">
+      <div class="pin-market-layout">
+        <div>
+          <div class="pin-title">
+            ${pin.icon_url ? `<img src="${escapeHtml(pin.icon_url)}" alt="">` : '<span class="category-placeholder"></span>'}
+            <div>
+              <strong>${escapeHtml(name)}</strong>
+              <small>${escapeHtml(pin.league)} / ${escapeHtml(pin.category)} / ${escapeHtml(pin.item_id)}</small>
+            </div>
+          </div>
+          <div class="pin-meta">
+            ${renderAccountMarketMeta(pin)}
+            ${pin.last_price ? `<span>${t('entryReference')}: ${priceWithCurrency(pin.last_price, pin.target_currency)}</span>` : ''}
+          </div>
+        </div>
+        ${renderAccountChart(pin)}
+      </div>
+      <div class="pin-trade-row">
+        <label class="compact-field">
+          <span>${t('entryPrice')}</span>
+          <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(priceValue)}" data-pin-entry-price="${pin.id}">
+        </label>
+        <label class="compact-field">
+          <span>${t('quantity')}</span>
+          <input class="form-control form-control-sm" type="number" min="0.0001" step="any" value="1" data-pin-quantity="${pin.id}">
+        </label>
+        <button class="btn btn-primary btn-sm" type="button" data-account-action="start-trade" data-pin-id="${pin.id}">${t('markEntry')}</button>
+        <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-pin" data-pin-id="${pin.id}">${t('unpinPosition')}</button>
+      </div>
+      <div class="pin-meta"><span>${t('entryWillUseBenchmark')}: ${currencyLabel(state.account.benchmarkCurrency || 'divine')}</span><span>${t('entryCurrency')}: ${currencyLabel(target)}</span></div>
+    </article>
+  `;
+}
+
+function renderTradePnl(trade) {
+  if (trade.status !== 'closed') return '';
+  return `
+    <div class="trade-pnl-row">
+      <span>${t('finalMargin')}</span>
+      ${pnlBadge(trade.pnl_available, trade.pnl_amount, trade.pnl_percent, trade.pnl_currency, t('pnlUnavailable'))}
+    </div>
+    <div class="trade-pnl-row">
+      <span>${t('realFinalMargin')}</span>
+      ${pnlBadge(trade.real_pnl_available, trade.real_pnl_amount, trade.real_pnl_percent, trade.real_pnl_currency, t('realPnlUnavailable'))}
+    </div>
+  `;
+}
+
+function renderOpenTradeSnapshot(trade) {
+  const market = accountMarketForItem(trade);
+  return `
+    <div class="trade-metric-grid">
+      <div>
+        <span class="summary-label">${t('currentMarketPrice')}</span>
+        <strong>${priceWithCurrency(market.price, market.target_currency || trade.entry_currency)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('currentMargin')}</span>
+        ${pnlBadge(trade.current_pnl_available, trade.current_pnl_amount, trade.current_pnl_percent, trade.current_pnl_currency, t('currentPnlUnavailable'))}
+      </div>
+      <div>
+        <span class="summary-label">${t('realCurrentMargin')}</span>
+        ${pnlBadge(trade.current_real_pnl_available, trade.current_real_pnl_amount, trade.current_real_pnl_percent, trade.current_real_pnl_currency, t('realPnlUnavailable'))}
+      </div>
+    </div>
+    <div class="pin-meta">${benchmarkSummary(trade, 'open')}</div>
+    ${renderAccountChart(trade)}
+  `;
+}
+
+function renderTradeCard(trade) {
+  const name = accountItemName(trade);
+  const isOpen = trade.status !== 'closed';
+  const market = accountMarketForItem(trade);
+  const exitPriceValue = isOpen && market.price ? market.price : '';
+  return `
+    <article class="trade-card ${isOpen ? 'open' : 'closed'}">
+      <div class="trade-card-head">
+        <div class="pin-title">
+          ${trade.icon_url ? `<img src="${escapeHtml(trade.icon_url)}" alt="">` : '<span class="category-placeholder"></span>'}
+          <div>
+            <strong>${escapeHtml(name)}</strong>
+            <small>${escapeHtml(trade.league)} / ${escapeHtml(trade.category)} / ${escapeHtml(trade.item_id)}</small>
+          </div>
+        </div>
+        <span class="trade-status-pill">${isOpen ? t('tradeStatusOpen') : t('tradeStatusClosed')}</span>
+      </div>
+      <div class="pin-meta">
+        <span>${t('entryMoment')}: ${formatDateTime(trade.entry_at)}</span>
+        <span>${t('entryPrice')}: ${priceWithCurrency(trade.entry_price, trade.entry_currency)}</span>
+        <span>${t('quantity')}: ${formatAmount(trade.quantity)}</span>
+        ${isOpen ? renderAccountMarketMeta(trade) : ''}
+        ${trade.exit_at ? `<span>${t('exitMoment')}: ${formatDateTime(trade.exit_at)}</span>` : ''}
+        ${trade.exit_price ? `<span>${t('exitPrice')}: ${priceWithCurrency(trade.exit_price, trade.exit_currency)}</span>` : ''}
+      </div>
+      ${isOpen ? renderOpenTradeSnapshot(trade) : `
+        <div class="pin-meta">${benchmarkSummary(trade, 'closed')}</div>
+        ${renderTradePnl(trade)}
+        ${renderAccountChart(trade)}
+      `}
+      ${isOpen ? `
+        <div class="pin-trade-row">
+          <label class="compact-field">
+            <span>${t('exitPrice')}</span>
+            <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(exitPriceValue)}" data-trade-exit-price="${trade.id}">
+          </label>
+          <button class="btn btn-primary btn-sm" type="button" data-account-action="close-trade" data-trade-id="${trade.id}">${t('markExit')}</button>
+          <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-trade" data-trade-id="${trade.id}">${t('deleteTrade')}</button>
+        </div>
+      ` : `
+        <div class="pin-trade-row">
+          <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-trade" data-trade-id="${trade.id}">${t('deleteTrade')}</button>
+        </div>
+      `}
+    </article>
+  `;
+}
+
+function renderNotificationCard(rule) {
+  const pin = rule.pin || {};
+  const name = accountItemName(pin);
+  const threshold = rule.event_type === 'any_update' || rule.threshold_value === null || rule.threshold_value === undefined
+    ? ''
+    : `<span>${t('notificationThreshold')}: ${formatAmount(rule.threshold_value)}</span>`;
+  return `
+    <article class="notification-card ${rule.enabled ? 'enabled' : 'disabled'}">
+      <div class="pin-title">
+        ${pin.icon_url ? `<img src="${escapeHtml(pin.icon_url)}" alt="">` : '<span class="category-placeholder"></span>'}
+        <div>
+          <strong>${escapeHtml(name || '-')}</strong>
+          <small>${escapeHtml(pin.league || '')} / ${escapeHtml(pin.category || '')} / ${escapeHtml(pin.item_id || '')}</small>
+        </div>
+      </div>
+      <div class="pin-meta">
+        <span>${t('notificationEvent')}: ${notificationEventLabel(rule.event_type)}</span>
+        ${threshold}
+        <span>${t('telegramChatId')}: ${escapeHtml(rule.chat_id)}</span>
+        <span>${t('lastKnownPrice')}: ${priceWithCurrency(rule.last_price ?? pin.last_price, pin.target_currency)}</span>
+        ${rule.last_triggered_at ? `<span>${t('lastNotification')}: ${formatDateTime(rule.last_triggered_at)}</span>` : ''}
+      </div>
+      <div class="pin-trade-row">
+        <button class="btn btn-outline-light btn-sm" type="button" data-account-action="toggle-notification" data-rule-id="${rule.id}">${rule.enabled ? t('pauseNotification') : t('resumeNotification')}</button>
+        <button class="btn btn-outline-light btn-sm" type="button" data-account-action="test-notification" data-rule-id="${rule.id}">${t('sendTestNotification')}</button>
+        <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-notification" data-rule-id="${rule.id}">${t('deleteNotification')}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderNotificationPanel() {
+  fillNotificationControls();
+  const status = byId('telegram-config-status');
+  if (status) {
+    status.textContent = state.account.telegramConfigured ? t('telegramConfigured') : t('telegramNotConfigured');
+  }
+  const list = byId('notifications-list');
+  if (!list) return;
+  if (!state.account.pins.length) {
+    list.innerHTML = `<p class="text-secondary">${t('notificationsNeedPins')}</p>`;
+    return;
+  }
+  list.innerHTML = state.account.notifications.length
+    ? state.account.notifications.map(renderNotificationCard).join('')
+    : `<p class="text-secondary">${t('noNotifications')}</p>`;
+}
+
+function renderCabinet() {
+  const panel = byId('cabinet-panel');
+  if (!panel) return;
+  const authPanel = byId('auth-panel');
+  const dashboard = byId('account-dashboard');
+  authPanel?.classList.toggle('d-none', state.account.authenticated);
+  dashboard?.classList.toggle('d-none', !state.account.authenticated);
+  if (!state.account.authenticated) {
+    setText('pinned-count', '0');
+    setText('open-trades-count', '0');
+    setText('closed-trades-count', '0');
+    return;
+  }
+  fillBenchmarkCurrencySelect();
+  setText('account-user-label', state.account.user?.display_name || state.account.user?.username || '');
+  const openTrades = state.account.trades.filter(trade => trade.status !== 'closed');
+  const closedTrades = state.account.trades.filter(trade => trade.status === 'closed');
+  setText('pinned-count', state.account.pins.length);
+  setText('open-trades-count', openTrades.length);
+  setText('closed-trades-count', closedTrades.length);
+  const pinsList = byId('pins-list');
+  if (pinsList) {
+    pinsList.innerHTML = state.account.pins.length
+      ? state.account.pins.map(renderPinCard).join('')
+      : `<p class="text-secondary">${t('noPinnedPositions')}</p>`;
+  }
+  const openTradesList = byId('open-trades-list');
+  if (openTradesList) {
+    openTradesList.innerHTML = openTrades.length
+      ? openTrades.map(renderTradeCard).join('')
+      : `<p class="text-secondary">${t('noOpenTrades')}</p>`;
+  }
+  const closedTradesList = byId('closed-trades-list');
+  if (closedTradesList) {
+    closedTradesList.innerHTML = closedTrades.length
+      ? closedTrades.map(renderTradeCard).join('')
+      : `<p class="text-secondary">${t('noClosedTrades')}</p>`;
+  }
+  renderNotificationPanel();
 }
 
 // Currency and filter options
@@ -362,6 +1173,15 @@ function fillTargetCurrencySelect() {
   fillSelect(select, targetOptions(false), selected);
 }
 
+function fillBenchmarkCurrencySelect() {
+  const select = byId('benchmark-currency');
+  if (!select) return;
+  const fallback = hasTarget('divine') ? 'divine' : defaultTarget();
+  const selected = hasTarget(state.account.benchmarkCurrency) ? state.account.benchmarkCurrency : fallback;
+  state.account.benchmarkCurrency = selected;
+  fillSelect(select, targetOptions(false), selected);
+}
+
 function fillAutoRefreshSelect() {
   const select = byId('auto-refresh-interval');
   if (!select) return;
@@ -389,6 +1209,9 @@ function renderCategories() {
       state.activeTrades = [];
       state.marketChains = [];
       state.activeTradesKey = '';
+      state.historyTrends = [];
+      state.historyTrendsKey = '';
+      state.isLoadingHistoryTrends = false;
       setText('category-title', categoryName(category));
       byId('item-detail-panel')?.classList.add('d-none');
       renderCategories();
@@ -479,10 +1302,27 @@ function confidenceLabel(value) {
 }
 
 function comparisonLabel(mode) {
+  if (mode === 'poe-ninja-aggregate') return t('comparisonPoeNinja');
   if (mode === 'type-level-stat-ids') return t('comparisonExactStats');
   if (mode === 'type-level-stat-ids-minus-one') return t('comparisonStatsMinusOne');
   if (mode === 'type-level-loose-stats') return t('comparisonLooseStats');
   return t('comparisonTypeOnly');
+}
+
+function sellerUnitNote(lot, market, target) {
+  const stackSize = Number(lot.stack_size || 1);
+  const parts = [];
+  if (stackSize > 1) parts.push(`${t('stackSize')}: ${formatAmount(stackSize)}`);
+  if (market?.unit_priced && lot.price_unit_target) parts.push(`${t('perUnit')}: ${lotTargetPrice(lot.price_unit_target, target)}`);
+  return parts.length ? `<span class="lot-card-note">${parts.join(' · ')}</span>` : '';
+}
+
+function marketSourceNote(market) {
+  if (market?.source === 'poe.ninja') {
+    const change = market.change === null || market.change === undefined ? '' : ` · ${t('last7days')}: ${formatChange(market.change)}`;
+    return `${t('source')}: poe.ninja · ${t('volume')}: ${formatAmount(market.volume || 0)}${change}`;
+  }
+  return `${t('marketLots')}: ${formatAmount(market?.count || 0)}`;
 }
 
 function renderSellerLotCard(lot) {
@@ -511,19 +1351,20 @@ function renderSellerLotCard(lot) {
           <span class="lot-card-label">${t('sellerPrice')}</span>
           <strong class="lot-card-value">${lotNativePrice(lot)}</strong>
           <span class="lot-card-note">${lotTargetPrice(lot.price_target, target)}</span>
+          ${sellerUnitNote(lot, market, target)}
         </div>
         <div>
           <span class="lot-card-label">${t('currentMarketPrice')}</span>
           ${market.pending ? loadingMarkup(t('marketEvaluating'), 'inline') : `
             <strong class="lot-card-value">${lotTargetPrice(market.current, target)}</strong>
-            <span class="lot-card-note">${t('marketLots')}: ${formatAmount(market.count || 0)}</span>
+            <span class="lot-card-note">${marketSourceNote(market)}</span>
             <span class="lot-card-note">${t('confidence')}: ${confidenceLabel(market.confidence)} · ${comparisonLabel(market.comparison?.mode)}</span>
           `}
         </div>
         <div>
           <span class="lot-card-label">${t('marketRange')}</span>
           <strong class="lot-card-value">${lotTargetPrice(market.min, target)} - ${lotTargetPrice(market.p75, target)}</strong>
-          <span class="lot-card-note">${t('similarBasis')}</span>
+          <span class="lot-card-note">${market.source === 'poe.ninja' ? t('poeNinjaAggregateBasis') : t('similarBasis')}</span>
         </div>
         <div>
           <span class="advice-badge">${verdictLabel(verdict.kind)}</span>
@@ -906,7 +1747,7 @@ function openItemDetail(itemId) {
 }
 
 function switchMainView(view) {
-  state.mainView = ['signals', 'lots'].includes(view) ? view : 'market';
+  state.mainView = ['signals', 'lots', 'cabinet'].includes(view) ? view : 'market';
   document.querySelectorAll('.main-view-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.mainTab === state.mainView);
   });
@@ -915,6 +1756,7 @@ function switchMainView(view) {
   });
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
   if (state.mainView === 'lots') renderSellerLots();
+  if (state.mainView === 'cabinet') renderCabinet();
 }
 
 // Signal rendering
@@ -924,6 +1766,7 @@ function renderAdvice(advice) {
   if (!panel) return;
   state.advice = advice || [];
   panel.classList.remove('d-none');
+  renderMarketSignals();
   renderTrendSignals();
   renderOperationSignals();
   renderCrossDeals();
@@ -931,7 +1774,8 @@ function renderAdvice(advice) {
   switchAdviceTab(state.activeAdviceTab);
 }
 
-function currentSignalRows() {
+function currentSignalRows(options = {}) {
+  const minVolume = options.minVolume ?? MARKET_SIGNAL_MIN_VOLUME;
   const categoryRates = state.rates[state.selectedCategory] || {};
   const rateRows = rowsById(categoryRates);
   return (state.categories[state.selectedCategory] || [])
@@ -940,10 +1784,344 @@ function currentSignalRows() {
       const change = Number(row?.change);
       const volume = Number(row?.volume || 0);
       const value = rateValue(row);
-      if (!row || !Number.isFinite(change) || !value || volume < CROSS_MIN_VOLUME) return null;
+      if (!row || !Number.isFinite(change) || !value || volume < minVolume) return null;
       return { entry, row, change, volume, value, target: categoryRates.target || selectedTarget() };
     })
     .filter(Boolean);
+}
+
+function marketSignalRows() {
+  return currentSignalRows({ minVolume: 0 })
+    .filter(item => Math.abs(item.change) >= MARKET_SIGNAL_NOTABLE_CHANGE || item.volume > 0);
+}
+
+function snapshotRowValue(row) {
+  const value = Number(row?.median ?? row?.best);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function buildHistoryTrends(currentData, history) {
+  const currentTs = Number(currentData?.created_ts || 0);
+  const previous = [...(history || [])]
+    .sort((left, right) => Number(right.created_ts || 0) - Number(left.created_ts || 0))
+    .find(snapshot => Number(snapshot.created_ts || 0) < currentTs - 0.001);
+  if (!previous) return [];
+  const previousRows = rowsById(previous);
+  return (state.categories[state.selectedCategory] || [])
+    .map(entry => {
+      const currentRow = rowsById(currentData).get(entry.id);
+      const previousRow = previousRows.get(entry.id);
+      const currentValue = snapshotRowValue(currentRow);
+      const previousValue = snapshotRowValue(previousRow);
+      if (!currentValue || !previousValue) return null;
+      const delta = currentValue - previousValue;
+      const deltaPct = (delta / previousValue) * 100;
+      if (!Number.isFinite(deltaPct) || Math.abs(deltaPct) < 2) return null;
+      return {
+        entry,
+        currentRow,
+        previousValue,
+        currentValue,
+        delta,
+        deltaPct,
+        target: currentData.target || selectedTarget(),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => Math.abs(right.deltaPct) - Math.abs(left.deltaPct))
+    .slice(0, 12);
+}
+
+function historyTrendsKey(data = state.rates[state.selectedCategory] || {}) {
+  return [
+    data.league || byId('live-league')?.value || '',
+    data.category || state.selectedCategory,
+    data.target || selectedTarget(),
+    data.status || byId('live-status')?.value || 'any',
+    data.created_ts || '',
+  ].join('|');
+}
+
+function liquidityKind(volume) {
+  if (volume < MARKET_SIGNAL_MIN_VOLUME) return 'low';
+  if (volume < MARKET_SIGNAL_MEDIUM_VOLUME) return 'medium';
+  return 'high';
+}
+
+function liquidityLabel(volume) {
+  const kind = liquidityKind(volume);
+  if (kind === 'high') return t('liquidityHigh');
+  if (kind === 'medium') return t('liquidityMedium');
+  return t('liquidityLow');
+}
+
+function riskLabel(item) {
+  if (item.volume < MARKET_SIGNAL_MIN_VOLUME) return t('riskHigh');
+  if (item.volume < MARKET_SIGNAL_MEDIUM_VOLUME) return t('riskMedium');
+  return t('riskLow');
+}
+
+function signalSeverity(item, direction) {
+  if (item.volume < MARKET_SIGNAL_MIN_VOLUME) return 'watch';
+  const strong = Math.abs(item.change) >= MARKET_SIGNAL_STRONG_CHANGE;
+  if (direction === 'drop') return strong ? 'weak' : 'watch';
+  if (direction === 'rise') return strong ? 'signal' : 'watch';
+  return 'watch';
+}
+
+function rangePosition(item) {
+  const values = (item.row.sparkline || [])
+    .map(value => Number(value))
+    .filter(Number.isFinite);
+  if (Number.isFinite(item.value)) values.push(item.value);
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return Math.max(0, Math.min(1, (item.value - min) / (max - min)));
+}
+
+function rangePositionLabel(position) {
+  if (position === null || position === undefined) return '-';
+  if (position <= 0.35) return t('rangeLow');
+  if (position >= 0.65) return t('rangeHigh');
+  return t('rangeMid');
+}
+
+function dealAction(item) {
+  if (item.change < 0) {
+    return {
+      kind: 'buy',
+      label: t('dealBuyDip'),
+      reason: t('dealBuyDipReason'),
+    };
+  }
+  return {
+    kind: 'sell',
+    label: t('dealSellMomentum'),
+    reason: t('dealSellMomentumReason'),
+  };
+}
+
+function rangeAlignment(item, position) {
+  if (position === null || position === undefined) return 0.9;
+  return item.change < 0
+    ? 1.15 - Math.min(1, position) * 0.4
+    : 0.75 + Math.min(1, position) * 0.4;
+}
+
+function scoredDealCandidate(item) {
+  const position = rangePosition(item);
+  const alignment = rangeAlignment(item, position);
+  const changeScore = Math.abs(item.change) * 1.08;
+  const volumeScore = Math.log10(item.volume + 1) * 12;
+  const score = Math.max(1, Math.min(100, Math.round((changeScore + volumeScore) * alignment)));
+  return {
+    ...item,
+    action: dealAction(item),
+    position,
+    score,
+  };
+}
+
+function dealCandidates(rows) {
+  return rows
+    .filter(item => item.volume >= MARKET_SIGNAL_MIN_VOLUME && Math.abs(item.change) >= MARKET_SIGNAL_NOTABLE_CHANGE)
+    .map(scoredDealCandidate)
+    .sort((left, right) => right.score - left.score || right.volume - left.volume)
+    .slice(0, MARKET_SIGNAL_TOP_CANDIDATES);
+}
+
+function dealSeverity(score) {
+  if (score >= 75) return 'signal';
+  if (score >= 50) return 'weak';
+  return 'watch';
+}
+
+function renderMarketSignals() {
+  const panel = byId('advice-list-market');
+  if (!panel) return;
+  const rows = marketSignalRows();
+  if (!rows.length) {
+    panel.innerHTML = `<p class="text-secondary">${t('noMarketSignals')}</p>`;
+    return;
+  }
+  const drops = rows
+    .filter(item => item.volume >= MARKET_SIGNAL_MIN_VOLUME && item.change <= -MARKET_SIGNAL_NOTABLE_CHANGE)
+    .sort((left, right) => left.change - right.change || right.volume - left.volume)
+    .slice(0, 5);
+  const rises = rows
+    .filter(item => item.volume >= MARKET_SIGNAL_MIN_VOLUME && item.change >= MARKET_SIGNAL_NOTABLE_CHANGE)
+    .sort((left, right) => right.change - left.change || right.volume - left.volume)
+    .slice(0, 5);
+  const lowLiquidity = rows
+    .filter(item => item.volume > 0 && item.volume < MARKET_SIGNAL_MIN_VOLUME && Math.abs(item.change) >= MARKET_SIGNAL_STRONG_CHANGE)
+    .sort((left, right) => Math.abs(right.change) - Math.abs(left.change))
+    .slice(0, 5);
+  panel.innerHTML = `
+    <p class="text-secondary market-signal-hint">${t('marketSignalsHint')}</p>
+    ${renderMarketHealthSection(rows)}
+    ${renderDealCandidateSection(dealCandidates(rows))}
+    ${renderHistoryTrendSection()}
+    <div class="market-signal-board">
+      ${renderMarketSignalGroup(t('marketDrops'), drops, 'drop', t('noMarketDrops'))}
+      ${renderMarketSignalGroup(t('marketRises'), rises, 'rise', t('noMarketRises'))}
+      ${renderMarketSignalGroup(t('marketLowLiquidity'), lowLiquidity, 'risk', t('noMarketLowLiquidity'))}
+    </div>
+  `;
+}
+
+function renderMarketHealthSection(rows) {
+  const total = (state.categories[state.selectedCategory] || []).length;
+  const priced = rows.length;
+  const high = rows.filter(item => liquidityKind(item.volume) === 'high').length;
+  const medium = rows.filter(item => liquidityKind(item.volume) === 'medium').length;
+  const low = rows.filter(item => item.volume > 0 && liquidityKind(item.volume) === 'low').length;
+  const strong = rows.filter(item => Math.abs(item.change) >= MARKET_SIGNAL_STRONG_CHANGE).length;
+  return `
+    <section class="market-health-grid">
+      <div>
+        <span class="summary-label">${t('marketCoverage')}</span>
+        <strong>${formatAmount(priced)} / ${formatAmount(total)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('liquidityHigh')}</span>
+        <strong>${formatAmount(high)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('liquidityMedium')}</span>
+        <strong>${formatAmount(medium)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('liquidityLow')}</span>
+        <strong>${formatAmount(low)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('strongMoves')}</span>
+        <strong>${formatAmount(strong)}</strong>
+      </div>
+    </section>
+  `;
+}
+
+function renderHistoryTrendSection() {
+  if (state.isLoadingHistoryTrends) {
+    return `<section class="history-trend-section"><h3>${t('snapshotTrend')}</h3>${loadingMarkup(t('snapshotTrendLoading'))}</section>`;
+  }
+  if (!state.historyTrends.length) {
+    return '';
+  }
+  const cheaper = state.historyTrends
+    .filter(item => item.deltaPct < 0)
+    .sort((left, right) => left.deltaPct - right.deltaPct)
+    .slice(0, 4);
+  const pricier = state.historyTrends
+    .filter(item => item.deltaPct > 0)
+    .sort((left, right) => right.deltaPct - left.deltaPct)
+    .slice(0, 4);
+  if (!cheaper.length && !pricier.length) return '';
+  return `
+    <section class="history-trend-section">
+      <h3>${t('snapshotTrend')}</h3>
+      <div class="history-trend-grid">
+        ${renderHistoryTrendGroup(t('snapshotCheaper'), cheaper, t('noSnapshotCheaper'))}
+        ${renderHistoryTrendGroup(t('snapshotPricier'), pricier, t('noSnapshotPricier'))}
+      </div>
+    </section>
+  `;
+}
+
+function renderHistoryTrendGroup(title, items, emptyText) {
+  return `
+    <div class="history-trend-group">
+      <h4>${title}</h4>
+      ${items.length ? items.map(renderHistoryTrendItem).join('') : `<p class="text-secondary">${emptyText}</p>`}
+    </div>
+  `;
+}
+
+function renderHistoryTrendItem(item) {
+  const changeClass = item.deltaPct > 0 ? 'change-up' : 'change-down';
+  return `
+    <article class="history-trend-item">
+      <strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong>
+      <span class="${changeClass}">${formatChange(item.deltaPct)}</span>
+      <small>${formatAmount(item.previousValue)} → ${formatAmount(item.currentValue)} ${currencyLabel(item.target)}</small>
+    </article>
+  `;
+}
+
+function renderDealCandidateSection(items) {
+  return `
+    <section class="deal-candidate-section">
+      <h3>${t('dealCandidates')}</h3>
+      <div class="deal-candidate-grid">
+        ${items.length ? items.map(renderDealCandidate).join('') : `<p class="text-secondary">${t('noDealCandidates')}</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderDealCandidate(item) {
+  const changeClass = item.change > 0 ? 'change-up' : 'change-down';
+  const severity = dealSeverity(item.score);
+  const rangeText = rangePositionLabel(item.position);
+  const rangePct = item.position === null || item.position === undefined ? '' : ` (${Math.round(item.position * 100)}%)`;
+  return `
+    <article class="advice-card ${severity}">
+      <div class="deal-candidate-layout">
+        <div class="deal-score">
+          <span>${t('dealScore')}</span>
+          <strong>${item.score}</strong>
+        </div>
+        <div class="advice-card-content">
+          <div class="advice-title-row"><span class="advice-badge">${item.action.label}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
+          <p>${item.action.reason}</p>
+          <div class="deal-meta">
+            <span>${t('value')}: ${formatAmount(item.value)} ${currencyLabel(item.target)}</span>
+            <span>${t('last7days')}: <span class="${changeClass}">${formatChange(item.change)}</span></span>
+            <span>${t('volume')}: ${formatAmount(item.volume)}</span>
+            <span>${t('riskLabel')}: ${riskLabel(item)}</span>
+            <span>${t('rangePosition')}: ${rangeText}${rangePct}</span>
+          </div>
+        </div>
+        ${miniSignalChart(item.row.sparkline || [], t('priceChartBasis'), item.value, item.change)}
+      </div>
+    </article>
+  `;
+}
+
+function renderMarketSignalGroup(title, items, direction, emptyText) {
+  return `
+    <section class="market-signal-group">
+      <h3>${title}</h3>
+      <div class="market-signal-list">
+        ${items.length ? items.map(item => renderMarketSignalItem(item, direction)).join('') : `<p class="text-secondary">${emptyText}</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderMarketSignalItem(item, direction) {
+  const changeClass = item.change > 0 ? 'change-up' : 'change-down';
+  const severity = signalSeverity(item, direction);
+  const badge = direction === 'drop' ? t('priceDrop') : direction === 'rise' ? t('priceRise') : t('riskLabel');
+  return `
+    <article class="advice-card ${severity}">
+      <div class="advice-card-layout compact">
+        <div class="advice-card-content">
+          <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
+          <p>${formatAmount(item.value)} ${currencyLabel(item.target)} · <span class="${changeClass}">${formatChange(item.change)}</span></p>
+          <div class="deal-meta">
+            <span>${t('volume')}: ${formatAmount(item.volume)}</span>
+            <span>${t('liquidity')}: ${liquidityLabel(item.volume)}</span>
+            ${item.row.max_volume_currency ? `<span>${t('tradedFor')}: ${currencyMarkup(item.row.max_volume_currency)}</span>` : ''}
+          </div>
+        </div>
+        ${miniSignalChart(item.row.sparkline || [], t('priceChartBasis'), item.value, item.change)}
+      </div>
+    </article>
+  `;
 }
 
 function trendSignals(direction) {
@@ -1095,7 +2273,7 @@ function switchAdviceTab(tab) {
   document.querySelectorAll('.advice-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.adviceTab === tab);
   });
-  ['buy', 'sell', 'ops', 'active', 'cross'].forEach(name => {
+  ['market', 'buy', 'sell', 'ops', 'active', 'cross'].forEach(name => {
     byId(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
   });
   if (tab === 'ops') renderOperationSignals();
@@ -1469,25 +2647,35 @@ async function loadCrossCurrencyDeals() {
   }
 }
 
-// History and data loading
+// Data loading
 
-async function renderHistory() {
-  const list = byId('history-list');
-  if (!list) return;
+async function loadHistoryTrends(currentData) {
+  const key = historyTrendsKey(currentData);
+  if (!currentData?.created_ts || state.historyTrendsKey === key || state.isLoadingHistoryTrends) return;
+  state.historyTrendsKey = key;
+  state.historyTrends = [];
+  state.isLoadingHistoryTrends = true;
+  renderMarketSignals();
+  const params = new URLSearchParams({
+    limit: '24',
+    league: currentData.league || byId('live-league')?.value || '',
+    category: currentData.category || state.selectedCategory,
+    target: currentData.target || selectedTarget(),
+    status: currentData.status || byId('live-status')?.value || 'any',
+  });
   try {
-    const response = await fetch('/api/trade/history?limit=12');
+    const response = await fetch(`/api/trade/history?${params.toString()}`);
     const data = await response.json();
-    const history = data.history || [];
-    if (!history.length) {
-      list.innerHTML = `<span class="text-secondary">${t('noHistory')}</span>`;
-      return;
-    }
-    list.innerHTML = history.map(item => {
-      const date = new Date(item.created_ts * 1000).toLocaleString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
-      return `<div class="history-item"><strong>${item.league}</strong><span>${item.category} / ${item.target}</span><time>${date}</time></div>`;
-    }).join('');
+    if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+    if (state.historyTrendsKey !== key) return;
+    state.historyTrends = buildHistoryTrends(currentData, data.history || []);
   } catch {
-    list.innerHTML = `<span class="text-secondary">${t('noHistory')}</span>`;
+    if (state.historyTrendsKey === key) state.historyTrends = [];
+  } finally {
+    if (state.historyTrendsKey === key) {
+      state.isLoadingHistoryTrends = false;
+      renderMarketSignals();
+    }
   }
 }
 
@@ -1497,7 +2685,10 @@ function applyRatesData(data) {
   renderMarket();
   renderAdvice(data.advice || []);
   renderSelectedItemDetail();
-  renderHistory();
+  loadHistoryTrends(data);
+  if (state.account.authenticated) {
+    refreshAccountData().catch(() => {});
+  }
 }
 
 async function loadLatestCachedRates() {
@@ -1599,6 +2790,7 @@ async function initLiveTrade() {
     byId('refresh-static').addEventListener('click', () => window.location.reload());
     byId('market-search').addEventListener('input', renderMarket);
     byId('search-lots')?.addEventListener('click', searchSellerLots);
+    bindAccountEvents();
     ['lot-seller', 'lot-query'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
         if (event.key === 'Enter') searchSellerLots();
@@ -1637,6 +2829,9 @@ async function initLiveTrade() {
         state.activeTrades = [];
         state.marketChains = [];
         state.activeTradesKey = '';
+        state.historyTrends = [];
+        state.historyTrendsKey = '';
+        state.isLoadingHistoryTrends = false;
         state.sellerLots = null;
         setText('last-snapshot', '-');
         setText('rate-source', '-');
@@ -1647,6 +2842,10 @@ async function initLiveTrade() {
         loadLatestCachedRates();
       });
     });
+    const requestedView = new URLSearchParams(window.location.search).get('view');
+    if (['market', 'signals', 'lots', 'cabinet'].includes(requestedView)) {
+      state.mainView = requestedView;
+    }
     document.querySelectorAll('[data-sort-key]').forEach(button => {
       button.addEventListener('click', () => {
         const key = button.dataset.sortKey;
@@ -1661,8 +2860,8 @@ async function initLiveTrade() {
     });
     applyLanguage();
     loadLatestCachedRates();
+    loadAccountState().then(showVerificationQueryStatus);
     scheduleAutoRefresh();
-    renderHistory();
   } catch (error) {
     setLiveError(error.message || String(error));
   }

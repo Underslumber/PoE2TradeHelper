@@ -53,6 +53,7 @@
       <button class="main-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
       <button class="main-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
       <button class="main-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
+      <button class="main-view-tab" type="button" data-main-tab="cabinet" data-i18n="cabinetTab">Кабинет</button>
     </section>
 
     <section id="lot-search-panel" class="lot-panel view-hidden" data-main-view="lots">
@@ -88,6 +89,134 @@
       <div id="lot-results" class="lot-results">
         <p class="text-secondary" data-i18n="sellerLotsEmpty">Введите имя продавца и запустите поиск.</p>
       </div>
+    </section>
+
+    <section id="cabinet-panel" class="cabinet-panel view-hidden" data-main-view="cabinet">
+      <section id="auth-panel" class="auth-panel">
+        <div class="cabinet-header">
+          <div>
+            <h2 data-i18n="authTitle">Вход в личный кабинет</h2>
+            <p data-i18n="authHint">Аккаунт хранится локально в этой SQLite-базе и нужен для закрепленных позиций и журнала сделок.</p>
+          </div>
+        </div>
+        <div class="auth-grid">
+          <form id="login-form" class="auth-form">
+            <h3 data-i18n="loginTitle">Войти</h3>
+            <label class="form-field">
+              <span data-i18n="loginUsername">Логин</span>
+              <input id="login-username" class="form-control" autocomplete="username" data-i18n-placeholder="loginUsernamePlaceholder" placeholder="trader">
+            </label>
+            <label class="form-field">
+              <span data-i18n="loginPassword">Пароль</span>
+              <input id="login-password" class="form-control" type="password" autocomplete="current-password" data-i18n-placeholder="loginPasswordPlaceholder" placeholder="Пароль">
+            </label>
+            <button class="btn btn-primary" type="submit" data-i18n="loginAction">Войти</button>
+            <button id="resend-verification" class="btn btn-outline-light" type="button" data-i18n="resendVerificationAction">Отправить подтверждение повторно</button>
+          </form>
+          <form id="register-form" class="auth-form">
+            <h3 data-i18n="registerTitle">Регистрация</h3>
+            <label class="form-field">
+              <span data-i18n="registerUsername">Логин</span>
+              <input id="register-username" class="form-control" autocomplete="username" data-i18n-placeholder="registerUsernamePlaceholder" placeholder="trader">
+            </label>
+            <label class="form-field">
+              <span data-i18n="registerEmail">Email</span>
+              <input id="register-email" class="form-control" type="email" autocomplete="email" data-i18n-placeholder="registerEmailPlaceholder" placeholder="trader@example.com">
+            </label>
+            <label class="form-field">
+              <span data-i18n="registerDisplayName">Имя</span>
+              <input id="register-display-name" class="form-control" autocomplete="nickname" data-i18n-placeholder="registerDisplayNamePlaceholder" placeholder="Необязательно">
+            </label>
+            <label class="form-field">
+              <span data-i18n="registerPassword">Пароль</span>
+              <input id="register-password" class="form-control" type="password" autocomplete="new-password" data-i18n-placeholder="registerPasswordPlaceholder" placeholder="Минимум 6 символов">
+            </label>
+            <button class="btn btn-outline-light" type="submit" data-i18n="registerAction">Создать аккаунт</button>
+          </form>
+        </div>
+        <div id="auth-status" class="muted-status"></div>
+      </section>
+
+      <section id="account-dashboard" class="account-dashboard d-none">
+        <div class="cabinet-header">
+          <div>
+            <h2 data-i18n="cabinetTitle">Личный кабинет</h2>
+            <p data-i18n="cabinetHint">Закрепляйте интересующие позиции, отмечайте вход и закрывайте сделку, чтобы видеть прибыль или убыток.</p>
+          </div>
+          <div class="account-actions">
+            <span id="account-user-label" class="account-user-label"></span>
+            <button id="logout-button" class="btn btn-outline-light btn-sm" type="button" data-i18n="logoutAction">Выйти</button>
+          </div>
+        </div>
+        <div class="account-summary">
+          <div>
+            <span class="summary-label" data-i18n="pinnedCount">Закреплено</span>
+            <strong id="pinned-count">0</strong>
+          </div>
+          <div>
+            <span class="summary-label" data-i18n="openTradesCount">Открыто сделок</span>
+            <strong id="open-trades-count">0</strong>
+          </div>
+          <div>
+            <span class="summary-label" data-i18n="closedTradesCount">Закрыто сделок</span>
+            <strong id="closed-trades-count">0</strong>
+          </div>
+        </div>
+        <div class="account-settings">
+          <label class="form-field">
+            <span data-i18n="benchmarkCurrency">Эталон покупательной способности</span>
+            <select id="benchmark-currency" class="form-select"></select>
+          </label>
+          <p data-i18n="benchmarkHint">Номинальная маржа считается в валюте входа, реальная маржа дополнительно делится на изменение выбранного эталона.</p>
+        </div>
+        <div class="cabinet-grid tracking-grid">
+          <section class="cabinet-list-panel">
+            <h3 data-i18n="trackingPositions">Отслеживание</h3>
+            <p class="panel-hint" data-i18n="trackingHint">Закрепленные позиции с последним графиком цены. Отсюда фиксируется вход в сделку.</p>
+            <div id="pins-list" class="cabinet-list"></div>
+          </section>
+          <section class="cabinet-list-panel">
+            <h3 data-i18n="openTradesTitle">Открытые сделки</h3>
+            <p class="panel-hint" data-i18n="openTradesHint">Текущая цена, актуальная маржа и реальная маржа с учетом выбранного эталона.</p>
+            <div id="open-trades-list" class="cabinet-list"></div>
+          </section>
+        </div>
+        <section class="cabinet-list-panel closed-trades-panel">
+          <h3 data-i18n="closedTradesTitle">Закрытые сделки</h3>
+          <p class="panel-hint" data-i18n="closedTradesHint">После выхода сохраняется итоговая и реальная маржа.</p>
+          <div id="closed-trades-list" class="cabinet-list trade-board"></div>
+        </section>
+        <section class="notification-panel">
+          <div class="cabinet-header">
+            <div>
+              <h3 data-i18n="telegramNotifications">Telegram-уведомления</h3>
+              <p data-i18n="telegramNotificationsHint">Выберите закрепленную позицию, событие и chat id, куда отправлять уведомления.</p>
+            </div>
+          </div>
+          <form id="notification-form" class="notification-form">
+            <label class="form-field">
+              <span data-i18n="notificationPosition">Позиция</span>
+              <select id="notification-pin" class="form-select"></select>
+            </label>
+            <label class="form-field">
+              <span data-i18n="notificationEvent">Событие</span>
+              <select id="notification-event" class="form-select"></select>
+            </label>
+            <label class="form-field">
+              <span data-i18n="notificationThreshold">Порог</span>
+              <input id="notification-threshold" class="form-control" type="number" min="0" step="any" data-i18n-placeholder="notificationThresholdPlaceholder" placeholder="Цена или %">
+            </label>
+            <label class="form-field">
+              <span data-i18n="telegramChatId">Telegram chat id</span>
+              <input id="notification-chat-id" class="form-control" data-i18n-placeholder="telegramChatIdPlaceholder" placeholder="123456789 или -100...">
+            </label>
+            <button class="btn btn-primary" type="submit" data-i18n="createNotification">Добавить уведомление</button>
+          </form>
+          <div id="telegram-config-status" class="muted-status"></div>
+          <div id="notifications-list" class="cabinet-list notification-list"></div>
+        </section>
+        <div id="account-status" class="muted-status"></div>
+      </section>
     </section>
 
     <section class="summary-strip mb-3" data-main-view="market">
@@ -146,6 +275,11 @@
           <strong id="detail-change">-</strong>
         </div>
       </div>
+      <div class="detail-actions">
+        <button id="pin-selected" class="btn btn-outline-light btn-sm" type="button" data-i18n="pinPosition">Закрепить</button>
+        <button id="entry-selected" class="btn btn-primary btn-sm" type="button" data-i18n="markEntry">Отметить вход</button>
+        <span id="detail-account-status" class="muted-status"></span>
+      </div>
       <div id="detail-chart" class="detail-chart"></div>
       <div id="detail-note" class="detail-note"></div>
     </section>
@@ -155,7 +289,8 @@
         <h2 data-i18n="detailedSignals">Подробные сигналы</h2>
         <div class="advice-controls">
           <div class="advice-tabs" role="tablist">
-            <button id="advice-tab-buy" class="advice-tab active" type="button" data-advice-tab="buy" data-i18n="buySignals">Купить</button>
+            <button id="advice-tab-market" class="advice-tab active" type="button" data-advice-tab="market" data-i18n="marketSignals">Рынок</button>
+            <button id="advice-tab-buy" class="advice-tab" type="button" data-advice-tab="buy" data-i18n="buySignals">Купить</button>
             <button id="advice-tab-sell" class="advice-tab" type="button" data-advice-tab="sell" data-i18n="sellSignals">Продать</button>
             <button id="advice-tab-ops" class="advice-tab" type="button" data-advice-tab="ops" data-i18n="bestOperations">Лучшие операции</button>
             <button id="advice-tab-active" class="advice-tab" type="button" data-advice-tab="active" data-i18n="activeTrades">Активные товары</button>
@@ -173,6 +308,7 @@
           </label>
         </div>
       </div>
+      <div id="advice-list-market"></div>
       <div id="advice-list-buy" class="advice-list"></div>
       <div id="advice-list-sell" class="advice-list d-none"></div>
       <div id="advice-list-ops" class="advice-list d-none"></div>
@@ -202,11 +338,6 @@
         </tbody>
       </table>
     </div>
-
-    <section class="history-panel" data-main-view="market">
-      <h2 data-i18n="history">Лог изменений курса</h2>
-      <div id="history-list" class="history-list"></div>
-    </section>
   </main>
 </div>
 {% endblock %}

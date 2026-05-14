@@ -165,6 +165,51 @@ def test_market_price_stats_trims_outliers():
     assert market["median"] == 10.0
 
 
+def test_stackable_market_payload_uses_poe_ninja_unit_price():
+    categories = {
+        "Fragments": [
+            {
+                "id": "simulacrum-splinter",
+                "text": "Simulacrum Splinter",
+                "text_ru": "Осколок Симулякра",
+                "image": None,
+            }
+        ]
+    }
+    lookup = trade2._static_entry_lookup(categories)
+    lot = {
+        "base_type": "Simulacrum Splinter",
+        "price_amount": 20,
+        "price_currency": "exalted",
+        "stack_size": 2,
+    }
+    trade2._apply_target_price(lot, {"exalted": 1.0}, "exalted")
+    category_cache = {
+        "Fragments": {
+            "rows": [
+                {
+                    "id": "simulacrum-splinter",
+                    "median": 12.0,
+                    "volume": 100,
+                    "change": -5,
+                }
+            ],
+            "cached": True,
+        }
+    }
+
+    market = asyncio.run(
+        trade2._stackable_market_payload("Fate", lot, "exalted", "any", lookup, category_cache)
+    )
+    verdict = trade2._verdict_for_lot(lot, market["stats"])
+
+    assert market["stats"]["source"] == "poe.ninja"
+    assert market["stats"]["unit_priced"] is True
+    assert market["stats"]["current"] == 12.0
+    assert lot["price_unit_target"] == 10.0
+    assert verdict["kind"] == "cheap"
+
+
 def test_seller_lots_text_query_uses_type_before_term():
     type_query = trade2._seller_lots_query("Seller#1234", "Waxed Jacket", "any")
     term_query = trade2._seller_lots_query("Seller#1234", "Vengeance Veil", "any", text_field="term")
@@ -314,6 +359,25 @@ def test_seller_lots_snapshot_uses_cache(monkeypatch):
     assert second["cached"] is True
     assert second["lots"][0]["display_name"] == "Waxed Jacket"
     assert calls == {"search": 1, "fetch": 1}
+
+
+def test_read_history_filters_without_changing_newest_first_order(tmp_path, monkeypatch):
+    history_path = tmp_path / "history.jsonl"
+    history_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"created_ts": 1, "league": "A", "category": "Currency", "target": "exalted", "status": "any"}),
+                json.dumps({"created_ts": 2, "league": "B", "category": "Currency", "target": "exalted", "status": "any"}),
+                json.dumps({"created_ts": 3, "league": "A", "category": "Currency", "target": "exalted", "status": "any"}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(trade2, "HISTORY_PATH", history_path)
+
+    history = trade2.read_history(limit=2, league="A", category="Currency", target="exalted", status="any")
+
+    assert [item["created_ts"] for item in history] == [3, 1]
 
 
 def test_normalize_poe_ninja_overview_converts_primary_value_to_target():
