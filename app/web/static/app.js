@@ -963,15 +963,17 @@ function openTradeRealCurrentPnl(trade, market) {
 
 function benchmarkSummary(trade, mode) {
   const benchmark = trade.benchmark_currency || 'divine';
-  const currentBenchmark = mode === 'closed' ? trade.exit_benchmark_price : trade.current_benchmark_price;
+  const isBenchmarkItem = trade.item_id && trade.item_id === benchmark;
+  const entryBenchmark = isBenchmarkItem ? 1 : trade.entry_benchmark_price;
+  const currentBenchmark = isBenchmarkItem ? 1 : (mode === 'closed' ? trade.exit_benchmark_price : trade.current_benchmark_price);
   const change = mode === 'closed' ? trade.benchmark_change_percent : trade.current_benchmark_change_percent;
   const currentLabel = mode === 'closed' ? t('benchmarkExit') : t('benchmarkCurrent');
-  if (!trade.entry_benchmark_price || !currentBenchmark) {
+  if (!entryBenchmark || !currentBenchmark) {
     return `<span>${t('benchmarkBasis')}: ${currencyLabel(benchmark)} · ${t('benchmarkMissing')}</span>`;
   }
   return `
     <span>${t('benchmarkBasis')}: ${currencyLabel(benchmark)}</span>
-    <span>${t('benchmarkEntry')}: ${priceWithCurrency(trade.entry_benchmark_price, trade.entry_currency)}</span>
+    <span>${t('benchmarkEntry')}: ${priceWithCurrency(entryBenchmark, trade.entry_currency)}</span>
     <span>${currentLabel}: ${priceWithCurrency(currentBenchmark, trade.entry_currency)}</span>
     ${change !== null && change !== undefined ? `<span>${t('benchmarkChange')}: ${formatChange(change)}</span>` : ''}
   `;

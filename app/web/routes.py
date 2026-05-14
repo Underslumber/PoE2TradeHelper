@@ -331,10 +331,9 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
     benchmark_currency = trade.benchmark_currency or "divine"
     market = _latest_item_market(trade.league, trade.category, trade.entry_currency, trade.item_id)
     current_price = market.get("price")
-    current_benchmark_price = 1.0 if trade.item_id == benchmark_currency else _benchmark_price(trade.league, trade.entry_currency, benchmark_currency)
-    entry_benchmark_price = trade.entry_benchmark_price
-    if entry_benchmark_price is None and trade.item_id == benchmark_currency:
-        entry_benchmark_price = 1.0
+    is_benchmark_item = trade.item_id == benchmark_currency
+    current_benchmark_price = 1.0 if is_benchmark_item else _benchmark_price(trade.league, trade.entry_currency, benchmark_currency)
+    entry_benchmark_price = 1.0 if is_benchmark_item else trade.entry_benchmark_price
     if entry_benchmark_price is None:
         entry_benchmark_price = _benchmark_price_at(
             trade.league,
@@ -342,6 +341,9 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
             benchmark_currency,
             _iso_timestamp(trade.entry_at),
         )
+    exit_benchmark_price = 1.0 if is_benchmark_item and trade.exit_price is not None else trade.exit_benchmark_price
+    if is_benchmark_item:
+        entry_benchmark_price = 1.0
     current_pnl = calculate_trade_pnl(
         quantity=trade.quantity,
         entry_price=trade.entry_price,
@@ -367,7 +369,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         current_currency=trade.exit_currency,
         benchmark_currency=benchmark_currency,
         entry_benchmark_price=entry_benchmark_price,
-        current_benchmark_price=trade.exit_benchmark_price,
+        current_benchmark_price=exit_benchmark_price,
     )
     return {
         "id": trade.id,
@@ -387,7 +389,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         "exit_price": trade.exit_price,
         "exit_currency": trade.exit_currency,
         "exit_at": trade.exit_at,
-        "exit_benchmark_price": trade.exit_benchmark_price,
+        "exit_benchmark_price": exit_benchmark_price,
         "status": trade.status,
         "notes": trade.notes,
         "market": market,
@@ -664,7 +666,7 @@ def api_account_trade_create(
     if entry_price is None or entry_price <= 0 or quantity <= 0 or not entry_currency:
         return account_api_error("Укажите положительную цену входа, количество и валюту.", key="accountErrorTradePrice")
     entry_benchmark_price = _float_value(payload, "entry_benchmark_price")
-    if entry_benchmark_price is None and item_id == benchmark_currency:
+    if item_id == benchmark_currency:
         entry_benchmark_price = 1.0
     if entry_benchmark_price is None:
         entry_benchmark_price = _benchmark_price(league, entry_currency, benchmark_currency)
@@ -723,7 +725,7 @@ def api_account_trade_update(
     if "benchmark_currency" in payload:
         trade.benchmark_currency = _text(payload, "benchmark_currency") or trade.benchmark_currency or "divine"
     if "entry_benchmark_price" in payload:
-        trade.entry_benchmark_price = _float_value(payload, "entry_benchmark_price")
+        trade.entry_benchmark_price = 1.0 if trade.item_id == (trade.benchmark_currency or "divine") else _float_value(payload, "entry_benchmark_price")
     if "exit_price" in payload:
         exit_price = _float_value(payload, "exit_price")
         if exit_price is None or exit_price <= 0:
@@ -732,7 +734,7 @@ def api_account_trade_update(
         trade.exit_currency = _text(payload, "exit_currency") or trade.entry_currency
         trade.exit_at = _text(payload, "exit_at") or now_iso()
         trade.exit_benchmark_price = _float_value(payload, "exit_benchmark_price")
-        if trade.exit_benchmark_price is None and trade.item_id == (trade.benchmark_currency or "divine"):
+        if trade.item_id == (trade.benchmark_currency or "divine"):
             trade.exit_benchmark_price = 1.0
         if trade.exit_benchmark_price is None:
             trade.exit_benchmark_price = _benchmark_price(
