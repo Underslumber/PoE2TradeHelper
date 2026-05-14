@@ -1215,14 +1215,29 @@ def _target_factor(core: dict[str, Any], target: str) -> float | None:
         return None
 
 
-def _scaled_sparkline(data: list[Any], factor: float) -> list[float]:
-    values = []
+def _price_sparkline_from_change(data: list[Any], current_value: float | None) -> list[float]:
+    try:
+        current = float(current_value or 0)
+    except (TypeError, ValueError):
+        return []
+    if current <= 0:
+        return []
+    changes = []
     for point in data:
         try:
-            values.append(float(point) * factor)
+            change = float(point)
         except (TypeError, ValueError):
             continue
-    return values
+        if change <= -99.9:
+            continue
+        changes.append(change)
+    if len(changes) < 2:
+        return []
+    last_factor = 1 + (changes[-1] / 100)
+    if last_factor <= 0:
+        return []
+    baseline = current / last_factor
+    return [baseline * (1 + change / 100) for change in changes]
 
 
 def normalize_poe_ninja_overview(payload: dict[str, Any], target: str) -> dict[str, Any]:
@@ -1250,7 +1265,8 @@ def normalize_poe_ninja_overview(payload: dict[str, Any], target: str) -> dict[s
                 "offers": 0,
                 "volume": volume,
                 "change": sparkline.get("totalChange"),
-                "sparkline": _scaled_sparkline(sparkline.get("data") or [], factor),
+                "sparkline": _price_sparkline_from_change(sparkline.get("data") or [], value),
+                "sparkline_kind": "price",
                 "max_volume_currency": line.get("maxVolumeCurrency"),
                 "max_volume_rate": line.get("maxVolumeRate"),
             }
@@ -1351,6 +1367,7 @@ async def get_category_rates(
                 "volume": stats.get("volume", 0),
                 "change": stats.get("change"),
                 "sparkline": stats.get("sparkline", []),
+                "sparkline_kind": stats.get("sparkline_kind"),
                 "max_volume_currency": stats.get("max_volume_currency"),
                 "max_volume_rate": stats.get("max_volume_rate"),
             }

@@ -170,17 +170,37 @@
             <span data-i18n="benchmarkCurrency">Эталон покупательной способности</span>
             <select id="benchmark-currency" class="form-select"></select>
           </label>
+          <label class="form-field">
+            <span data-i18n="chartPeriod">Период графиков</span>
+            <select id="account-chart-days" class="form-select" data-chart-days-select></select>
+          </label>
           <p data-i18n="benchmarkHint">Номинальная маржа считается в валюте входа, реальная маржа дополнительно делится на изменение выбранного эталона.</p>
         </div>
         <div class="cabinet-grid tracking-grid">
           <section class="cabinet-list-panel">
-            <h3 data-i18n="trackingPositions">Отслеживание</h3>
-            <p class="panel-hint" data-i18n="trackingHint">Закрепленные позиции с последним графиком цены. Отсюда фиксируется вход в сделку.</p>
+            <div class="cabinet-section-head">
+              <div>
+                <h3 data-i18n="trackingPositions">Отслеживание</h3>
+                <p class="panel-hint" data-i18n="trackingHint">Закрепленные позиции с последним графиком цены. Отсюда фиксируется вход в сделку.</p>
+              </div>
+              <label class="chart-period-inline">
+                <span data-i18n="chartPeriod">Период графика</span>
+                <select class="form-select form-select-sm" data-chart-days-select></select>
+              </label>
+            </div>
             <div id="pins-list" class="cabinet-list"></div>
           </section>
           <section class="cabinet-list-panel">
-            <h3 data-i18n="openTradesTitle">Открытые сделки</h3>
-            <p class="panel-hint" data-i18n="openTradesHint">Текущая цена, актуальная маржа и реальная маржа с учетом выбранного эталона.</p>
+            <div class="cabinet-section-head">
+              <div>
+                <h3 data-i18n="openTradesTitle">Открытые сделки</h3>
+                <p class="panel-hint" data-i18n="openTradesHint">Текущая цена, актуальная маржа и реальная маржа с учетом выбранного эталона.</p>
+              </div>
+              <label class="chart-period-inline">
+                <span data-i18n="chartPeriod">Период графика</span>
+                <select class="form-select form-select-sm" data-chart-days-select></select>
+              </label>
+            </div>
             <div id="open-trades-list" class="cabinet-list"></div>
           </section>
         </div>
@@ -282,6 +302,17 @@
         <button id="pin-selected" class="btn btn-outline-light btn-sm" type="button" data-i18n="pinPosition">Закрепить</button>
         <button id="entry-selected" class="btn btn-primary btn-sm" type="button" data-i18n="markEntry">Отметить вход</button>
         <span id="detail-account-status" class="muted-status"></span>
+      </div>
+      <div class="detail-chart-toolbar">
+        <strong id="detail-chart-title">-</strong>
+        <div class="detail-chart-tabs" role="group" aria-label="Chart metric">
+          <button class="detail-chart-tab active" type="button" data-detail-chart="price" data-i18n="chartMetricPrice">Цена</button>
+          <button class="detail-chart-tab" type="button" data-detail-chart="demand" data-i18n="chartMetricDemand">Спрос</button>
+        </div>
+        <label class="detail-chart-days-field">
+          <span data-i18n="chartPeriod">Период</span>
+          <select id="detail-chart-days" class="form-select" data-chart-days-select></select>
+        </label>
       </div>
       <div id="detail-chart" class="detail-chart"></div>
       <div id="detail-note" class="detail-note"></div>

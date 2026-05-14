@@ -78,6 +78,13 @@ const state = {
   selectedCategory: 'Currency',
   selectedItemId: null,
   detailTarget: 'auto',
+  detailChartMetric: 'price',
+  chartDays: Number(localStorage.getItem('poe2-chart-days') || 7),
+  detailDemandCache: {},
+  detailSeriesCache: {},
+  accountChartSeriesCache: {},
+  accountChartSeriesLoading: {},
+  maxChartDaysAvailable: 7,
   rates: {},
   detailRates: {},
   advice: [],
@@ -157,6 +164,7 @@ function applyLanguage() {
   fillTargetCurrencySelect();
   fillBenchmarkCurrencySelect();
   fillAutoRefreshSelect();
+  fillChartDaysSelects();
   renderTargetCurrencyInfo();
   renderCategories();
   renderMarket();
@@ -199,6 +207,69 @@ function formatAmount(value) {
   if (!Number.isFinite(number)) return String(value);
   if (Math.abs(number) >= 1000) return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
   return Number.isInteger(number) ? String(number) : number.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatChartAmount(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  if (Math.abs(number) >= 1000) {
+    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
+  }
+  if (Number.isInteger(number)) return String(number);
+  const rounded = number.toFixed(1).replace(/\.0$/, '');
+  return rounded === '0' || rounded === '-0' ? formatAmount(number) : rounded;
+}
+
+function chartDayOptions() {
+  const maxDays = Math.max(7, Number(state.maxChartDaysAvailable || 7));
+  return [3, 7, 14, 30]
+    .filter(days => days <= 7 || maxDays >= days)
+    .map(days => ({ id: String(days), text: `${days}` }));
+}
+
+function selectedChartDays() {
+  const allowed = chartDayOptions().map(option => Number(option.id));
+  return allowed.includes(state.chartDays) ? state.chartDays : Math.max(...allowed.filter(days => days <= 7));
+}
+
+function chartBasisText(days) {
+  return state.lang === 'ru' ? `цена за ${days} д.` : `${days}-day price`;
+}
+
+function chartPeriodLabel(days, available) {
+  const visible = Math.min(days, available || days);
+  if (state.lang === 'ru') {
+    return visible === days ? `${days} д.` : `доступно ${visible} д.`;
+  }
+  return visible === days ? `${days}d` : `${visible}d available`;
+}
+
+function fillChartDaysSelects() {
+  const selected = selectedChartDays();
+  if (state.chartDays !== selected) {
+    state.chartDays = selected;
+    localStorage.setItem('poe2-chart-days', String(state.chartDays));
+  }
+  document.querySelectorAll('[data-chart-days-select]').forEach(select => {
+    fillSelect(select, chartDayOptions(), String(selected));
+  });
+}
+
+function updateChartDays(value) {
+  const days = Number(value);
+  const allowed = chartDayOptions().map(option => Number(option.id));
+  state.chartDays = allowed.includes(days) ? days : selectedChartDays();
+  localStorage.setItem('poe2-chart-days', String(state.chartDays));
+  fillChartDaysSelects();
+  renderCabinet();
+  queueAccountChartSeriesLoad();
+  renderSelectedItemDetail();
+}
+
+function limitedChartValues(values) {
+  const days = selectedChartDays();
+  return (values || []).slice(-days);
 }
 
 function formatChange(value) {
@@ -750,6 +821,7 @@ function accountMarketForItem(item) {
         created_ts: categoryRates.created_ts,
         change: row?.change,
         sparkline: row?.sparkline || [],
+        sparkline_kind: row?.sparkline_kind,
         volume: row?.volume || 0,
       };
     }
@@ -786,11 +858,18 @@ function renderAccountMarketMeta(item) {
 
 function renderAccountChart(item) {
   const market = accountMarketForItem(item);
-  const values = (market.sparkline || []).map(Number).filter(Number.isFinite);
+  const cachedSeries = accountChartCachedSeries(item);
+  const visibleCachedSeries = hourlyTimedSeries(visibleTimedSeries(cachedSeries));
+  const cachedValues = visibleCachedSeries.map(point => point.value);
+  const sparklineValues = limitedChartValues(chartValuesForCurrent(market.sparkline || [], market.price, market.change));
+  const usesHistory = timedSeriesCoversDays(visibleCachedSeries, selectedChartDays()) && cachedValues.length > sparklineValues.length;
+  const values = usesHistory ? cachedValues : sparklineValues;
   if (values.length < 2) {
     return `<div class="account-market-chart empty">${t('chartNoData')}</div>`;
   }
-  return `<div class="account-market-chart">${miniSignalChart(values, t('priceChartBasis'), market.price, market.change)}</div>`;
+  return `<div class="account-market-chart">${miniSignalChart(values, usesHistory ? chartBasisText(selectedChartDays()) : chartBasisText(values.length), market.price, market.change, {
+    series: usesHistory ? visibleCachedSeries : [],
+  })}</div>`;
 }
 
 function pnlClass(value) {
@@ -1031,6 +1110,7 @@ function renderCabinet() {
       ? closedTrades.map(renderTradeCard).join('')
       : `<p class="text-secondary">${t('noClosedTrades')}</p>`;
   }
+  queueAccountChartSeriesLoad();
   renderNotificationPanel();
 }
 
@@ -1212,6 +1292,8 @@ function renderCategories() {
       state.historyTrends = [];
       state.historyTrendsKey = '';
       state.isLoadingHistoryTrends = false;
+      state.detailDemandCache = {};
+      state.detailSeriesCache = {};
       setText('category-title', categoryName(category));
       byId('item-detail-panel')?.classList.add('d-none');
       renderCategories();
@@ -1587,43 +1669,408 @@ async function ensureRatesForTarget(target) {
   return data;
 }
 
-function renderSparkline(values) {
+function positiveFiniteValues(values) {
+  return (values || [])
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value > 0);
+}
+
+function priceSeriesFromChange(values, currentValue, totalChange = null) {
+  const current = Number(currentValue);
+  if (!Number.isFinite(current) || current <= 0) return [];
+  const points = (values || [])
+    .map(Number)
+    .filter(Number.isFinite);
+  const numericChange = Number(totalChange);
+  let changes = points;
+  if (Number.isFinite(numericChange) && Math.abs(numericChange) > 0.0001 && points.length >= 2) {
+    const last = points[points.length - 1];
+    const inferredScale = last / numericChange;
+    const looksScaled = inferredScale > 0
+      && Math.abs(inferredScale - 1) > 0.08
+      && (points.some(value => value <= -99.9 || Math.abs(value) > 500) || Math.abs(last - numericChange) > Math.max(0.5, Math.abs(numericChange) * 0.2));
+    if (looksScaled) {
+      changes = points.map(value => value / inferredScale);
+    }
+  }
+  changes = changes.filter(value => value > -99.9);
+  if (changes.length < 2) return [];
+  const lastFactor = 1 + (changes[changes.length - 1] / 100);
+  if (lastFactor <= 0) return [];
+  const baseline = current / lastFactor;
+  return changes
+    .map(change => baseline * (1 + change / 100))
+    .filter(value => Number.isFinite(value) && value > 0);
+}
+
+function priceSeriesForRow(row) {
+  const currentValue = Number(row?.best ?? row?.median);
+  const values = positiveFiniteValues(row?.sparkline || []);
+  if (row?.sparkline_kind === 'price') return values;
+  if (!Number.isFinite(currentValue) || currentValue <= 0) return values;
+  if (values.length >= 2) {
+    const last = values[values.length - 1];
+    if (last > 0 && Math.abs(last - currentValue) / currentValue < 0.08) return values;
+  }
+  return priceSeriesFromChange(row?.sparkline || [], currentValue, row?.change);
+}
+
+function chartValuesForCurrent(values, currentValue, totalChange = null) {
+  const current = Number(currentValue);
+  const positiveValues = positiveFiniteValues(values);
+  if (!Number.isFinite(current) || current <= 0) return positiveValues;
+  const last = positiveValues[positiveValues.length - 1];
+  if (positiveValues.length >= 2 && last > 0 && Math.abs(last - current) / current < 0.08) return positiveValues;
+  const converted = priceSeriesFromChange(values, current, totalChange);
+  return converted.length ? converted : positiveValues;
+}
+
+function accountChartKey(item) {
+  const market = item?.market || {};
+  return [
+    item?.league || '',
+    item?.category || '',
+    market.target_currency || item?.target_currency || item?.entry_currency || selectedTarget(),
+    'any',
+    item?.item_id || '',
+  ].join('|');
+}
+
+function accountChartRequest(item) {
+  const market = item?.market || {};
+  return {
+    key: accountChartKey(item),
+    league: item?.league || '',
+    category: item?.category || '',
+    target: market.target_currency || item?.target_currency || item?.entry_currency || selectedTarget(),
+    status: 'any',
+    itemId: item?.item_id || '',
+    currentTs: Number(market.created_ts || 0),
+    currentValue: Number(market.price || item?.last_price || 0),
+  };
+}
+
+function visibleTimedSeries(series) {
+  if (!series?.length) return [];
+  const latestTs = Math.max(...series.map(point => Number(point.ts || 0)).filter(Number.isFinite));
+  const cutoffTs = latestTs - selectedChartDays() * 86400;
+  return series
+    .filter(point => Number(point.ts || 0) >= cutoffTs)
+    .filter(point => Number.isFinite(point.value) && point.value > 0);
+}
+
+function hourlyTimedSeries(series) {
+  if (!series?.length) return [];
+  const buckets = new Map();
+  series.forEach(point => {
+    const ts = Number(point.ts || 0);
+    const value = Number(point.value);
+    if (!Number.isFinite(ts) || ts <= 0 || !Number.isFinite(value) || value <= 0) return;
+    const hourTs = Math.floor(ts / 3600) * 3600;
+    const previous = buckets.get(hourTs);
+    if (!previous || ts >= previous.ts) {
+      buckets.set(hourTs, { ts, hourTs, value });
+    }
+  });
+  return [...buckets.values()]
+    .sort((left, right) => left.hourTs - right.hourTs)
+    .map(point => ({ ts: point.hourTs, value: point.value }));
+}
+
+function timedSeriesSpanDays(series) {
+  const timestamps = (series || [])
+    .map(point => Number(point.ts || 0))
+    .filter(value => Number.isFinite(value) && value > 0);
+  if (timestamps.length < 2) return 0;
+  return (Math.max(...timestamps) - Math.min(...timestamps)) / 86400;
+}
+
+function timedSeriesCoversDays(series, days) {
+  return timedSeriesSpanDays(series) >= Math.max(1, Number(days || 0) - 1.1);
+}
+
+function updateMaxChartDaysFromSeries(seriesList = []) {
+  const previous = state.maxChartDaysAvailable;
+  const maxSpan = Math.max(0, ...seriesList.map(timedSeriesSpanDays));
+  state.maxChartDaysAvailable = maxSpan >= 29.5 ? 30 : maxSpan >= 13.5 ? 14 : 7;
+  if (state.maxChartDaysAvailable !== previous) {
+    fillChartDaysSelects();
+  }
+}
+
+function accountChartCachedSeries(item) {
+  return state.accountChartSeriesCache[accountChartKey(item)] || [];
+}
+
+async function loadAccountChartSeries(request) {
+  if (!request.itemId || !request.league || !request.category || !request.target) return;
+  if (state.accountChartSeriesCache[request.key] || state.accountChartSeriesLoading[request.key]) return;
+  state.accountChartSeriesLoading[request.key] = true;
+  try {
+    const params = new URLSearchParams({
+      limit: '200',
+      league: request.league,
+      category: request.category,
+      target: request.target,
+      status: request.status,
+    });
+    const response = await fetch(`/api/trade/history?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+    const seen = new Set();
+    const series = (data.history || [])
+      .filter(snapshot => snapshot && Number(snapshot.created_ts || 0) > 0)
+      .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0))
+      .map(snapshot => {
+        const createdTs = Number(snapshot.created_ts || 0);
+        if (seen.has(createdTs)) return null;
+        seen.add(createdTs);
+        const row = rowsById(snapshot).get(request.itemId);
+        const value = rateValue(row);
+        return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
+      })
+      .filter(value => value !== null);
+    if (request.currentTs > 0 && request.currentValue > 0 && !seen.has(request.currentTs)) {
+      series.push({ ts: request.currentTs, value: request.currentValue });
+    }
+    state.accountChartSeriesCache[request.key] = series;
+  } catch {
+    state.accountChartSeriesCache[request.key] = [];
+  } finally {
+    delete state.accountChartSeriesLoading[request.key];
+  }
+}
+
+function queueAccountChartSeriesLoad() {
+  if (!state.account.authenticated || state.mainView !== 'cabinet') return;
+  const items = [
+    ...state.account.pins,
+    ...state.account.trades,
+  ];
+  const requests = Array.from(new Map(items.map(item => {
+    const request = accountChartRequest(item);
+    return [request.key, request];
+  })).values()).filter(request => request.itemId && !state.accountChartSeriesCache[request.key] && !state.accountChartSeriesLoading[request.key]);
+  updateMaxChartDaysFromSeries(items.map(accountChartCachedSeries));
+  if (!requests.length) return;
+  Promise.all(requests.map(loadAccountChartSeries)).then(() => {
+    updateMaxChartDaysFromSeries(items.map(accountChartCachedSeries));
+    if (state.mainView === 'cabinet') renderCabinet();
+  });
+}
+
+function chartMetric() {
+  return state.detailChartMetric === 'demand' ? 'demand' : 'price';
+}
+
+function renderDetailChartTabs() {
+  const metric = chartMetric();
+  document.querySelectorAll('[data-detail-chart]').forEach(button => {
+    const active = button.dataset.detailChart === metric;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function demandHistoryKey(currentData, itemId) {
+  return `${historyTrendsKey(currentData)}|${itemId}|demand`;
+}
+
+function detailSeriesKey(currentData, itemId, metric) {
+  return `${historyTrendsKey(currentData)}|${itemId}|${metric}`;
+}
+
+async function loadHistoricalItemSeries(currentData, itemId, metric) {
+  const key = detailSeriesKey(currentData, itemId, metric);
+  if (state.detailSeriesCache[key]) return state.detailSeriesCache[key];
+  const params = new URLSearchParams({
+    limit: '200',
+    league: currentData.league || byId('live-league')?.value || '',
+    category: currentData.category || state.selectedCategory,
+    target: currentData.target || selectedTarget(),
+    status: currentData.status || byId('live-status')?.value || 'any',
+  });
+  const response = await fetch(`/api/trade/history?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+  const snapshots = [...(data.history || []), currentData]
+    .filter(snapshot => snapshot && Number(snapshot.created_ts || 0) > 0)
+    .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0));
+  const seen = new Set();
+  const series = snapshots
+    .map(snapshot => {
+      const createdTs = Number(snapshot.created_ts || 0);
+      if (seen.has(createdTs)) return null;
+      seen.add(createdTs);
+      const row = rowsById(snapshot).get(itemId);
+      const value = metric === 'demand' ? Number(row?.volume) : rateValue(row);
+      return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
+    })
+    .filter(value => value !== null);
+  state.detailSeriesCache[key] = series;
+  updateMaxChartDaysFromSeries([series]);
+  return series;
+}
+
+async function loadDemandSeries(currentData, itemId) {
+  const key = demandHistoryKey(currentData, itemId);
+  if (state.detailDemandCache[key]) return state.detailDemandCache[key];
+  const series = await loadHistoricalItemSeries(currentData, itemId, 'demand');
+  state.detailDemandCache[key] = series;
+  return series;
+}
+
+function historyChartLabels(series) {
+  if (!series.length) return [];
+  const firstTs = Number(series[0].ts || 0);
+  const lastTs = Number(series[series.length - 1].ts || 0);
+  const locale = state.lang === 'ru' ? 'ru-RU' : 'en-GB';
+  const options = lastTs - firstTs <= 36 * 60 * 60
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { day: '2-digit', month: '2-digit' };
+  const formatter = new Intl.DateTimeFormat(locale, options);
+  return series.map(point => formatter.format(new Date(Number(point.ts || 0) * 1000)));
+}
+
+function intermediateGridX(points, subdivisions = 4) {
+  if (!Array.isArray(points) || points.length < 2 || points.length > 40) return [];
+  const lines = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const left = points[index].x;
+    const right = points[index + 1].x;
+    for (let step = 1; step < subdivisions; step += 1) {
+      lines.push(left + ((right - left) * step) / subdivisions);
+    }
+  }
+  return lines;
+}
+
+function normalizedTimedSeries(series, length) {
+  if (!Array.isArray(series) || series.length !== length) return [];
+  const normalized = series
+    .map(point => ({ ts: Number(point.ts || 0), value: Number(point.value) }))
+    .filter(point => Number.isFinite(point.ts) && point.ts > 0 && Number.isFinite(point.value) && point.value > 0);
+  return normalized.length === length ? normalized : [];
+}
+
+function timeGridX(series, leftPad, plotWidth, stepHours = 6) {
+  if (series.length < 2) return [];
+  const minTs = series[0].ts;
+  const maxTs = series[series.length - 1].ts;
+  const range = maxTs - minTs;
+  if (range <= 0) return [];
+  const stepSeconds = stepHours * 3600;
+  let cursor = Math.ceil(minTs / stepSeconds) * stepSeconds;
+  const lines = [];
+  while (cursor < maxTs) {
+    if (cursor > minTs) {
+      lines.push(leftPad + ((cursor - minTs) / range) * plotWidth);
+    }
+    cursor += stepSeconds;
+  }
+  return lines;
+}
+
+function timedAxisLabels(points, series) {
+  if (!points.length || !series.length) return [];
+  const locale = state.lang === 'ru' ? 'ru-RU' : 'en-GB';
+  const dayFormatter = new Intl.DateTimeFormat(locale, { day: '2-digit', month: '2-digit' });
+  const hourFormatter = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' });
+  const spanSeconds = series[series.length - 1].ts - series[0].ts;
+  const labels = [];
+  if (spanSeconds <= 36 * 3600) {
+    const step = Math.max(1, Math.ceil((points.length - 1) / 6));
+    points.forEach((point, index) => {
+      if (index === 0 || index === points.length - 1 || index % step === 0) {
+        labels.push({ point, label: hourFormatter.format(new Date(series[index].ts * 1000)) });
+      }
+    });
+    return labels;
+  }
+  const seenDays = new Set();
+  points.forEach((point, index) => {
+    const date = new Date(series[index].ts * 1000);
+    const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    if (seenDays.has(key)) return;
+    seenDays.add(key);
+    labels.push({ point, label: dayFormatter.format(date) });
+  });
+  const step = Math.max(1, Math.ceil(labels.length / 7));
+  return labels.filter((label, index) => index === 0 || index === labels.length - 1 || index % step === 0);
+}
+
+function renderSparkline(values, options = {}) {
   const chart = byId('detail-chart');
   if (!chart) return;
-  const data = (values || []).map(Number).filter(Number.isFinite);
+  const data = positiveFiniteValues(values);
   if (data.length < 2) {
-    chart.innerHTML = `<div class="detail-chart-empty">${t('chartNoData')}</div>`;
+    chart.innerHTML = `<div class="detail-chart-empty">${options.emptyText || t('chartNoData')}</div>`;
     return;
   }
-  const width = 720;
+  const width = Math.max(720, Math.round(chart.getBoundingClientRect().width || chart.clientWidth || 720));
   const height = 190;
-  const pad = 18;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const leftPad = 58;
+  const rightPad = 18;
+  const topPad = 16;
+  const bottomPad = 30;
+  const displayData = data;
+  const min = Math.min(...displayData);
+  const max = Math.max(...displayData);
   const range = max - min || 1;
-  const points = data.map((value, index) => {
-    const x = pad + (index / (data.length - 1)) * (width - pad * 2);
-    const y = height - pad - ((value - min) / range) * (height - pad * 2);
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  const plotRight = width - rightPad;
+  const plotBottom = height - bottomPad;
+  const plotWidth = plotRight - leftPad;
+  const plotHeight = plotBottom - topPad;
+  const timedSeries = normalizedTimedSeries(options.series, displayData.length);
+  const minTs = timedSeries.length ? timedSeries[0].ts : null;
+  const maxTs = timedSeries.length ? timedSeries[timedSeries.length - 1].ts : null;
+  const timeRange = timedSeries.length && maxTs > minTs ? maxTs - minTs : null;
+  const points = displayData.map((value, index) => {
+    const x = timeRange
+      ? leftPad + ((timedSeries[index].ts - minTs) / timeRange) * plotWidth
+      : leftPad + (index / (displayData.length - 1)) * plotWidth;
+    const y = plotBottom - ((value - min) / range) * plotHeight;
+    return { x, y };
   });
-  const area = `${pad},${height - pad} ${points.join(' ')} ${width - pad},${height - pad}`;
+  const polyline = points.map(point => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ');
+  const area = `${leftPad},${plotBottom} ${polyline} ${plotRight},${plotBottom}`;
+  const gridY = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1].map(ratio => topPad + ratio * plotHeight);
+  const valueAtY = y => max - ((y - topPad) / plotHeight) * range;
+  const tickStep = Math.max(1, Math.ceil((displayData.length - 1) / 6));
+  const gridPoints = points.filter((_, index) => index === 0 || index === points.length - 1 || index % tickStep === 0);
+  const gridX = gridPoints.map(point => point.x);
+  const hourGridX = timedSeries.length
+    ? timeGridX(timedSeries, leftPad, plotWidth, 6)
+    : intermediateGridX(points, displayData.length <= 8 ? 24 : 4);
+  const dateFormatter = new Intl.DateTimeFormat(state.lang === 'ru' ? 'ru-RU' : 'en-GB', { day: '2-digit', month: '2-digit' });
+  const today = new Date();
+  const xLabels = Array.isArray(options.xLabels) ? options.xLabels : [];
+  const dayLabels = timedSeries.length ? timedAxisLabels(points, timedSeries) : gridPoints.map(point => {
+    const index = points.indexOf(point);
+    const daysAgo = displayData.length - 1 - index;
+    const date = new Date(today);
+    date.setDate(today.getDate() - daysAgo);
+    return { point, label: xLabels[index] || dateFormatter.format(date) };
+  });
   chart.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${t('priceChartLabel')}">
-      <line class="detail-chart-grid" x1="${pad}" y1="${pad}" x2="${width - pad}" y2="${pad}"></line>
-      <line class="detail-chart-grid" x1="${pad}" y1="${height / 2}" x2="${width - pad}" y2="${height / 2}"></line>
-      <line class="detail-chart-grid" x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}"></line>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${options.label || t('priceChartLabel')}">
+      ${hourGridX.map(x => `<line class="detail-chart-grid hour" x1="${x.toFixed(2)}" y1="${topPad}" x2="${x.toFixed(2)}" y2="${plotBottom}"></line>`).join('')}
+      ${gridX.map(x => `<line class="detail-chart-grid day" x1="${x.toFixed(2)}" y1="${topPad}" x2="${x.toFixed(2)}" y2="${plotBottom}"></line>`).join('')}
+      ${gridY.map(y => `<line class="detail-chart-grid" x1="${leftPad}" y1="${y.toFixed(2)}" x2="${plotRight}" y2="${y.toFixed(2)}"></line>`).join('')}
       <polygon class="detail-chart-area" points="${area}"></polygon>
-      <polyline class="detail-chart-line" points="${points.join(' ')}"></polyline>
+      <polyline class="detail-chart-line" points="${polyline}"></polyline>
+      ${gridY.map(y => `<text class="detail-chart-y-label" x="${leftPad - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${formatChartAmount(valueAtY(y))}</text>`).join('')}
+      ${dayLabels.map(({ point, label }) => `<text class="detail-chart-x-label" x="${point.x.toFixed(2)}" y="${height - 9}" text-anchor="middle">${label}</text>`).join('')}
     </svg>
   `;
 }
 
-function miniSignalChart(values, basisText, currentValue = null, changeValue = null) {
-  const data = (values || []).map(Number).filter(Number.isFinite);
+function miniSignalChart(values, basisText, currentValue = null, changeValue = null, options = {}) {
+  const data = chartValuesForCurrent(values, currentValue, changeValue);
   if (data.length < 2) {
     return `<aside class="advice-chart empty"><span>${t('noSignalChart')}</span></aside>`;
   }
-  const width = 360;
+  const width = 960;
   const height = 128;
   const leftPad = 40;
   const rightPad = 10;
@@ -1632,8 +2079,15 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
+  const timedSeries = normalizedTimedSeries(options.series, data.length);
+  const minTs = timedSeries.length ? timedSeries[0].ts : null;
+  const maxTs = timedSeries.length ? timedSeries[timedSeries.length - 1].ts : null;
+  const timeRange = timedSeries.length && maxTs > minTs ? maxTs - minTs : null;
   const points = data.map((value, index) => {
-    const x = leftPad + (index / (data.length - 1)) * (width - leftPad - rightPad);
+    const plotWidth = width - leftPad - rightPad;
+    const x = timeRange
+      ? leftPad + ((timedSeries[index].ts - minTs) / timeRange) * plotWidth
+      : leftPad + (index / (data.length - 1)) * plotWidth;
     const y = height - bottomPad - ((value - min) / range) * (height - topPad - bottomPad);
     return { x, y };
   });
@@ -1645,23 +2099,34 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
   const directionClass = data[data.length - 1] >= data[0] ? 'up' : 'down';
   const plotBottom = height - bottomPad;
   const plotRight = width - rightPad;
-  const gridX = points.map(point => point.x);
-  const gridY = [0, 0.25, 0.5, 0.75, 1].map(ratio => topPad + ratio * (plotBottom - topPad));
+  const tickStep = Math.max(1, Math.ceil((points.length - 1) / 6));
+  const gridPoints = points
+    .map((point, index) => ({ ...point, index }))
+    .filter(point => point.index === 0 || point.index === points.length - 1 || point.index % tickStep === 0);
+  const gridX = gridPoints.map(point => point.x);
+  const hourGridX = timedSeries.length
+    ? timeGridX(timedSeries, leftPad, width - leftPad - rightPad, 6)
+    : intermediateGridX(points, data.length <= 8 ? 24 : 4);
+  const gridY = [0, 0.1667, 0.3333, 0.5, 0.6667, 0.8333, 1].map(ratio => topPad + ratio * (plotBottom - topPad));
   const valueAtY = y => max - ((y - topPad) / (plotBottom - topPad)) * range;
   const dateFormatter = new Intl.DateTimeFormat(state.lang === 'ru' ? 'ru-RU' : 'en-GB', { day: '2-digit', month: '2-digit' });
   const today = new Date();
-  const dayLabels = points.map((point, index) => {
+  const xLabels = Array.isArray(options.xLabels) ? options.xLabels : [];
+  const dayLabels = timedSeries.length ? timedAxisLabels(points, timedSeries).map(({ point, label }) => (
+    `<text class="advice-chart-x-label" x="${point.x.toFixed(2)}" y="${height - 7}" text-anchor="middle">${label}</text>`
+  )).join('') : gridPoints.map(point => {
+    const index = point.index;
     const daysAgo = data.length - 1 - index;
     const date = new Date(today);
     date.setDate(today.getDate() - daysAgo);
-    const label = dateFormatter.format(date);
+    const label = xLabels[index] || dateFormatter.format(date);
     return `<text class="advice-chart-x-label" x="${point.x.toFixed(2)}" y="${height - 7}" text-anchor="middle">${label}</text>`;
   }).join('');
   const absoluteCurrent = Number(currentValue);
   const canScaleValues = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 && data.every(value => value > 0);
   const scale = canScaleValues ? absoluteCurrent / data[data.length - 1] : null;
   const valueLabels = canScaleValues ? [gridY[0], gridY[2], gridY[4]].map(y => (
-    `<text class="advice-chart-y-label" x="${leftPad - 7}" y="${(y + 3).toFixed(2)}" text-anchor="end">${formatAmount(valueAtY(y) * scale)}</text>`
+    `<text class="advice-chart-y-label" x="${leftPad - 7}" y="${(y + 3).toFixed(2)}" text-anchor="end">${formatChartAmount(valueAtY(y) * scale)}</text>`
   )).join('') : '';
   const displayCurrent = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 ? absoluteCurrent : data[data.length - 1];
   const firstValue = data[0];
@@ -1670,6 +2135,7 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
   return `
     <aside class="advice-chart ${directionClass}">
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${t('priceChartLabel')}">
+        ${hourGridX.map(x => `<line class="advice-chart-grid hour" x1="${x.toFixed(2)}" y1="${topPad}" x2="${x.toFixed(2)}" y2="${plotBottom}"></line>`).join('')}
         ${gridX.map(x => `<line class="advice-chart-grid day" x1="${x.toFixed(2)}" y1="${topPad}" x2="${x.toFixed(2)}" y2="${plotBottom}"></line>`).join('')}
         ${gridY.map(y => `<line class="advice-chart-grid" x1="${leftPad}" y1="${y.toFixed(2)}" x2="${plotRight}" y2="${y.toFixed(2)}"></line>`).join('')}
         <rect class="advice-chart-current-area" x="${highlightX.toFixed(2)}" y="${topPad}" width="${highlightWidth.toFixed(2)}" height="${plotBottom - topPad}"></rect>
@@ -1679,7 +2145,7 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
         ${valueLabels}
         ${dayLabels}
       </svg>
-      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatAmount(displayCurrent)}</span><span>${t('sevenDayChange')}: ${formatChange(change)}</span></div>
+      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatChartAmount(displayCurrent)}</span><span>${t('sevenDayChange')}: ${formatChange(change)}</span></div>
       <div class="advice-chart-basis">${t('signalBasis')}: ${basisText}</div>
     </aside>
   `;
@@ -1694,9 +2160,68 @@ function renderAdviceCard(card, contentHtml, chartHtml) {
   `;
 }
 
+async function renderDetailChart(row, currentData, target, requestItemId) {
+  renderDetailChartTabs();
+  const metric = chartMetric();
+  if (metric === 'demand') {
+    setText('detail-chart-title', `${t('chartMetricDemand')} · ${chartPeriodLabel(selectedChartDays(), selectedChartDays())}`);
+    byId('detail-note').innerHTML = loadingMarkup(t('loading'));
+    try {
+      const series = await loadDemandSeries(currentData, row.id);
+      if (state.selectedItemId !== requestItemId || chartMetric() !== 'demand') return;
+      const latestTs = Number(currentData.created_ts || Date.now() / 1000);
+      const cutoffTs = latestTs - selectedChartDays() * 86400;
+      const visibleSeries = hourlyTimedSeries(series.filter(point => Number(point.ts || 0) >= cutoffTs));
+      setText('detail-chart-title', `${t('chartMetricDemand')} · ${chartPeriodLabel(selectedChartDays(), visibleSeries.length)}`);
+      renderSparkline(visibleSeries.map(point => point.value), {
+        emptyText: t('demandChartNoData'),
+        label: t('demandChartLabel'),
+        series: visibleSeries,
+      });
+      setText('detail-note', `${t('detailDemandSourceNote')} ${t('source')}: ${currentData.source || '-'}.`);
+    } catch (error) {
+      if (state.selectedItemId !== requestItemId || chartMetric() !== 'demand') return;
+      setText('detail-note', error.message || String(error));
+      renderSparkline([], { emptyText: t('demandChartNoData'), label: t('demandChartLabel') });
+    }
+    return;
+  }
+  const priceValues = limitedChartValues(priceSeriesForRow(row));
+  try {
+    byId('detail-note').innerHTML = loadingMarkup(t('loading'));
+    const series = await loadHistoricalItemSeries(currentData, row.id, 'price');
+    if (state.selectedItemId !== requestItemId || chartMetric() !== 'price') return;
+    const latestTs = Number(currentData.created_ts || Date.now() / 1000);
+    const cutoffTs = latestTs - selectedChartDays() * 86400;
+    const visibleSeries = hourlyTimedSeries(series.filter(point => Number(point.ts || 0) >= cutoffTs));
+    if (timedSeriesCoversDays(visibleSeries, selectedChartDays()) && visibleSeries.length > priceValues.length) {
+      setText('detail-chart-title', `${t('chartMetricPrice')} (${currencyLabel(target)}) · ${chartPeriodLabel(selectedChartDays(), visibleSeries.length)}`);
+      renderSparkline(visibleSeries.map(point => point.value), {
+        emptyText: t('chartNoData'),
+        label: t('priceChartLabel'),
+        series: visibleSeries,
+      });
+      setText('detail-note', `${t('detailSourceNote')} ${t('source')}: ${currentData.source || '-'}.`);
+      return;
+    }
+  } catch {
+    if (state.selectedItemId !== requestItemId || chartMetric() !== 'price') return;
+  }
+  setText('detail-chart-title', `${t('chartMetricPrice')} (${currencyLabel(target)}) · ${chartPeriodLabel(selectedChartDays(), priceValues.length)}`);
+  renderSparkline(priceValues, {
+    emptyText: t('chartNoData'),
+    label: t('priceChartLabel'),
+  });
+  setText('detail-note', `${t('detailSourceNote')} ${t('source')}: ${currentData.source || '-'}.`);
+  if (!state.detailSeriesCache[detailSeriesKey(currentData, row.id, 'price')]) {
+    loadHistoricalItemSeries(currentData, row.id, 'price').catch(() => {});
+  }
+}
+
 async function renderSelectedItemDetail() {
   const panel = byId('item-detail-panel');
   if (!panel || !state.selectedItemId) return;
+  const requestItemId = state.selectedItemId;
   const entry = findEntry(state.selectedItemId);
   if (!entry) {
     panel.classList.add('d-none');
@@ -1722,6 +2247,7 @@ async function renderSelectedItemDetail() {
   byId('detail-note').innerHTML = loadingMarkup(t('loading'));
   try {
     const data = await ensureRatesForTarget(target);
+    if (state.selectedItemId !== requestItemId) return;
     const row = rowsById(data).get(entry.id) || entry;
     setText('detail-value', `${formatAmount(row.best)} ${currencyLabel(target)}`);
     setText('detail-median', `${formatAmount(row.median)} ${currencyLabel(target)}`);
@@ -1731,11 +2257,16 @@ async function renderSelectedItemDetail() {
       detailChange.textContent = formatChange(row.change);
       detailChange.className = Number(row.change) > 0 ? 'change-up' : Number(row.change) < 0 ? 'change-down' : '';
     }
-    renderSparkline(row.sparkline || []);
-    setText('detail-note', `${t('detailSourceNote')} ${t('source')}: ${data.source || '-'}.`);
+    await renderDetailChart(row, data, target, requestItemId);
   } catch (error) {
+    const isDemand = chartMetric() === 'demand';
+    renderDetailChartTabs();
+    setText('detail-chart-title', isDemand ? t('chartMetricDemand') : t('chartMetricPrice'));
     setText('detail-note', error.message || String(error));
-    renderSparkline([]);
+    renderSparkline([], {
+      emptyText: isDemand ? t('demandChartNoData') : t('chartNoData'),
+      label: isDemand ? t('demandChartLabel') : t('priceChartLabel'),
+    });
   }
 }
 
@@ -1880,9 +2411,7 @@ function signalSeverity(item, direction) {
 }
 
 function rangePosition(item) {
-  const values = (item.row.sparkline || [])
-    .map(value => Number(value))
-    .filter(Number.isFinite);
+  const values = priceSeriesForRow(item.row);
   if (Number.isFinite(item.value)) values.push(item.value);
   if (values.length < 2) return null;
   const min = Math.min(...values);
@@ -2793,6 +3322,7 @@ async function initLiveTrade() {
     fillStatusSelect();
     fillTargetCurrencySelect();
     fillAutoRefreshSelect();
+    fillChartDaysSelects();
     fillDetailTargetSelect();
 
     setText('category-title', categoryName(state.categoryMeta.find(c => c.id === state.selectedCategory) || { label: state.selectedCategory }));
@@ -2809,6 +3339,15 @@ async function initLiveTrade() {
     byId('detail-target-currency').addEventListener('change', event => {
       state.detailTarget = event.target.value;
       renderSelectedItemDetail();
+    });
+    document.querySelectorAll('[data-chart-days-select]').forEach(select => {
+      select.addEventListener('change', event => updateChartDays(event.target.value));
+    });
+    document.querySelectorAll('[data-detail-chart]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.detailChartMetric = button.dataset.detailChart === 'demand' ? 'demand' : 'price';
+        renderSelectedItemDetail();
+      });
     });
     document.querySelectorAll('[data-advice-tab]').forEach(button => {
       button.addEventListener('click', () => switchAdviceTab(button.dataset.adviceTab));
@@ -2842,6 +3381,8 @@ async function initLiveTrade() {
         state.historyTrends = [];
         state.historyTrendsKey = '';
         state.isLoadingHistoryTrends = false;
+        state.detailDemandCache = {};
+        state.detailSeriesCache = {};
         state.sellerLots = null;
         setText('last-snapshot', '-');
         setText('rate-source', '-');

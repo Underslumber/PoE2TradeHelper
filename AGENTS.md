@@ -19,6 +19,7 @@ PoE2 Trade Helper - черновик помощника для торговли 
 - Для обычного поиска сделок через `https://www.pathofexile.com/api/trade2/search`, `trade2/fetch`, `trade2/exchange` отдельный API-ключ обычно не нужен. Нужен корректный `USER_AGENT`.
 - `trade2` - веб-API официального сайта торговли PoE2, но он не является полноценным стабильным официальным developer API. Перед крупными изменениями проверяй живые endpoints.
 - Для агрегированных цен PoE2 можно использовать poe.ninja endpoint `https://poe.ninja/poe2/api/economy/exchange/current/overview?league=<league>&type=<type>`. Он сейчас полезнее для Liquid Emotions и Fragment/Boss-entry анализа, потому что возвращает нормализованную цену, объем и 7-дневное изменение.
+- В `poe.ninja` exchange overview `sparkline.data` для PoE2 нельзя показывать как абсолютную цену: это процентный ряд. Для графика цены переводить его в положительный ценовой ряд, привязанный к текущей `primaryValue`/нормализованной цене.
 - В live UI `get_category_rates` должен сначала пробовать poe.ninja для поддерживаемых категорий, затем откатываться на `trade2/exchange`.
 - Официальный API живет на `https://api.pathofexile.com` и требует OAuth Bearer token.
 - Для `get_currency_exchange` нужен scope `service:cxapi`; это исторические часовые сводки, не текущий стакан заявок.

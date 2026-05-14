@@ -225,6 +225,7 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str) -
         "created_ts": snapshot.get("created_ts"),
         "change": row.get("change"),
         "sparkline": row.get("sparkline") or [],
+        "sparkline_kind": row.get("sparkline_kind"),
         "volume": row.get("volume", 0),
     }
 

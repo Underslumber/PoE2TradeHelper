@@ -301,6 +301,47 @@ body {
   gap: 10px;
   margin: 0 0 14px;
 }
+.detail-chart-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 0 0 8px;
+}
+.detail-chart-toolbar strong {
+  color: #dbe8ef;
+  font-size: 0.95rem;
+}
+.detail-chart-tabs {
+  background: #0f171e;
+  border: 1px solid #2a3a45;
+  display: inline-flex;
+  flex: none;
+}
+.detail-chart-days-field {
+  align-items: center;
+  display: inline-flex;
+  gap: 7px;
+}
+.detail-chart-days-field span {
+  color: #91a7b7;
+  font-size: 0.82rem;
+}
+.detail-chart-days-field select {
+  min-width: 78px;
+}
+.detail-chart-tab {
+  background: transparent;
+  border: 0;
+  color: #aab6c2;
+  font-size: 0.84rem;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+.detail-chart-tab.active {
+  background: #00a77a;
+  color: #06110e;
+}
 .auth-panel,
 .account-dashboard {
   background: #101920;
@@ -376,7 +417,7 @@ body {
   border: 1px solid #2d3b45;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(220px, 320px) minmax(240px, 1fr);
+  grid-template-columns: minmax(220px, 320px) minmax(110px, 150px) minmax(240px, 1fr);
   margin-bottom: 14px;
   padding: 10px;
 }
@@ -388,6 +429,26 @@ body {
 }
 .panel-hint {
   margin: -2px 0 10px;
+}
+.cabinet-section-head {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.chart-period-inline {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+  gap: 8px;
+}
+.chart-period-inline span {
+  color: #91a7b7;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.chart-period-inline select {
+  min-width: 76px;
 }
 .cabinet-grid {
   display: grid;
@@ -428,10 +489,10 @@ body {
   padding: 10px 0 10px 12px;
 }
 .pin-market-layout {
-  align-items: center;
+  align-items: start;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  grid-template-columns: 1fr;
 }
 .notification-card.enabled {
   border-left-color: #25e7a1;
@@ -502,6 +563,7 @@ body {
 }
 .account-market-chart {
   min-height: 92px;
+  width: 100%;
 }
 .account-market-chart .mini-signal-chart {
   margin: 0;
@@ -702,8 +764,16 @@ body {
   width: 100%;
 }
 .detail-chart-grid {
-  stroke: #20303a;
+  stroke: rgba(145, 167, 183, 0.18);
+  stroke-dasharray: 2 5;
   stroke-width: 1;
+}
+.detail-chart-grid.day {
+  stroke: rgba(145, 167, 183, 0.12);
+}
+.detail-chart-grid.hour {
+  stroke: rgba(145, 167, 183, 0.045);
+  stroke-dasharray: 1 7;
 }
 .detail-chart-line {
   fill: none;
@@ -714,6 +784,11 @@ body {
 }
 .detail-chart-area {
   fill: rgba(0, 209, 154, 0.12);
+}
+.detail-chart-x-label,
+.detail-chart-y-label {
+  fill: #91a7b7;
+  font-size: 10px;
 }
 .detail-chart-empty,
 .detail-note {
@@ -846,6 +921,10 @@ body {
 }
 .advice-chart-grid.day {
   stroke: rgba(145, 167, 183, 0.13);
+}
+.advice-chart-grid.hour {
+  stroke: rgba(145, 167, 183, 0.045);
+  stroke-dasharray: 1 7;
 }
 .advice-chart-x-label,
 .advice-chart-y-label {
@@ -1184,6 +1263,7 @@ body {
   .hero-bar,
   .detail-header,
   .cabinet-header,
+  .cabinet-section-head,
   .advice-header,
   .action-row {
     align-items: stretch;
@@ -1231,6 +1311,24 @@ body {
   }
   .detail-stats {
     grid-template-columns: 1fr 1fr;
+  }
+  .detail-chart-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .detail-chart-tabs {
+    width: 100%;
+  }
+  .detail-chart-days-field {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .chart-period-inline {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .detail-chart-tab {
+    flex: 1;
   }
 }
 
