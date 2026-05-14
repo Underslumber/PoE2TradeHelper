@@ -1,4 +1,14 @@
 {% extends "base.html" %}
+{% block header_nav %}
+<div class="navbar-actions live-navbar-actions">
+  <div class="navbar-main-tabs" role="tablist" aria-label="Разделы">
+    <button class="main-view-tab nav-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
+    <button class="main-view-tab nav-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
+    <button class="main-view-tab nav-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
+    <button class="main-view-tab nav-view-tab" type="button" data-main-tab="cabinet" data-i18n="cabinetTab">Кабинет</button>
+  </div>
+</div>
+{% endblock %}
 {% block content %}
 <div class="app-shell">
   <aside class="side-panel">
@@ -47,13 +57,6 @@
       <button id="refresh-rates" class="btn btn-primary" type="button" data-i18n="refreshRates">Обновить цены категории</button>
       <button id="refresh-static" class="btn btn-outline-light" type="button" data-i18n="refreshLists">Обновить списки</button>
       <span id="rate-status" class="muted-status"></span>
-    </section>
-
-    <section class="main-view-switch" role="tablist">
-      <button class="main-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
-      <button class="main-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
-      <button class="main-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
-      <button class="main-view-tab" type="button" data-main-tab="cabinet" data-i18n="cabinetTab">Кабинет</button>
     </section>
 
     <section id="lot-search-panel" class="lot-panel view-hidden" data-main-view="lots">

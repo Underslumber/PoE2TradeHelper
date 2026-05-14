@@ -1757,6 +1757,16 @@ function switchMainView(view) {
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
   if (state.mainView === 'lots') renderSellerLots();
   if (state.mainView === 'cabinet') renderCabinet();
+  if (window.location.pathname === '/') {
+    const params = new URLSearchParams(window.location.search);
+    if (state.mainView === 'market') {
+      params.delete('view');
+    } else {
+      params.set('view', state.mainView);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+  }
 }
 
 // Signal rendering
