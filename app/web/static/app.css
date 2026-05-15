@@ -11,6 +11,7 @@ body {
 .navbar-actions {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .live-navbar-actions {
@@ -38,6 +39,7 @@ body {
 }
 .nav-view-tab {
   min-width: 104px;
+  white-space: nowrap;
 }
 .brand-icon {
   flex: 0 0 auto;
@@ -199,6 +201,11 @@ body {
 @keyframes loading-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner {
+    animation-duration: 2.4s;
   }
 }
 .form-control,
@@ -1222,7 +1229,7 @@ body {
 .advice-list {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(720px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 720px), 1fr));
 }
 .chain-depth-field {
   align-items: center;
@@ -1493,8 +1500,8 @@ body {
   margin-top: 3px;
 }
 .advice-chart-basis {
-  color: #7893a6;
-  font-size: 0.69rem;
+  color: #91a7b7;
+  font-size: 0.74rem;
   line-height: 1.2;
   margin-top: 2px;
   text-align: right;
@@ -1758,6 +1765,79 @@ body {
   object-fit: contain;
   width: 24px;
 }
+.economy-panel {
+  margin-top: 4px;
+}
+.economy-table thead th {
+  cursor: pointer;
+  padding: 12px 14px;
+}
+.economy-table thead th.dt-ordering-asc,
+.economy-table thead th.dt-ordering-desc {
+  color: #00d19a;
+}
+.economy-table-wrap {
+  border: 1px solid #2d3b45;
+  border-radius: 4px;
+  margin-top: 14px;
+}
+.economy-panel .dt-layout-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+.economy-panel .dt-layout-row.dt-layout-table {
+  padding: 0;
+}
+.economy-panel .dt-length,
+.economy-panel .dt-info {
+  color: #91a7b7;
+  font-size: 0.85rem;
+}
+.economy-panel .dt-length select {
+  background: #101920;
+  border: 1px solid #2a3a45;
+  border-radius: 3px;
+  color: #e6edf3;
+  margin: 0 6px;
+  padding: 4px 6px;
+}
+.economy-panel .dt-paging {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.economy-panel .dt-paging .dt-paging-button {
+  background: #101920;
+  border: 1px solid #2a3a45;
+  border-radius: 3px;
+  color: #d5dde5;
+  cursor: pointer;
+  font: inherit;
+  min-height: 38px;
+  min-width: 38px;
+  padding: 7px 11px;
+}
+.economy-panel .dt-paging .dt-paging-button:hover:not(.disabled):not(.current) {
+  border-color: #00d19a;
+  color: #00d19a;
+}
+.economy-panel .dt-paging .dt-paging-button.current {
+  background: #00a77a;
+  border-color: #00a77a;
+  color: #06110e;
+}
+.economy-panel .dt-paging .dt-paging-button.disabled {
+  color: #5a6873;
+  cursor: default;
+}
+.economy-panel .dt-empty {
+  color: #aab6c2;
+  padding: 14px;
+}
 @media (max-width: 980px) {
   .navbar .container-fluid {
     align-items: stretch;
@@ -1776,14 +1856,20 @@ body {
     min-width: 0;
   }
   .navbar-main-tabs {
-    flex: 1;
+    flex: 0 0 auto;
+    overflow-x: auto;
+    width: 100%;
   }
   .nav-view-tab {
-    flex: 1;
-    min-width: 0;
+    flex: 0 0 auto;
   }
   .app-shell {
     grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .side-panel {
+    max-height: 50vh;
+    overflow-y: auto;
   }
   .filters-grid,
   .lot-search-grid,
@@ -1882,9 +1968,19 @@ body {
   .detail-chart-tab {
     flex: 1;
   }
+  .advice-tab,
+  .detail-chart-tab,
+  .nav-view-tab,
+  .account-tab,
+  .lang-btn {
+    min-height: 44px;
+  }
 }
 
 @media (max-width: 620px) {
+  .navbar.sticky-top {
+    position: static;
+  }
   .live-navbar-actions {
     flex-direction: column;
   }
@@ -1894,5 +1990,9 @@ body {
   }
   .detail-stats {
     grid-template-columns: 1fr;
+  }
+  .market-table thead th:nth-child(2),
+  .market-table td:nth-child(2) {
+    display: none;
   }
 }

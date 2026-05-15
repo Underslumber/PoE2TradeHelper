@@ -1,39 +1,50 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="row mb-3">
-  <div class="col-md-2">
-    <label class="form-label" data-i18n="league">Лига</label>
-    <select id="league" class="form-select">
-      <option value="" data-i18n="all">Все</option>
-      {% for l in leagues %}
-      <option value="{{l}}" {% if default_snapshot and default_snapshot.league==l %}selected{% endif %}>{{l}}</option>
-      {% endfor %}
-    </select>
+<main class="main-panel economy-panel">
+  <section class="hero-bar">
+    <div>
+      <div class="crumbs">PoE2 Trade Helper / poe.ninja</div>
+      <h1 data-i18n="economyTitle">Снимки poe.ninja</h1>
+      <p data-i18n="economyHint">Сохраненные снимки агрегированной экономики poe.ninja. Фильтруйте по лиге, категории и названию.</p>
+    </div>
+  </section>
+
+  <section class="filters-grid economy-filters market-filters">
+    <label class="form-field">
+      <span data-i18n="league">Лига</span>
+      <select id="league" class="form-select">
+        <option value="" data-i18n="all">Все</option>
+        {% for l in leagues %}
+        <option value="{{l}}" {% if default_snapshot and default_snapshot.league==l %}selected{% endif %}>{{l}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="form-field">
+      <span data-i18n="category">Категория</span>
+      <select id="category" class="form-select">
+        <option value="" data-i18n="all">Все</option>
+        {% for c in categories %}
+        <option value="{{c}}" {% if default_snapshot and default_snapshot.category==c %}selected{% endif %}>{{c}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="form-field">
+      <span data-i18n="search">Поиск</span>
+      <input id="search" class="form-control" type="search" data-i18n-placeholder="searchPlaceholder" placeholder="Название или id">
+    </label>
+  </section>
+
+  <div class="table-responsive economy-table-wrap">
+    <table id="economy-table" class="market-table economy-table" style="width:100%">
+      <thead>
+        <tr id="columns-header">
+          <th data-i18n="item">Предмет</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
-  <div class="col-md-2">
-    <label class="form-label" data-i18n="category">Категория</label>
-    <select id="category" class="form-select">
-      <option value="" data-i18n="all">Все</option>
-      {% for c in categories %}
-      <option value="{{c}}" {% if default_snapshot and default_snapshot.category==c %}selected{% endif %}>{{c}}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-md-3">
-    <label class="form-label" data-i18n="search">Поиск</label>
-    <input id="search" class="form-control" data-i18n-placeholder="searchPlaceholder" placeholder="Название или id" />
-  </div>
-</div>
-<div class="table-responsive">
-  <table id="economy-table" class="table table-dark table-striped align-middle" style="width:100%">
-    <thead class="table-secondary sticky-top">
-      <tr id="columns-header">
-        <th data-i18n="item">Предмет</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
+</main>
 {% endblock %}
 {% block scripts %}
 <script src="https://cdn.datatables.net/2.0.8/js/dataTables.js"></script>
