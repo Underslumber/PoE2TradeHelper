@@ -1315,10 +1315,11 @@ async def get_category_rates(
     category: str,
     target: str = "divine",
     status: str = "any",
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
     cache_key = (league, category, target, status)
     cached = RATE_CACHE.get(cache_key)
-    if cached and time.time() - cached["created_ts"] < RATE_CACHE_TTL:
+    if not force_refresh and cached and time.time() - cached["created_ts"] < RATE_CACHE_TTL:
         data = dict(cached["data"])
         data["cached"] = True
         return data
@@ -1540,9 +1541,8 @@ def read_history(
 ) -> list[dict[str, Any]]:
     if not HISTORY_PATH.exists():
         return []
-    lines = reversed(HISTORY_PATH.read_text(encoding="utf-8").splitlines())
     history = []
-    for line in lines:
+    for line in _iter_jsonl_lines_reverse(HISTORY_PATH):
         try:
             snapshot = json.loads(line)
         except json.JSONDecodeError:
@@ -1561,6 +1561,25 @@ def read_history(
     return history
 
 
+def _iter_jsonl_lines_reverse(path, block_size: int = 1024 * 1024):
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        buffer = b""
+        while position > 0:
+            read_size = min(block_size, position)
+            position -= read_size
+            handle.seek(position)
+            block = handle.read(read_size)
+            parts = (block + buffer).split(b"\n")
+            buffer = parts[0]
+            for line in reversed(parts[1:]):
+                if line:
+                    yield line.decode("utf-8", "ignore")
+        if buffer:
+            yield buffer.decode("utf-8", "ignore")
+
+
 def read_latest_rates(
     league: str,
     category: str,
@@ -1569,7 +1588,7 @@ def read_latest_rates(
 ) -> dict[str, Any] | None:
     if not HISTORY_PATH.exists():
         return None
-    for line in reversed(HISTORY_PATH.read_text(encoding="utf-8").splitlines()):
+    for line in _iter_jsonl_lines_reverse(HISTORY_PATH):
         try:
             snapshot = json.loads(line)
         except json.JSONDecodeError:
@@ -1594,3 +1613,77 @@ def read_latest_rates(
                 "cached": True,
             }
     return None
+
+
+def _history_row_price(row: dict[str, Any] | None) -> float | None:
+    if not row:
+        return None
+    for key in ("median", "best"):
+        try:
+            value = float(row.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _history_row_metric(row: dict[str, Any] | None, metric: str) -> float | None:
+    if metric == "demand":
+        try:
+            value = float((row or {}).get("volume"))
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+    if metric == "offers":
+        try:
+            value = float((row or {}).get("offers"))
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+    return _history_row_price(row)
+
+
+def read_item_history(
+    *,
+    league: str,
+    category: str,
+    target: str = "exalted",
+    status: str = "any",
+    item_id: str,
+    metric: str = "price",
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    snapshots = read_history(
+        limit=limit,
+        league=league,
+        category=category,
+        target=target,
+        status=status,
+    )
+    series: list[dict[str, Any]] = []
+    seen: set[float] = set()
+    for snapshot in sorted(snapshots, key=lambda item: float(item.get("created_ts") or 0)):
+        try:
+            created_ts = float(snapshot.get("created_ts"))
+        except (TypeError, ValueError):
+            continue
+        if created_ts <= 0 or created_ts in seen:
+            continue
+        row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
+        value = _history_row_metric(row, metric)
+        if value is None:
+            continue
+        seen.add(created_ts)
+        series.append(
+            {
+                "created_ts": created_ts,
+                "value": value,
+                "price": _history_row_price(row),
+                "volume": (row or {}).get("volume", 0),
+                "offers": (row or {}).get("offers", 0),
+                "change": (row or {}).get("change"),
+                "source": snapshot.get("source") or "",
+            }
+        )
+    return series

@@ -430,6 +430,36 @@ body {
 .panel-hint {
   margin: -2px 0 10px;
 }
+.player-memo-panel {
+  border-top: 1px solid #263741;
+  margin-bottom: 14px;
+  padding-top: 14px;
+}
+.player-memo-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+}
+.player-memo-card {
+  background: #111b23;
+  border: 1px solid #263741;
+  border-left: 3px solid #7bb7ff;
+  min-width: 0;
+  padding: 10px;
+}
+.player-memo-card strong {
+  color: #dbe7ef;
+  display: block;
+  font-size: 0.92rem;
+  margin-bottom: 6px;
+}
+.player-memo-card p {
+  color: #91a7b7;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .cabinet-section-head {
   align-items: start;
   display: flex;
@@ -1255,6 +1285,7 @@ body {
   .account-summary,
   .account-settings,
   .cabinet-grid,
+  .player-memo-grid,
   .notification-form,
   .pin-market-layout,
   .trade-metric-grid {

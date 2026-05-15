@@ -401,7 +401,7 @@ def test_normalize_poe_ninja_overview_converts_primary_value_to_target():
     assert result["rows"][0]["median"] == 3.5
     assert result["rows"][0]["volume"] == 700
     assert result["rows"][0]["change"] == 12.5
-    assert result["rows"][0]["sparkline"] == [175, 350, 525]
+    assert [round(value, 4) for value in result["rows"][0]["sparkline"]] == [3.432, 3.466, 3.5]
 
 
 def test_build_trade_advice_marks_low_volume_emotion_upgrade():
@@ -537,3 +537,49 @@ def test_read_latest_rates_returns_newest_matching_snapshot(tmp_path, monkeypatc
     assert latest["created_ts"] == 2
     assert latest["source"] == "trade2"
     assert latest["rows"][0]["median"] == 0.02
+
+
+def test_read_item_history_returns_metric_series(tmp_path, monkeypatch):
+    history = tmp_path / "history.jsonl"
+    snapshots = [
+        {
+            "created_ts": 1,
+            "league": "Fate",
+            "category": "Currency",
+            "target": "exalted",
+            "status": "any",
+            "source": "poe.ninja",
+            "rows": [{"id": "chaos", "median": 4, "volume": 100, "offers": 0}],
+        },
+        {
+            "created_ts": 2,
+            "league": "Fate",
+            "category": "Currency",
+            "target": "exalted",
+            "status": "any",
+            "source": "poe.ninja",
+            "rows": [{"id": "chaos", "median": 5, "volume": 120, "offers": 0}],
+        },
+    ]
+    history.write_text("\n".join(json.dumps(item) for item in snapshots), encoding="utf-8")
+    monkeypatch.setattr(trade2, "HISTORY_PATH", history)
+
+    price = trade2.read_item_history(
+        league="Fate",
+        category="Currency",
+        target="exalted",
+        status="any",
+        item_id="chaos",
+        metric="price",
+    )
+    demand = trade2.read_item_history(
+        league="Fate",
+        category="Currency",
+        target="exalted",
+        status="any",
+        item_id="chaos",
+        metric="demand",
+    )
+
+    assert [item["value"] for item in price] == [4, 5]
+    assert [item["value"] for item in demand] == [100, 120]

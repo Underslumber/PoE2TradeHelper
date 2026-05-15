@@ -69,6 +69,7 @@ window.initEconomyTable = initEconomyTable;
 // Shared live page state
 
 const i18n = window.POE2_I18N || { ru: {}, en: {} };
+const HISTORY_SERIES_LIMIT = 1500;
 
 const state = {
   lang: localStorage.getItem('poe2-lang') || 'ru',
@@ -1889,25 +1890,26 @@ async function loadAccountChartSeries(request) {
   state.accountChartSeriesLoading[request.key] = true;
   try {
     const params = new URLSearchParams({
-      limit: '200',
+      limit: String(HISTORY_SERIES_LIMIT),
       league: request.league,
       category: request.category,
+      item_id: request.itemId,
       target: request.target,
       status: request.status,
+      metric: 'price',
     });
-    const response = await fetch(`/api/trade/history?${params.toString()}`);
+    const response = await fetch(`/api/trade/history/item?${params.toString()}`);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
     const seen = new Set();
-    const series = (data.history || [])
-      .filter(snapshot => snapshot && Number(snapshot.created_ts || 0) > 0)
+    const series = (data.series || [])
+      .filter(point => point && Number(point.created_ts || 0) > 0)
       .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0))
-      .map(snapshot => {
-        const createdTs = Number(snapshot.created_ts || 0);
+      .map(point => {
+        const createdTs = Number(point.created_ts || 0);
         if (seen.has(createdTs)) return null;
         seen.add(createdTs);
-        const row = rowsById(snapshot).get(request.itemId);
-        const value = rateValue(row);
+        const value = Number(point.value);
         return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
       })
       .filter(value => value !== null);
@@ -1965,26 +1967,33 @@ async function loadHistoricalItemSeries(currentData, itemId, metric) {
   const key = detailSeriesKey(currentData, itemId, metric);
   if (state.detailSeriesCache[key]) return state.detailSeriesCache[key];
   const params = new URLSearchParams({
-    limit: '200',
+    limit: String(HISTORY_SERIES_LIMIT),
     league: currentData.league || byId('live-league')?.value || '',
     category: currentData.category || state.selectedCategory,
+    item_id: itemId,
     target: currentData.target || selectedTarget(),
     status: currentData.status || byId('live-status')?.value || 'any',
+    metric,
   });
-  const response = await fetch(`/api/trade/history?${params.toString()}`);
+  const response = await fetch(`/api/trade/history/item?${params.toString()}`);
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
-  const snapshots = [...(data.history || []), currentData]
-    .filter(snapshot => snapshot && Number(snapshot.created_ts || 0) > 0)
+  const currentRow = rowsById(currentData).get(itemId);
+  const currentValue = metric === 'demand' ? Number(currentRow?.volume) : rateValue(currentRow);
+  const points = [...(data.series || [])];
+  if (currentValue > 0 && Number(currentData?.created_ts || 0) > 0) {
+    points.push({ created_ts: currentData.created_ts, value: currentValue });
+  }
+  const sortedPoints = points
+    .filter(point => point && Number(point.created_ts || 0) > 0)
     .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0));
   const seen = new Set();
-  const series = snapshots
-    .map(snapshot => {
-      const createdTs = Number(snapshot.created_ts || 0);
+  const series = sortedPoints
+    .map(point => {
+      const createdTs = Number(point.created_ts || 0);
       if (seen.has(createdTs)) return null;
       seen.add(createdTs);
-      const row = rowsById(snapshot).get(itemId);
-      const value = metric === 'demand' ? Number(row?.volume) : rateValue(row);
+      const value = Number(point.value);
       return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
     })
     .filter(value => value !== null);

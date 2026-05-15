@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import ICONS_DIR
 from app.db.migrate import migrate
+from app.market_service import market_snapshot_service
 from app.web.routes import router
 
 app = FastAPI(title="PoE2 Trade Helper")
@@ -13,8 +14,14 @@ templates = Jinja2Templates(directory="app/web/templates")
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
     migrate()
+    await market_snapshot_service.start()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await market_snapshot_service.stop()
 
 
 @app.get("/health")

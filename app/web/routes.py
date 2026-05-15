@@ -29,6 +29,7 @@ from app.account import (
     utc_now,
     verify_password,
 )
+from app.ai_context import load_ai_market_context
 from app.db.models import (
     PinnedPosition,
     Row,
@@ -41,6 +42,7 @@ from app.db.models import (
 from app.db.session import get_session
 from app.export.export_csv import export_rows_csv
 from app.export.export_jsonl import export_rows_jsonl
+from app.market_service import market_snapshot_service
 from app.notifications import (
     normalize_event_type,
     notification_rule_payload,
@@ -56,6 +58,7 @@ from app.trade2 import (
     get_seller_lots_analysis,
     get_trade_leagues,
     get_trade_static,
+    read_item_history,
     read_history,
     read_latest_rates,
 )
@@ -966,6 +969,11 @@ def api_trade_category_rates_latest(
     return latest
 
 
+@router.get("/api/trade/market-snapshot-service")
+def api_trade_market_snapshot_service():
+    return market_snapshot_service.status()
+
+
 @router.get("/api/trade/seller-lots")
 async def api_trade_seller_lots(
     league: str = Query(...),
@@ -1017,7 +1025,7 @@ async def api_trade_seller_lot_market(
 
 @router.get("/api/trade/history")
 def api_trade_history(
-    limit: int = Query(30, ge=1, le=200),
+    limit: int = Query(30, ge=1, le=1500),
     league: str | None = Query(None),
     category: str | None = Query(None),
     target: str | None = Query(None),
@@ -1032,6 +1040,53 @@ def api_trade_history(
             status=status,
         )
     }
+
+
+@router.get("/api/trade/history/item")
+def api_trade_item_history(
+    league: str = Query(...),
+    category: str = Query(...),
+    item_id: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    metric: str = Query("price", pattern="^(price|demand|offers)$"),
+    limit: int = Query(1000, ge=1, le=2000),
+):
+    return {
+        "series": read_item_history(
+            league=league,
+            category=category,
+            item_id=item_id,
+            target=target,
+            status=status,
+            metric=metric,
+            limit=limit,
+        )
+    }
+
+
+@router.get("/api/ai/market-context")
+async def api_ai_market_context(
+    league: str = Query(...),
+    category: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    league_day: int | None = Query(None, ge=0),
+    limit: int = Query(80, ge=1, le=250),
+    refresh: bool = Query(False),
+):
+    try:
+        return await load_ai_market_context(
+            league=league,
+            category=category,
+            target=target,
+            status=status,
+            league_day=league_day,
+            limit=limit,
+            refresh=refresh,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
 
 
 @router.get("/api/rows")
