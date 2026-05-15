@@ -60,7 +60,7 @@ PoE2 Trade Helper - черновик помощника для торговли 
 Запускай после изменений в Python-коде:
 
 ```powershell
-python -m py_compile mcp_server.py app\config.py app\version.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\funpay_market.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py app\db\migrate_jsonl_to_sqlite.py app\trade\api_client.py app\trade\cache.py app\trade\history.py app\trade\logic.py app\trade\market.py app\trade\math_utils.py
+python -m py_compile mcp_server.py app\config.py app\version.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\funpay_market.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py app\db\migrate_jsonl_to_sqlite.py app\trade\api_client.py app\trade\cache.py app\trade\history.py
 ```
 
 Эта команда проверяет синтаксис ключевых Python-файлов без запуска приложения и без сетевых запросов.
