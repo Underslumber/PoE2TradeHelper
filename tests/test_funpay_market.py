@@ -1,4 +1,6 @@
-from app.funpay_market import aggregate_funpay_offers, parse_funpay_chips_html
+from datetime import datetime, timedelta, timezone
+
+from app.funpay_market import aggregate_funpay_offers, build_funpay_calendar_recommendations, parse_funpay_chips_html
 
 
 def test_parse_funpay_chips_html_extracts_public_offer_rows():
@@ -93,3 +95,30 @@ def test_aggregate_funpay_offers_uses_liquid_low_market():
     assert stats["ignored_high_offers"] == 4
     assert stats["low_market_ceiling"] < 11
     assert stats["market_price"] < 4.5
+
+
+def test_funpay_calendar_recommendations_find_buy_and_sell_windows():
+    base = datetime(2026, 5, 4, 9, tzinfo=timezone.utc)
+    points = []
+    for week in range(3):
+        monday = base + timedelta(days=week * 7)
+        wednesday = monday + timedelta(days=2)
+        for hour, price in [(9, 10), (10, 11), (18, 16)]:
+            ts = (monday + timedelta(hours=hour - 9)).timestamp()
+            points.append({"hour_ts": ts, "market_price": price})
+        for hour, price in [(9, 20), (20, 31), (21, 32)]:
+            ts = (wednesday + timedelta(hours=hour - 9)).timestamp()
+            points.append({"hour_ts": ts, "market_price": price})
+
+    recommendations = build_funpay_calendar_recommendations(points)
+
+    expected_buy_weekday = datetime.fromtimestamp(points[0]["hour_ts"], tz=timezone.utc).astimezone().weekday()
+    expected_sell_weekday = datetime.fromtimestamp(points[-1]["hour_ts"], tz=timezone.utc).astimezone().weekday()
+    expected_buy_hour = datetime.fromtimestamp(points[0]["hour_ts"], tz=timezone.utc).astimezone().hour
+    expected_sell_hour = datetime.fromtimestamp(points[-1]["hour_ts"], tz=timezone.utc).astimezone().hour
+
+    assert recommendations["buy"]["weekday"] == expected_buy_weekday
+    assert recommendations["sell"]["weekday"] == expected_sell_weekday
+    assert any(item["start_hour"] <= expected_buy_hour < item["end_hour"] for item in recommendations["buy"]["hour_intervals"])
+    assert any(item["start_hour"] <= expected_sell_hour < item["end_hour"] for item in recommendations["sell"]["hour_intervals"])
+    assert recommendations["confidence"] == "insufficient"

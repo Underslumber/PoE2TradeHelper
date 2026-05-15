@@ -2005,7 +2005,7 @@ async function loadRubMarket(options = {}) {
       league: byId('live-league')?.value || '',
       target: rubMarketTarget(),
       refresh: options.refresh ? 'true' : 'false',
-      history_days: '7',
+      history_days: '30',
     });
     const data = await fetchAccountJson(`/api/account/funpay-rub?${params.toString()}`);
     state.rubMarket.context = data;
@@ -2062,6 +2062,55 @@ function rubLowMarketBasis(row) {
   if (ignored !== null && ignored > 0) parts.push(`${t('rubIgnoredHighOffers')}: ${formatAmount(ignored)}`);
   if (ceiling !== null) parts.push(`${t('rubLowMarketCeiling')}: ${formatRub(ceiling)}`);
   return parts.join(' · ') || t('rubLowMarketFallback');
+}
+
+function rubWeekdayLabel(weekday) {
+  const index = Number(weekday);
+  const keys = ['weekdayMon', 'weekdayTue', 'weekdayWed', 'weekdayThu', 'weekdayFri', 'weekdaySat', 'weekdaySun'];
+  return keys[index] ? t(keys[index]) : '-';
+}
+
+function rubHourRangeLabel(interval) {
+  const rawStart = Number(interval?.start_hour ?? 0);
+  const start = Math.max(0, Math.min(23, Number.isFinite(rawStart) ? rawStart : 0));
+  const rawEnd = Number(interval?.end_hour ?? start + 1);
+  const endRaw = Math.max(1, Math.min(24, Number.isFinite(rawEnd) ? rawEnd : start + 1));
+  const end = Math.max(start + 1, endRaw);
+  const fmt = hour => `${String(hour).padStart(2, '0')}:00`;
+  return `${fmt(start)}-${fmt(end)}`;
+}
+
+function rubCalendarConfidenceLabel(value) {
+  const key = {
+    ok: 'rubCalendarConfidenceOk',
+    partial: 'rubCalendarConfidencePartial',
+    insufficient: 'rubCalendarConfidenceInsufficient',
+  }[value || 'insufficient'];
+  return t(key || 'rubCalendarConfidenceInsufficient');
+}
+
+function rubCalendarRecommendationCard(kind, data, calendar) {
+  if (!data) {
+    return `
+      <article class="rub-analysis-card rub-calendar-card ${kind}">
+        <span class="summary-label">${t(kind === 'sell' ? 'rubSellWindowTitle' : 'rubBuyWindowTitle')}</span>
+        <strong>${t('rubCalendarNeedData')}</strong>
+        <small>${t('rubCalendarNeedDataHint')}</small>
+      </article>
+    `;
+  }
+  const intervals = Array.isArray(data.hour_intervals) ? data.hour_intervals : [];
+  const intervalText = intervals.length ? intervals.map(rubHourRangeLabel).join(', ') : t('rubCalendarNoIntervals');
+  const avgPrice = optionalFiniteNumber(data.avg_price);
+  const sourceText = data.hour_source === 'all_days' ? t('rubCalendarAllDaysHours') : t('rubCalendarWeekdayHours');
+  return `
+    <article class="rub-analysis-card rub-calendar-card ${kind}">
+      <span class="summary-label">${t(kind === 'sell' ? 'rubSellWindowTitle' : 'rubBuyWindowTitle')}</span>
+      <strong>${rubWeekdayLabel(data.weekday)} · ${escapeHtml(intervalText)}</strong>
+      <small>${t('rubCalendarAvg')}: ${avgPrice === null ? '-' : formatRub(avgPrice)} · ${t('rubCalendarPoints')}: ${formatAmount(data.points || 0)}</small>
+      <small>${sourceText} · ${rubCalendarConfidenceLabel(calendar?.confidence)}</small>
+    </article>
+  `;
 }
 
 function renderRubMarketPanel() {
@@ -2146,6 +2195,16 @@ function renderRubMarketPanel() {
         </article>
       `
       : `<p class="text-secondary">${t('rubMarketNoData')}</p>`;
+  }
+  const calendarEl = byId('rub-market-calendar');
+  if (calendarEl) {
+    const calendar = context.calendar_recommendations || {};
+    calendarEl.innerHTML = focusPrice
+      ? `
+        ${rubCalendarRecommendationCard('buy', calendar.buy, calendar)}
+        ${rubCalendarRecommendationCard('sell', calendar.sell, calendar)}
+      `
+      : '';
   }
   const sourceLink = byId('rub-market-source-link');
   if (sourceLink) {

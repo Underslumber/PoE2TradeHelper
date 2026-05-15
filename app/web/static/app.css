@@ -851,7 +851,8 @@ body {
   padding-top: 14px;
 }
 .rub-market-summary,
-.rub-market-analytics {
+.rub-market-analytics,
+.rub-market-calendar {
   display: grid;
   gap: 10px;
 }
@@ -891,11 +892,21 @@ body {
   grid-template-columns: repeat(4, minmax(150px, 1fr));
   margin-bottom: 10px;
 }
+.rub-market-calendar {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  margin-bottom: 10px;
+}
 .rub-analysis-card {
   background: #111b23;
   border: 1px solid #263741;
   min-width: 0;
   padding: 10px;
+}
+.rub-calendar-card {
+  border-left: 3px solid #42d49b;
+}
+.rub-calendar-card.sell {
+  border-left-color: #ffb86b;
 }
 .rub-analysis-card strong,
 .rub-analysis-card span,
@@ -1790,6 +1801,7 @@ body {
   .rub-market-summary,
   .rub-market-card,
   .rub-market-analytics,
+  .rub-market-calendar,
   .admin-summary,
   .admin-metrics-grid,
   .cabinet-grid,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import asyncio
 import statistics
@@ -26,7 +27,7 @@ from app.market_snapshots import (
 
 FUNPAY_POE2_CHIPS_URL = "https://funpay.com/chips/209/"
 FUNPAY_CACHE_SECONDS = 15 * 60
-FUNPAY_CONTEXT_SCHEMA_VERSION = "funpay-rub-market/v2"
+FUNPAY_CONTEXT_SCHEMA_VERSION = "funpay-rub-market/v3"
 
 FUNPAY_SIDE_TO_TRADE_ID = {
     "101": "alch",
@@ -536,6 +537,150 @@ def _hourly_history(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [buckets[key] for key in sorted(buckets)]
 
 
+def _rub_point_price(point: dict[str, Any]) -> float | None:
+    value = point.get("market_price") or point.get("trimmed_median") or point.get("median") or point.get("best")
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _local_dt_from_ts(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+
+
+def _average(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _calendar_day_score(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    prices = [float(item["price"]) for item in items if item.get("price") is not None]
+    if not prices:
+        return None
+    sample = items[0]
+    return {
+        "weekday": sample["weekday"],
+        "avg_price": _average(prices),
+        "min_price": min(prices),
+        "max_price": max(prices),
+        "points": len(prices),
+    }
+
+
+def _merge_hour_intervals(hours: set[int]) -> list[tuple[int, int]]:
+    if not hours:
+        return []
+    sorted_hours = sorted(hours)
+    intervals: list[tuple[int, int]] = []
+    start = previous = sorted_hours[0]
+    for hour in sorted_hours[1:]:
+        if hour == previous + 1:
+            previous = hour
+            continue
+        intervals.append((start, previous + 1))
+        start = previous = hour
+    intervals.append((start, previous + 1))
+    return intervals
+
+
+def _hour_intervals(items: list[dict[str, Any]], *, prefer: str) -> list[dict[str, Any]]:
+    buckets: dict[int, list[float]] = {}
+    for item in items:
+        buckets.setdefault(int(item["hour"]), []).append(float(item["price"]))
+    if not buckets:
+        return []
+    scores = [
+        {
+            "hour": hour,
+            "avg_price": _average(prices),
+            "points": len(prices),
+        }
+        for hour, prices in buckets.items()
+    ]
+    reverse = prefer == "high"
+    scores.sort(key=lambda item: item["avg_price"] or 0, reverse=reverse)
+    min_hours = 2 if len(scores) >= 2 else 1
+    take = min(6, max(min_hours, math.ceil(len(scores) * 0.25)))
+    selected = {int(item["hour"]) for item in scores[:take]}
+    intervals = []
+    for start_hour, end_hour in _merge_hour_intervals(selected):
+        interval_items = [item for item in items if start_hour <= int(item["hour"]) < end_hour]
+        prices = [float(item["price"]) for item in interval_items]
+        intervals.append(
+            {
+                "start_hour": start_hour,
+                "end_hour": end_hour,
+                "avg_price": _average(prices),
+                "points": len(prices),
+            }
+        )
+    intervals.sort(key=lambda item: item["avg_price"] or 0, reverse=reverse)
+    return intervals[:2]
+
+
+def _calendar_recommendation(
+    items: list[dict[str, Any]],
+    *,
+    prefer: str,
+) -> dict[str, Any] | None:
+    day_buckets: dict[int, list[dict[str, Any]]] = {}
+    for item in items:
+        day_buckets.setdefault(int(item["weekday"]), []).append(item)
+    day_scores = [score for score in (_calendar_day_score(values) for values in day_buckets.values()) if score]
+    if not day_scores:
+        return None
+    reverse = prefer == "high"
+    day_scores.sort(key=lambda item: item["avg_price"] or 0, reverse=reverse)
+    selected_day = day_scores[0]
+    day_items = day_buckets.get(int(selected_day["weekday"]), [])
+    hour_source = "weekday"
+    if len({item["hour"] for item in day_items}) < 2:
+        day_items = items
+        hour_source = "all_days"
+    return {
+        **selected_day,
+        "hour_intervals": _hour_intervals(day_items, prefer=prefer),
+        "hour_source": hour_source,
+    }
+
+
+def build_funpay_calendar_recommendations(hourly_history: list[dict[str, Any]]) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for point in hourly_history:
+        created_ts = float(point.get("hour_ts") or point.get("created_ts") or 0)
+        price = _rub_point_price(point)
+        if created_ts <= 0 or price is None:
+            continue
+        local_dt = _local_dt_from_ts(created_ts)
+        items.append(
+            {
+                "created_ts": created_ts,
+                "date": local_dt.date().isoformat(),
+                "weekday": local_dt.weekday(),
+                "hour": local_dt.hour,
+                "price": price,
+            }
+        )
+    sample_days = len({item["date"] for item in items})
+    weekday_count = len({item["weekday"] for item in items})
+    if len(items) < 24 or weekday_count < 3:
+        confidence = "insufficient"
+    elif len(items) < 72 or weekday_count < 7:
+        confidence = "partial"
+    else:
+        confidence = "ok"
+    return {
+        "timezone": _local_dt_from_ts(time.time()).tzname(),
+        "sample_hours": len(items),
+        "sample_days": sample_days,
+        "weekday_count": weekday_count,
+        "confidence": confidence,
+        "buy": _calendar_recommendation(items, prefer="low"),
+        "sell": _calendar_recommendation(items, prefer="high"),
+    }
+
+
 def _group_latest_rows(
     db: Session,
     snapshot: FunpayRubSnapshot,
@@ -618,6 +763,7 @@ def build_funpay_rub_context(
         "focus": by_id.get(target_currency),
         "focus_history": focus_history,
         "focus_hourly_history": focus_hourly_history,
+        "calendar_recommendations": build_funpay_calendar_recommendations(focus_hourly_history),
         "flow_note": "stock_and_offer_deltas_are_listing_proxies_not_confirmed_sales",
     }
 
@@ -645,6 +791,7 @@ async def load_funpay_rub_context(
             "focus": None,
             "focus_history": [],
             "focus_hourly_history": [],
+            "calendar_recommendations": build_funpay_calendar_recommendations([]),
             "flow_note": "stock_and_offer_deltas_are_listing_proxies_not_confirmed_sales",
         }
     return build_funpay_rub_context(
