@@ -65,6 +65,14 @@ python -m py_compile mcp_server.py app\config.py app\version.py app\account.py a
 
 Эта команда проверяет синтаксис ключевых Python-файлов без запуска приложения и без сетевых запросов.
 
+После изменений в Python-коде также запускай unit-тесты:
+
+```powershell
+python -m pytest -q
+```
+
+`tests/conftest.py` добавляет корень репозитория в `sys.path`, поэтому запускай `pytest` из корня проекта.
+
 Для проверки публичных PoE2 trade2 справочников можно выполнить:
 
 ```powershell
