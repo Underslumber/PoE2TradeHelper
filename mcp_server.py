@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import time
 import logging
@@ -194,18 +195,20 @@ async def trade_exchange(
         return error_response(e)
 
 if __name__ == "__main__":
-    print("Запуск MCP-сервера для PoE2 Trade Helper...")
-    print(f"User-Agent: {UA}")
-    print("Доступные инструменты:")
-    print("- trade_leagues()")
-    print("- trade_static_data()")
-    print("- get_currency_exchange(realm, hour=None)")
-    print("- list_characters(realm='poe2')")
-    print("- get_character(name, realm='poe2')")
-    print("- trade_search(league, query)")
-    print("- trade_fetch(ids, query_id)")
-    print("- trade_exchange(league, have, want, status='online')")
-    print("\nДля выхода нажмите Ctrl+C")
-    
+    # The MCP stdio transport owns stdout for JSON-RPC framing; any banner
+    # output must go to stderr or it corrupts the protocol stream.
+    print("Запуск MCP-сервера для PoE2 Trade Helper...", file=sys.stderr)
+    print(f"User-Agent: {UA}", file=sys.stderr)
+    print("Доступные инструменты:", file=sys.stderr)
+    print("- trade_leagues()", file=sys.stderr)
+    print("- trade_static_data()", file=sys.stderr)
+    print("- get_currency_exchange(realm, hour=None)", file=sys.stderr)
+    print("- list_characters(realm='poe2')", file=sys.stderr)
+    print("- get_character(name, realm='poe2')", file=sys.stderr)
+    print("- trade_search(league, query)", file=sys.stderr)
+    print("- trade_fetch(ids, query_id)", file=sys.stderr)
+    print("- trade_exchange(league, have, want, status='online')", file=sys.stderr)
+    print("\nДля выхода нажмите Ctrl+C", file=sys.stderr)
+
     # Запускаем MCP-сервер
     mcp.run()

@@ -222,19 +222,32 @@ def normalize_exchange_result(payload: dict[str, Any], limit: int = 50) -> dict[
 
 
 async def get_trade_leagues() -> list[dict[str, str]]:
-    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-        response = await client.get(f"{TRADE2_BASE}/data/leagues")
-        response.raise_for_status()
-    leagues = response.json().get("result", [])
-    return [
-        {
-            "id": league.get("id", ""),
-            "text": league.get("text") or league.get("id", ""),
-            "realm": league.get("realm", "poe2"),
-        }
-        for league in leagues
-        if league.get("realm") == "poe2" and league.get("id")
-    ]
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                response = await client.get(f"{TRADE2_BASE}/data/leagues")
+                if response.status_code == 429 and attempt < 2:
+                    retry_after = response.headers.get("Retry-After")
+                    wait = int(retry_after) if retry_after and retry_after.isdigit() else 2 * (attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
+                response.raise_for_status()
+            leagues = response.json().get("result", [])
+            return [
+                {
+                    "id": league.get("id", ""),
+                    "text": league.get("text") or league.get("id", ""),
+                    "realm": league.get("realm", "poe2"),
+                }
+                for league in leagues
+                if league.get("realm") == "poe2" and league.get("id")
+            ]
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            last_exc = exc
+            if attempt < 2:
+                await asyncio.sleep(2 * (attempt + 1))
+    raise last_exc if last_exc else RuntimeError("trade leagues fetch failed")
 
 
 async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:

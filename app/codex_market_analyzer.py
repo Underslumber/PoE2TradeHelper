@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -177,7 +178,8 @@ def _analysis_file_path(context: dict[str, Any], output_dir: Path) -> Path:
     league = _safe_slug((context.get("league") or {}).get("id"))
     category = _safe_slug(((context.get("category_summaries") or [{}])[0] or {}).get("category"))
     target = _safe_slug((context.get("benchmarks") or {}).get("target_currency"))
-    return output_dir / f"{timestamp}-{league}-{category}-{target}.json"
+    suffix = uuid.uuid4().hex[:8]
+    return output_dir / f"{timestamp}-{league}-{category}-{target}-{suffix}.json"
 
 
 def save_codex_market_analysis(

@@ -72,7 +72,7 @@ from app.trade2 import (
 from app.version import APP_VERSION
 
 router = APIRouter()
-templates = Jinja2Templates(directory="app/web/templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.globals["app_version"] = APP_VERSION
 SESSION_COOKIE = "poe2_session"
 AI_MARKET_CONTEXT_FEATURE = "market_context"
@@ -82,6 +82,12 @@ AI_MARKET_ANALYSIS_JOBS: dict[str, dict] = {}
 AI_CURRENCY_ANALYSIS_JOBS: dict[str, dict] = {}
 AI_MARKET_ANALYSIS_MAX_JOBS = 50
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Strong references to fire-and-forget tasks so the event loop does not
+# garbage-collect them mid-execution.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+# Serializes the AI daily-quota check and slot reservation so concurrent
+# requests cannot both pass a stale remaining-count check.
+_AI_QUOTA_LOCK = asyncio.Lock()
 
 
 def trade_api_error(exc: Exception) -> JSONResponse:
@@ -209,6 +215,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         max_age=SESSION_DAYS * 24 * 60 * 60,
         httponly=True,
         samesite="lax",
+        secure=os.environ.get("APP_BASE_URL", "").lower().startswith("https"),
     )
 
 
@@ -311,18 +318,18 @@ def _record_ai_usage(
     success: bool,
     status_code: int,
     duration_ms: int | None = None,
-) -> None:
-    db.add(
-        AIUsageEvent(
-            user_id=user.id,
-            feature=feature,
-            created_at=now_iso(),
-            success=1 if success else 0,
-            status_code=status_code,
-            duration_ms=duration_ms,
-        )
+) -> AIUsageEvent:
+    event = AIUsageEvent(
+        user_id=user.id,
+        feature=feature,
+        created_at=now_iso(),
+        success=1 if success else 0,
+        status_code=status_code,
+        duration_ms=duration_ms,
     )
+    db.add(event)
     db.commit()
+    return event
 
 
 def _prune_ai_market_analysis_jobs() -> None:
@@ -399,7 +406,9 @@ async def _run_ai_market_analysis_job(job_id: str, params: dict) -> None:
 
 
 def _schedule_ai_market_analysis_job(job_id: str, params: dict) -> None:
-    asyncio.create_task(_run_ai_market_analysis_job(job_id, params))
+    task = asyncio.create_task(_run_ai_market_analysis_job(job_id, params))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def _run_ai_currency_analysis_job(job_id: str, params: dict) -> None:
@@ -441,7 +450,9 @@ async def _run_ai_currency_analysis_job(job_id: str, params: dict) -> None:
 
 
 def _schedule_ai_currency_analysis_job(job_id: str, params: dict) -> None:
-    asyncio.create_task(_run_ai_currency_analysis_job(job_id, params))
+    task = asyncio.create_task(_run_ai_currency_analysis_job(job_id, params))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _parse_event_datetime(value: str) -> datetime | None:
@@ -560,16 +571,23 @@ def _row_price(row: dict | None) -> float | None:
     return None
 
 
-def _latest_rates_snapshot(league: str, category: str, target: str) -> dict | None:
+def _latest_rates_snapshot(league: str, category: str, target: str, cache: dict | None = None) -> dict | None:
+    key = ("latest_rates", league, category, target)
+    if cache is not None and key in cache:
+        return cache[key]
+    result = None
     for status in ("any", "online"):
         snapshot = read_latest_rates(league=league, category=category, target=target, status=status)
         if snapshot:
-            return snapshot
-    return None
+            result = snapshot
+            break
+    if cache is not None:
+        cache[key] = result
+    return result
 
 
-def _latest_item_market(league: str, category: str, target: str, item_id: str) -> dict:
-    snapshot = _latest_rates_snapshot(league, category, target)
+def _latest_item_market(league: str, category: str, target: str, item_id: str, cache: dict | None = None) -> dict:
+    snapshot = _latest_rates_snapshot(league, category, target, cache)
     if not snapshot:
         return {}
     row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
@@ -588,12 +606,17 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str) -
     }
 
 
-def _benchmark_price(league: str, target_currency: str | None, benchmark_currency: str | None) -> float | None:
+def _benchmark_price(
+    league: str,
+    target_currency: str | None,
+    benchmark_currency: str | None,
+    cache: dict | None = None,
+) -> float | None:
     if not target_currency or not benchmark_currency:
         return None
     if target_currency == benchmark_currency:
         return 1.0
-    snapshot = _latest_rates_snapshot(league, "Currency", target_currency)
+    snapshot = _latest_rates_snapshot(league, "Currency", target_currency, cache)
     if not snapshot:
         return None
     row = next((item for item in snapshot.get("rows") or [] if item.get("id") == benchmark_currency), None)
@@ -617,24 +640,31 @@ def _benchmark_price_at(
     target_currency: str | None,
     benchmark_currency: str | None,
     timestamp: float | None,
+    cache: dict | None = None,
 ) -> float | None:
     if not target_currency or not benchmark_currency or timestamp is None:
         return None
     if target_currency == benchmark_currency:
         return 1.0
-    snapshots = read_history(
-        limit=1000,
-        league=league,
-        category="Currency",
-        target=target_currency,
-        status="any",
-    ) or read_history(
-        limit=1000,
-        league=league,
-        category="Currency",
-        target=target_currency,
-        status="online",
-    )
+    history_key = ("benchmark_history", league, target_currency)
+    if cache is not None and history_key in cache:
+        snapshots = cache[history_key]
+    else:
+        snapshots = read_history(
+            limit=1000,
+            league=league,
+            category="Currency",
+            target=target_currency,
+            status="any",
+        ) or read_history(
+            limit=1000,
+            league=league,
+            category="Currency",
+            target=target_currency,
+            status="online",
+        )
+        if cache is not None:
+            cache[history_key] = snapshots
     candidates = []
     for snapshot in snapshots:
         created_ts = snapshot.get("created_ts")
@@ -657,8 +687,8 @@ def _prefixed(prefix: str, values: dict) -> dict:
     return {f"{prefix}_{key}": value for key, value in values.items()}
 
 
-def _pin_payload(pin: PinnedPosition) -> dict:
-    market = _latest_item_market(pin.league, pin.category, pin.target_currency, pin.item_id)
+def _pin_payload(pin: PinnedPosition, cache: dict | None = None) -> dict:
+    market = _latest_item_market(pin.league, pin.category, pin.target_currency, pin.item_id, cache)
     return {
         "id": pin.id,
         "league": pin.league,
@@ -677,7 +707,7 @@ def _pin_payload(pin: PinnedPosition) -> dict:
     }
 
 
-def _trade_payload(trade: TradeJournalEntry) -> dict:
+def _trade_payload(trade: TradeJournalEntry, cache: dict | None = None) -> dict:
     pnl = calculate_trade_pnl(
         quantity=trade.quantity,
         entry_price=trade.entry_price,
@@ -686,10 +716,10 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
         exit_currency=trade.exit_currency,
     )
     benchmark_currency = trade.benchmark_currency or "divine"
-    market = _latest_item_market(trade.league, trade.category, trade.entry_currency, trade.item_id)
+    market = _latest_item_market(trade.league, trade.category, trade.entry_currency, trade.item_id, cache)
     current_price = market.get("price")
     is_benchmark_item = trade.item_id == benchmark_currency
-    current_benchmark_price = 1.0 if is_benchmark_item else _benchmark_price(trade.league, trade.entry_currency, benchmark_currency)
+    current_benchmark_price = 1.0 if is_benchmark_item else _benchmark_price(trade.league, trade.entry_currency, benchmark_currency, cache)
     entry_benchmark_price = 1.0 if is_benchmark_item else trade.entry_benchmark_price
     if entry_benchmark_price is None:
         entry_benchmark_price = _benchmark_price_at(
@@ -697,6 +727,7 @@ def _trade_payload(trade: TradeJournalEntry) -> dict:
             trade.entry_currency,
             benchmark_currency,
             _iso_timestamp(trade.entry_at),
+            cache,
         )
     exit_benchmark_price = 1.0 if is_benchmark_item and trade.exit_price is not None else trade.exit_benchmark_price
     if is_benchmark_item:
@@ -979,7 +1010,8 @@ def api_account_pins(request: Request, db: Session = Depends(get_db)):
         .where(PinnedPosition.user_id == user.id)
         .order_by(PinnedPosition.updated_at.desc())
     ).all()
-    return {"pins": [_pin_payload(pin) for pin in pins]}
+    market_cache: dict = {}
+    return {"pins": [_pin_payload(pin, market_cache) for pin in pins]}
 
 
 @router.post("/api/account/pins")
@@ -1056,7 +1088,8 @@ def api_account_trades(request: Request, db: Session = Depends(get_db)):
         .where(TradeJournalEntry.user_id == user.id)
         .order_by(TradeJournalEntry.updated_at.desc())
     ).all()
-    return {"trades": [_trade_payload(trade) for trade in trades]}
+    market_cache: dict = {}
+    return {"trades": [_trade_payload(trade, market_cache) for trade in trades]}
 
 
 @router.post("/api/account/trades")
@@ -1553,17 +1586,25 @@ async def api_ai_market_context(
     user = require_ai_access(request, db)
     if isinstance(user, JSONResponse):
         return user
-    quota = _ai_quota_payload(db)
-    if quota["remaining"] == 0:
-        _record_ai_usage(
+    async with _AI_QUOTA_LOCK:
+        quota = _ai_quota_payload(db)
+        if quota["remaining"] == 0:
+            _record_ai_usage(
+                db,
+                user,
+                feature=AI_MARKET_CONTEXT_FEATURE,
+                success=False,
+                status_code=429,
+                duration_ms=0,
+            )
+            return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+        usage_event = _record_ai_usage(
             db,
             user,
             feature=AI_MARKET_CONTEXT_FEATURE,
-            success=False,
-            status_code=429,
-            duration_ms=0,
+            success=True,
+            status_code=200,
         )
-        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
     started = perf_counter()
     try:
         data = await load_ai_market_context(
@@ -1575,26 +1616,16 @@ async def api_ai_market_context(
             limit=limit,
             refresh=refresh,
         )
-        _record_ai_usage(
-            db,
-            user,
-            feature=AI_MARKET_CONTEXT_FEATURE,
-            success=True,
-            status_code=200,
-            duration_ms=int((perf_counter() - started) * 1000),
-        )
+        usage_event.duration_ms = int((perf_counter() - started) * 1000)
+        db.commit()
         if isinstance(data, dict):
             data["ai_quota"] = _ai_quota_payload(db)
         return data
     except Exception as exc:
-        _record_ai_usage(
-            db,
-            user,
-            feature=AI_MARKET_CONTEXT_FEATURE,
-            success=False,
-            status_code=502,
-            duration_ms=int((perf_counter() - started) * 1000),
-        )
+        usage_event.success = 0
+        usage_event.status_code = 502
+        usage_event.duration_ms = int((perf_counter() - started) * 1000)
+        db.commit()
         return trade_api_error(exc)
 
 
@@ -1607,17 +1638,6 @@ async def api_ai_market_analysis_create(
     user = require_ai_access(request, db)
     if isinstance(user, JSONResponse):
         return user
-    quota = _ai_quota_payload(db)
-    if quota["remaining"] == 0:
-        _record_ai_usage(
-            db,
-            user,
-            feature=AI_MARKET_ANALYSIS_FEATURE,
-            success=False,
-            status_code=429,
-            duration_ms=0,
-        )
-        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
 
     league = _text(payload, "league")
     category = _text(payload, "category")
@@ -1639,26 +1659,38 @@ async def api_ai_market_analysis_create(
         "refresh": bool(payload.get("refresh")),
         "timeout_seconds": min(max(_int_value(payload, "timeout_seconds", 600) or 600, 30), 1800),
     }
-    job_id = uuid.uuid4().hex
-    AI_MARKET_ANALYSIS_JOBS[job_id] = {
-        "job_id": job_id,
-        "user_id": user.id,
-        "status": "queued",
-        "created_at": now_iso(),
-        "params": params,
-        "assessment": None,
-        "analysis_path": None,
-        "error": None,
-    }
-    _prune_ai_market_analysis_jobs()
-    _record_ai_usage(
-        db,
-        user,
-        feature=AI_MARKET_ANALYSIS_FEATURE,
-        success=True,
-        status_code=202,
-        duration_ms=0,
-    )
+    async with _AI_QUOTA_LOCK:
+        quota = _ai_quota_payload(db)
+        if quota["remaining"] == 0:
+            _record_ai_usage(
+                db,
+                user,
+                feature=AI_MARKET_ANALYSIS_FEATURE,
+                success=False,
+                status_code=429,
+                duration_ms=0,
+            )
+            return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+        job_id = uuid.uuid4().hex
+        AI_MARKET_ANALYSIS_JOBS[job_id] = {
+            "job_id": job_id,
+            "user_id": user.id,
+            "status": "queued",
+            "created_at": now_iso(),
+            "params": params,
+            "assessment": None,
+            "analysis_path": None,
+            "error": None,
+        }
+        _prune_ai_market_analysis_jobs()
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_MARKET_ANALYSIS_FEATURE,
+            success=True,
+            status_code=202,
+            duration_ms=0,
+        )
     _schedule_ai_market_analysis_job(job_id, params)
     return JSONResponse(
         _ai_market_analysis_job_payload(AI_MARKET_ANALYSIS_JOBS[job_id]) | {"ai_quota": _ai_quota_payload(db)},
@@ -1694,17 +1726,6 @@ async def api_ai_currency_analysis_create(
     user = require_ai_access(request, db)
     if isinstance(user, JSONResponse):
         return user
-    quota = _ai_quota_payload(db)
-    if quota["remaining"] == 0:
-        _record_ai_usage(
-            db,
-            user,
-            feature=AI_CURRENCY_ANALYSIS_FEATURE,
-            success=False,
-            status_code=429,
-            duration_ms=0,
-        )
-        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
 
     league = _text(payload, "league")
     currency_id = _text(payload, "currency_id")
@@ -1727,27 +1748,39 @@ async def api_ai_currency_analysis_create(
         "refresh": bool(payload.get("refresh")),
         "timeout_seconds": min(max(_int_value(payload, "timeout_seconds", 600) or 600, 30), 1800),
     }
-    job_id = uuid.uuid4().hex
-    AI_CURRENCY_ANALYSIS_JOBS[job_id] = {
-        "job_id": job_id,
-        "user_id": user.id,
-        "status": "queued",
-        "created_at": now_iso(),
-        "params": params,
-        "context": None,
-        "assessment": None,
-        "analysis_path": None,
-        "error": None,
-    }
-    _prune_ai_currency_analysis_jobs()
-    _record_ai_usage(
-        db,
-        user,
-        feature=AI_CURRENCY_ANALYSIS_FEATURE,
-        success=True,
-        status_code=202,
-        duration_ms=0,
-    )
+    async with _AI_QUOTA_LOCK:
+        quota = _ai_quota_payload(db)
+        if quota["remaining"] == 0:
+            _record_ai_usage(
+                db,
+                user,
+                feature=AI_CURRENCY_ANALYSIS_FEATURE,
+                success=False,
+                status_code=429,
+                duration_ms=0,
+            )
+            return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+        job_id = uuid.uuid4().hex
+        AI_CURRENCY_ANALYSIS_JOBS[job_id] = {
+            "job_id": job_id,
+            "user_id": user.id,
+            "status": "queued",
+            "created_at": now_iso(),
+            "params": params,
+            "context": None,
+            "assessment": None,
+            "analysis_path": None,
+            "error": None,
+        }
+        _prune_ai_currency_analysis_jobs()
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_CURRENCY_ANALYSIS_FEATURE,
+            success=True,
+            status_code=202,
+            duration_ms=0,
+        )
     _schedule_ai_currency_analysis_job(job_id, params)
     return JSONResponse(
         _ai_market_analysis_job_payload(AI_CURRENCY_ANALYSIS_JOBS[job_id]) | {"ai_quota": _ai_quota_payload(db)},

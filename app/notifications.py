@@ -154,6 +154,12 @@ async def process_telegram_notifications(
     configured = telegram_is_configured()
     now = now_iso()
     for rule, pin in rules:
+        # The incoming prices are denominated in `target`; comparing them against
+        # a pin tracked in another currency would be meaningless, and overwriting
+        # the pin's currency from an unrelated request corrupts the user's choice.
+        if (pin.target_currency or "exalted") != target:
+            result["skipped"] += 1
+            continue
         row = row_map.get(pin.item_id)
         current_price = row_price(row)
         if current_price is None:
@@ -176,7 +182,6 @@ async def process_telegram_notifications(
         rule.last_price = current_price
         rule.updated_at = now
         pin.last_price = current_price
-        pin.target_currency = target
         pin.last_source = source
         pin.updated_at = now
     db.commit()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import uvicorn
 
@@ -17,7 +18,8 @@ from app.market_snapshots import collect_market_snapshots, parse_league_start, r
 
 
 def run_web():
-    uvicorn.run("app.web.main:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("app.web.main:app", host="0.0.0.0", port=port, reload=False)
 
 
 def main():
