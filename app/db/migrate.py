@@ -3,7 +3,7 @@ import os
 from sqlalchemy import select
 
 from app.account import hash_password, normalize_email, normalize_username, now_iso
-from app.db.models import Base, User
+from app.db.models import Base, CacheEntry, MarketHistory, User
 from app.db.session import engine
 
 
@@ -25,6 +25,18 @@ TRADE_JOURNAL_COLUMNS = {
     "benchmark_currency": "VARCHAR",
     "entry_benchmark_price": "FLOAT",
     "exit_benchmark_price": "FLOAT",
+}
+
+MARKET_HISTORY_COLUMNS = {
+    "status": "VARCHAR DEFAULT 'any'",
+    "source": "VARCHAR",
+    "change": "FLOAT",
+    "sparkline_json": "TEXT",
+    "sparkline_kind": "VARCHAR",
+    "max_volume_currency": "VARCHAR",
+    "max_volume_rate": "FLOAT",
+    "query_ids_json": "TEXT",
+    "errors_json": "TEXT",
 }
 
 
@@ -66,6 +78,14 @@ def _migrate_trade_journal_table() -> None:
             "SET benchmark_currency = 'divine' "
             "WHERE benchmark_currency IS NULL OR benchmark_currency = ''"
         )
+
+
+def _migrate_market_history_table() -> None:
+    _add_missing_columns("market_history", MARKET_HISTORY_COLUMNS)
+    if not _table_columns("market_history"):
+        return
+    with engine.begin() as conn:
+        conn.exec_driver_sql("UPDATE market_history SET status = 'any' WHERE status IS NULL OR status = ''")
 
 
 def _ensure_bootstrap_admin() -> None:
@@ -123,6 +143,10 @@ def migrate() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate_users_table()
     _migrate_trade_journal_table()
+    _migrate_market_history_table()
+    from app.db.migrate_jsonl_to_sqlite import migrate_history
+
+    migrate_history(verbose=False)
     _ensure_bootstrap_admin()
     _ensure_existing_admin()
 

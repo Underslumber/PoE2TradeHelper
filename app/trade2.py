@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from app.trade.cache import SQLiteCacheManager
+from app.trade.history import (
+    log_market_history,
+    read_item_history as _read_history_item,
+    read_latest_rates as _read_history_latest_rates,
+    read_market_history,
+)
+
 import asyncio
 import json
 import re
@@ -16,8 +24,9 @@ TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
 POE_SITE_BASE = "https://www.pathofexile.com"
 HISTORY_PATH = DATA_DIR / "trade_rate_history.jsonl"
-RATE_CACHE_TTL = 300
-RATE_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+TRADE_STATIC_CACHE_TTL = 3600
+TRADE_STATIC_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None}
+TRADE_STATIC_LOCK = asyncio.Lock()
 SELLER_LOTS_CACHE_TTL = 900
 SELLER_LOTS_FETCH_LIMIT = 100
 SELLER_MARKET_CACHE_TTL = 600
@@ -229,14 +238,25 @@ async def get_trade_leagues() -> list[dict[str, str]]:
 
 
 async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
-    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-        response, ru_response = await asyncio.gather(
-            client.get(f"{TRADE2_BASE}/data/static"),
-            client.get(f"{TRADE2_RU_BASE}/data/static"),
-        )
-        response.raise_for_status()
-        ru_response.raise_for_status()
-    return normalize_static_entries(response.json(), ru_response.json())
+    cached = TRADE_STATIC_CACHE.get("data")
+    if cached and time.time() - float(TRADE_STATIC_CACHE.get("created_ts") or 0) < TRADE_STATIC_CACHE_TTL:
+        return cached
+
+    async with TRADE_STATIC_LOCK:
+        cached = TRADE_STATIC_CACHE.get("data")
+        if cached and time.time() - float(TRADE_STATIC_CACHE.get("created_ts") or 0) < TRADE_STATIC_CACHE_TTL:
+            return cached
+        async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+            response, ru_response = await asyncio.gather(
+                client.get(f"{TRADE2_BASE}/data/static"),
+                client.get(f"{TRADE2_RU_BASE}/data/static"),
+            )
+            response.raise_for_status()
+            ru_response.raise_for_status()
+        data = normalize_static_entries(response.json(), ru_response.json())
+        TRADE_STATIC_CACHE["created_ts"] = time.time()
+        TRADE_STATIC_CACHE["data"] = data
+        return data
 
 
 async def _post_exchange(
@@ -261,6 +281,98 @@ async def _post_exchange(
             response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
         response.raise_for_status()
     return response.json()
+
+
+async def get_category_rates(
+    league: str,
+    category: str,
+    target: str = "divine",
+    status: str = "any",
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    cache_key = SQLiteCacheManager.get_dict_key("rate", league, category, target, status)
+    if not force_refresh:
+        cached = SQLiteCacheManager.get(cache_key)
+        if cached:
+            cached["cached"] = True
+            return cached
+
+    categories = await get_trade_static()
+    entries = categories.get(category, [])
+    query_ids = []
+    errors = []
+    source = "trade2"
+
+    poe_ninja_rates = None
+    try:
+        poe_ninja_rates = await _get_poe_ninja_rates(league, category, target)
+    except Exception as exc:
+        errors.append({"source": "poe.ninja", "error": str(exc)})
+
+    if poe_ninja_rates:
+        source = "poe.ninja"
+        rate_by_id = {row["id"]: row for row in poe_ninja_rates.get("rows", []) if row.get("id")}
+    else:
+        ids = [entry["id"] for entry in entries if entry.get("id") and entry.get("id") != target]
+        all_rows: list[dict[str, Any]] = []
+        for chunk in _chunked(ids, 5):
+            try:
+                payload = await _post_exchange(league, chunk, [target], status=status)
+                query_ids.append(payload.get("id"))
+                all_rows.extend(normalize_exchange_result(payload, limit=250).get("rows", []))
+            except Exception as exc:
+                errors.append({"items": chunk, "error": str(exc)})
+            await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+        rate_by_id = {entry["id"]: _rate_stats(all_rows, entry["id"]) for entry in entries}
+
+    rows = []
+    for entry in entries:
+        item_id = entry["id"]
+        stats = rate_by_id.get(item_id, {})
+        rows.append(
+            {
+                "id": item_id,
+                "text": entry["text"],
+                "text_ru": entry.get("text_ru") or entry["text"],
+                "image": entry.get("image"),
+                "best": stats.get("best"),
+                "median": stats.get("median"),
+                "offers": stats.get("offers", 0),
+                "volume": stats.get("volume", 0),
+                "change": stats.get("change"),
+                "sparkline": stats.get("sparkline", []),
+                "sparkline_kind": stats.get("sparkline_kind"),
+                "max_volume_currency": stats.get("max_volume_currency"),
+                "max_volume_rate": stats.get("max_volume_rate"),
+            }
+        )
+
+    snapshot = {
+        "created_ts": time.time(),
+        "league": league,
+        "category": category,
+        "target": target,
+        "status": status,
+        "query_ids": [query_id for query_id in query_ids if query_id],
+        "source": source,
+        "rows": rows,
+        "errors": errors,
+    }
+    result = {
+        "created_ts": snapshot["created_ts"],
+        "league": league,
+        "category": category,
+        "target": target,
+        "status": status,
+        "rows": rows,
+        "advice": build_trade_advice(category, rows, target),
+        "errors": errors,
+        "source": source,
+        "cached": False,
+    }
+    log_market_history(snapshot, history_path=HISTORY_PATH)
+    SQLiteCacheManager.set(cache_key, result, 300)
+    return result
 
 
 async def get_exchange_offers(
@@ -1304,104 +1416,6 @@ def build_category_meta(categories: dict[str, list[dict[str, str | None]]]) -> l
     ]
 
 
-def _log_rates(snapshot: dict[str, Any]) -> None:
-    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with HISTORY_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
-
-
-async def get_category_rates(
-    league: str,
-    category: str,
-    target: str = "divine",
-    status: str = "any",
-    force_refresh: bool = False,
-) -> dict[str, Any]:
-    cache_key = (league, category, target, status)
-    cached = RATE_CACHE.get(cache_key)
-    if not force_refresh and cached and time.time() - cached["created_ts"] < RATE_CACHE_TTL:
-        data = dict(cached["data"])
-        data["cached"] = True
-        return data
-
-    categories = await get_trade_static()
-    entries = categories.get(category, [])
-    query_ids = []
-    errors = []
-    source = "trade2"
-
-    poe_ninja_rates = None
-    try:
-        poe_ninja_rates = await _get_poe_ninja_rates(league, category, target)
-    except Exception as exc:
-        errors.append({"source": "poe.ninja", "error": str(exc)})
-
-    if poe_ninja_rates:
-        source = "poe.ninja"
-        rate_by_id = {row["id"]: row for row in poe_ninja_rates.get("rows", []) if row.get("id")}
-    else:
-        ids = [entry["id"] for entry in entries if entry.get("id") and entry.get("id") != target]
-        all_rows: list[dict[str, Any]] = []
-        for chunk in _chunked(ids, 5):
-            try:
-                payload = await _post_exchange(league, chunk, [target], status=status)
-                query_ids.append(payload.get("id"))
-                all_rows.extend(normalize_exchange_result(payload, limit=250).get("rows", []))
-            except Exception as exc:
-                errors.append({"items": chunk, "error": str(exc)})
-            await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
-        rate_by_id = {entry["id"]: _rate_stats(all_rows, entry["id"]) for entry in entries}
-
-    rows = []
-    for entry in entries:
-        item_id = entry["id"]
-        stats = rate_by_id.get(item_id, {})
-        rows.append(
-            {
-                "id": item_id,
-                "text": entry["text"],
-                "text_ru": entry.get("text_ru") or entry["text"],
-                "image": entry.get("image"),
-                "best": stats.get("best"),
-                "median": stats.get("median"),
-                "offers": stats.get("offers", 0),
-                "volume": stats.get("volume", 0),
-                "change": stats.get("change"),
-                "sparkline": stats.get("sparkline", []),
-                "sparkline_kind": stats.get("sparkline_kind"),
-                "max_volume_currency": stats.get("max_volume_currency"),
-                "max_volume_rate": stats.get("max_volume_rate"),
-            }
-        )
-
-    snapshot = {
-        "created_ts": time.time(),
-        "league": league,
-        "category": category,
-        "target": target,
-        "status": status,
-        "query_ids": [query_id for query_id in query_ids if query_id],
-        "source": source,
-        "rows": rows,
-        "errors": errors,
-    }
-    result = {
-        "created_ts": snapshot["created_ts"],
-        "league": league,
-        "category": category,
-        "target": target,
-        "status": status,
-        "rows": rows,
-        "advice": build_trade_advice(category, rows, target),
-        "errors": errors,
-        "source": source,
-        "cached": False,
-    }
-    _log_rates(snapshot)
-    RATE_CACHE[cache_key] = {"created_ts": time.time(), "data": result}
-    return result
-
-
 def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -> list[dict[str, Any]]:
     if category != "Delirium":
         if category == "Fragments":
@@ -1532,158 +1546,39 @@ def _build_emotion_path_advice(
     }
 
 
-def read_history(
-    limit: int = 30,
-    league: str | None = None,
-    category: str | None = None,
-    target: str | None = None,
-    status: str | None = None,
-) -> list[dict[str, Any]]:
-    if not HISTORY_PATH.exists():
-        return []
-    history = []
-    for line in _iter_jsonl_lines_reverse(HISTORY_PATH):
-        try:
-            snapshot = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if league and snapshot.get("league") != league:
-            continue
-        if category and snapshot.get("category") != category:
-            continue
-        if target and snapshot.get("target") != target:
-            continue
-        if status and snapshot.get("status") != status:
-            continue
-        history.append(snapshot)
-        if len(history) >= limit:
-            break
-    return history
+def read_history(*args, **kwargs):
+    kwargs.setdefault("history_path", HISTORY_PATH)
+    return read_market_history(*args, **kwargs)
 
-
-def _iter_jsonl_lines_reverse(path, block_size: int = 1024 * 1024):
-    with path.open("rb") as handle:
-        handle.seek(0, 2)
-        position = handle.tell()
-        buffer = b""
-        while position > 0:
-            read_size = min(block_size, position)
-            position -= read_size
-            handle.seek(position)
-            block = handle.read(read_size)
-            parts = (block + buffer).split(b"\n")
-            buffer = parts[0]
-            for line in reversed(parts[1:]):
-                if line:
-                    yield line.decode("utf-8", "ignore")
-        if buffer:
-            yield buffer.decode("utf-8", "ignore")
-
-
-def read_latest_rates(
-    league: str,
-    category: str,
-    target: str = "exalted",
-    status: str = "any",
-) -> dict[str, Any] | None:
-    if not HISTORY_PATH.exists():
-        return None
-    for line in _iter_jsonl_lines_reverse(HISTORY_PATH):
-        try:
-            snapshot = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (
-            snapshot.get("league") == league
-            and snapshot.get("category") == category
-            and snapshot.get("target") == target
-            and snapshot.get("status") == status
-        ):
-            rows = snapshot.get("rows") or []
-            return {
-                "created_ts": snapshot.get("created_ts"),
-                "league": league,
-                "category": category,
-                "target": target,
-                "status": status,
-                "rows": rows,
-                "advice": build_trade_advice(category, rows, target),
-                "errors": snapshot.get("errors") or [],
-                "source": snapshot.get("source") or "cache",
-                "cached": True,
-            }
-    return None
-
-
-def _history_row_price(row: dict[str, Any] | None) -> float | None:
-    if not row:
-        return None
-    for key in ("median", "best"):
-        try:
-            value = float(row.get(key))
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            return value
-    return None
-
-
-def _history_row_metric(row: dict[str, Any] | None, metric: str) -> float | None:
-    if metric == "demand":
-        try:
-            value = float((row or {}).get("volume"))
-        except (TypeError, ValueError):
-            return None
-        return value if value > 0 else None
-    if metric == "offers":
-        try:
-            value = float((row or {}).get("offers"))
-        except (TypeError, ValueError):
-            return None
-        return value if value > 0 else None
-    return _history_row_price(row)
-
-
-def read_item_history(
-    *,
-    league: str,
-    category: str,
-    target: str = "exalted",
-    status: str = "any",
-    item_id: str,
-    metric: str = "price",
-    limit: int = 1000,
-) -> list[dict[str, Any]]:
-    snapshots = read_history(
-        limit=limit,
+def read_latest_rates(league: str, category: str, target: str = "exalted", status: str = "any"):  # noqa: E302
+    snapshot = _read_history_latest_rates(
         league=league,
         category=category,
         target=target,
         status=status,
+        history_path=HISTORY_PATH,
     )
-    series: list[dict[str, Any]] = []
-    seen: set[float] = set()
-    for snapshot in sorted(snapshots, key=lambda item: float(item.get("created_ts") or 0)):
-        try:
-            created_ts = float(snapshot.get("created_ts"))
-        except (TypeError, ValueError):
-            continue
-        if created_ts <= 0 or created_ts in seen:
-            continue
-        row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
-        value = _history_row_metric(row, metric)
-        if value is None:
-            continue
-        seen.add(created_ts)
-        series.append(
-            {
-                "created_ts": created_ts,
-                "value": value,
-                "price": _history_row_price(row),
-                "volume": (row or {}).get("volume", 0),
-                "offers": (row or {}).get("offers", 0),
-                "change": (row or {}).get("change"),
-                "source": snapshot.get("source") or "",
-            }
-        )
-    return series
+    if snapshot and "advice" not in snapshot:
+        snapshot["advice"] = build_trade_advice(category, snapshot.get("rows") or [], target)
+    return snapshot
+
+
+def read_item_history(
+    league: str,
+    category: str,
+    item_id: str,
+    target: str = "exalted",
+    status: str = "any",
+    metric: str = "price",
+    limit: int = 1500,
+):  # noqa: E302
+    return _read_history_item(
+        league=league,
+        category=category,
+        target=target,
+        status=status,
+        item_id=item_id,
+        metric=metric,
+        limit=limit,
+        history_path=HISTORY_PATH,
+    )

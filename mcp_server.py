@@ -5,7 +5,11 @@ import logging
 from typing import List, Optional, Dict, Any
 from urllib.parse import quote
 from dotenv import load_dotenv
+
+load_dotenv()
+
 import httpx
+from app.trade.api_client import PoeTradeClient
 
 # Импортируем FastMCP из mcp.server.fastmcp
 try:
@@ -32,9 +36,6 @@ except ImportError:
                     time.sleep(1)
             except KeyboardInterrupt:
                 print("\nShutting down MCP server...")
-
-# Загрузка переменных окружения
-load_dotenv()
 
 # Конфигурация
 UA = os.environ.get("USER_AGENT", "poe2-trade-helper/0.1 (contact: set-USER_AGENT-in-env)")
@@ -142,27 +143,18 @@ async def get_character(name: str, realm: str = "poe2") -> Dict[str, Any]:
 @mcp.tool()
 async def trade_leagues() -> Dict[str, Any]:
     """Получает список лиг PoE2, доступных на официальном trade2 сайте."""
-    url = f"{TRADE_BASE}/data/leagues"
     try:
-        log_request("GET", url)
-        async with httpx.AsyncClient(headers=ua_headers(), timeout=30) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.json()
+        leagues = await PoeTradeClient.get_trade_leagues()
+        return {"result": leagues}
     except Exception as e:
         return error_response(e)
 
 @mcp.tool()
 async def trade_static_data(locale: str = "en") -> Dict[str, Any]:
     """Получает справочник trade2: валюты, фрагменты, катализаторы и другие exchange-идентификаторы."""
-    base = TRADE_RU_BASE if locale.lower().startswith("ru") else TRADE_BASE
-    url = f"{base}/data/static"
     try:
-        log_request("GET", url)
-        async with httpx.AsyncClient(headers=ua_headers(), timeout=30) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.json()
+        en_res, ru_res = await PoeTradeClient.get_trade_static()
+        return ru_res if locale.lower().startswith("ru") else en_res
     except Exception as e:
         return error_response(e)
 
@@ -170,18 +162,9 @@ async def trade_static_data(locale: str = "en") -> Dict[str, Any]:
 async def trade_search(league: str, query: Dict[str, Any]) -> Dict[str, Any]:
     """
     Ищет предметы на торговой площадке PoE2.
-    
-    Параметры:
-      league: название лиги (например, 'Affliction')
-      query: словарь с параметрами поиска
     """
-    url = f"{TRADE_BASE}/search/poe2/{quote(league, safe='')}"
     try:
-        log_request("POST", url)
-        async with httpx.AsyncClient(headers={"User-Agent": UA, "Content-Type": "application/json"}, timeout=30) as client:
-            response = await client.post(url, json={"query": query, "sort": {"price": "asc"}})
-            response.raise_for_status()
-            return response.json()
+        return await PoeTradeClient.post_search(league, query)
     except Exception as e:
         return error_response(e)
 
@@ -189,29 +172,9 @@ async def trade_search(league: str, query: Dict[str, Any]) -> Dict[str, Any]:
 async def trade_fetch(ids: List[str], query_id: str) -> List[Dict[str, Any]]:
     """
     Получает детальную информацию о предметах по их ID.
-    
-    Параметры:
-      ids: список ID предметов
-      query_id: ID запроса из trade_search
     """
-    results = []
     try:
-        async with httpx.AsyncClient(headers=ua_headers(), timeout=30) as client:
-            # Обрабатываем по 20 ID за раз
-            for i in range(0, len(ids), 20):
-                chunk = ",".join(ids[i:i+20])
-                url = f"{TRADE_BASE}/fetch/{chunk}?query={quote(query_id, safe='')}"
-                log_request("GET", url)
-                response = await client.get(url)
-                response.raise_for_status()
-                data = response.json()
-                results.extend(data.get("result", []))
-                
-                # Соблюдаем задержку между запросами
-                if i + 20 < len(ids):
-                    await asyncio.sleep(COOL / 1000)
-        
-        return results
+        return await PoeTradeClient.fetch_trade_items(ids, query_id)
     except Exception as e:
         return [error_response(e)]
 
@@ -224,31 +187,9 @@ async def trade_exchange(
 ) -> Dict[str, Any]:
     """
     Ищет обменные предложения валют.
-    
-    Параметры:
-      league: название лиги
-      have: список ID валют, которые есть
-      want: список ID валют, которые нужны
-      status: статус игроков ('online' или 'any')
     """
-    url = f"{TRADE_BASE}/exchange/poe2/{quote(league, safe='')}"
-    body = {
-        "exchange": {
-            "have": have,
-            "want": want,
-            "status": {"option": status}
-        }
-    }
-    
     try:
-        log_request("POST", url)
-        async with httpx.AsyncClient(
-            headers={"User-Agent": UA, "Content-Type": "application/json"}, 
-            timeout=30
-        ) as client:
-            response = await client.post(url, json=body)
-            response.raise_for_status()
-            return response.json()
+        return await PoeTradeClient.post_exchange(league, have, want, status)
     except Exception as e:
         return error_response(e)
 

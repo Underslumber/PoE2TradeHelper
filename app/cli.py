@@ -11,6 +11,7 @@ from app.collector.discover import run_discovery, save_source_map
 from app.collector.sync import sync_all, sync_pair
 from app.codex_market_analyzer import run_codex_market_analysis
 from app.currency_analyzer import load_currency_trend_context
+from app.db.migrate import migrate
 from app.market_snapshots import collect_market_snapshots, parse_league_start, run_market_snapshot_loop, split_csv
 
 
@@ -89,6 +90,9 @@ def main():
 
     sub.add_parser("run")
     args = parser.parse_args()
+
+    if args.command and args.command != "run":
+        migrate()
 
     if args.command == "discover":
         result = asyncio.run(run_discovery(args.league, args.category))

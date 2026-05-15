@@ -57,6 +57,47 @@ def test_normalize_static_entries_prefers_official_russian_payload():
     assert categories["Currency"][0]["text_ru"] == "Сфера превращения"
 
 
+def test_get_trade_static_uses_module_cache(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, *args, **kwargs):
+            calls.append(url)
+            if "ru.pathofexile.com" in url:
+                return FakeResponse({"result": [{"id": "Currency", "entries": [{"id": "chaos", "text": "Сфера хаоса"}]}]})
+            return FakeResponse({"result": [{"id": "Currency", "entries": [{"id": "chaos", "text": "Chaos Orb"}]}]})
+
+    monkeypatch.setattr(trade2, "TRADE_STATIC_CACHE", {"created_ts": 0.0, "data": None})
+    monkeypatch.setattr(trade2.httpx, "AsyncClient", FakeAsyncClient)
+
+    first = asyncio.run(trade2.get_trade_static())
+    second = asyncio.run(trade2.get_trade_static())
+
+    assert len(calls) == 2
+    assert first == second
+    assert first["Currency"][0]["text"] == "Chaos Orb"
+    assert first["Currency"][0]["text_ru"] == "Сфера хаоса"
+
+
 def test_normalize_exchange_result_flattens_offers():
     payload = {
         "id": "query123",
@@ -583,3 +624,26 @@ def test_read_item_history_returns_metric_series(tmp_path, monkeypatch):
 
     assert [item["value"] for item in price] == [4, 5]
     assert [item["value"] for item in demand] == [100, 120]
+
+
+def test_read_item_history_keeps_target_and_status_defaults(tmp_path, monkeypatch):
+    history = tmp_path / "history.jsonl"
+    history.write_text(
+        json.dumps(
+            {
+                "created_ts": 1,
+                "league": "Fate",
+                "category": "Currency",
+                "target": "exalted",
+                "status": "any",
+                "source": "poe.ninja",
+                "rows": [{"id": "chaos", "median": 4, "volume": 100, "offers": 0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(trade2, "HISTORY_PATH", history)
+
+    series = trade2.read_item_history(league="Fate", category="Currency", item_id="chaos")
+
+    assert [item["value"] for item in series] == [4]

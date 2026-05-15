@@ -141,3 +141,36 @@ class TelegramNotificationRule(Base):
     last_triggered_at = Column(String)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+
+
+class MarketHistory(Base):
+    __tablename__ = "market_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    league = Column(String, nullable=False, index=True)
+    category = Column(String, nullable=False, index=True)
+    target = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="any", index=True)
+    source = Column(String)
+    item_id = Column(String, nullable=False, index=True)
+    price = Column(Float, nullable=False)
+    volume = Column(Float)
+    offers = Column(Integer)
+    change = Column(Float)
+    sparkline_json = Column(Text)
+    sparkline_kind = Column(String)
+    max_volume_currency = Column(String)
+    max_volume_rate = Column(Float)
+    query_ids_json = Column(Text)
+    errors_json = Column(Text)
+    timestamp = Column(Float, nullable=False, index=True)
+    created_at = Column(String, nullable=False)
+
+
+class CacheEntry(Base):
+    __tablename__ = "cache_entries"
+
+    key = Column(String, primary_key=True)
+    data_json = Column(Text, nullable=False)
+    created_ts = Column(Float, nullable=False)
+    expires_ts = Column(Float, nullable=False, index=True)

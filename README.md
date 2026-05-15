@@ -138,7 +138,7 @@ python -m app.cli run
 python -m app.cli market-snapshots --league "Fate of the Vaal" --once
 ```
 
-Команда собирает все stackable-категории через poe.ninja/trade2 и пишет историю в `data/trade_rate_history.jsonl`.
+Команда собирает все stackable-категории через poe.ninja/trade2 и пишет историю в SQLite (`data/poe2_ninja.sqlite`, таблица `market_history`). Старый `data/trade_rate_history.jsonl` используется только как источник миграции и fallback для legacy-запусков.
 
 Анализ рынка через Codex CLI:
 
@@ -167,7 +167,7 @@ python -m app.cli market-snapshots --league "Fate of the Vaal" --league-start "2
 Быстрая проверка Python-кода:
 
 ```powershell
-python -m py_compile mcp_server.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py
+python -m py_compile mcp_server.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py app\db\migrate_jsonl_to_sqlite.py app\trade\api_client.py app\trade\cache.py app\trade\history.py app\trade\logic.py app\trade\market.py app\trade\math_utils.py
 python -m pytest -q
 ```
 
