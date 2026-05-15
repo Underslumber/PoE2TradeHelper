@@ -4,8 +4,10 @@
   <div class="navbar-main-tabs" role="tablist" aria-label="Разделы">
     <button class="main-view-tab nav-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
     <button class="main-view-tab nav-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
+    <button id="ai-nav-tab" class="main-view-tab nav-view-tab d-none" type="button" data-main-tab="ai" data-i18n="aiTab">ИИ</button>
     <button class="main-view-tab nav-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
     <button class="main-view-tab nav-view-tab" type="button" data-main-tab="cabinet" data-i18n="cabinetTab">Кабинет</button>
+    <button id="admin-nav-tab" class="main-view-tab nav-view-tab d-none" type="button" data-main-tab="admin" data-i18n="adminTab">Админка</button>
   </div>
 </div>
 {% endblock %}
@@ -20,8 +22,8 @@
     <section class="hero-bar">
       <div>
         <div class="crumbs">PoE2 Trade Helper / <span id="category-title">-</span></div>
-        <h1 data-i18n="market">Рынок</h1>
-        <p data-i18n="marketHint">Публичная торговая и валютная площадка без OAuth. Сначала выводим все позиции, цены обновляем аккуратно для выбранной категории.</p>
+        <h1 id="main-view-title" data-i18n="market">Рынок</h1>
+        <p id="main-view-hint" data-i18n="marketHint">Публичная торговая и валютная площадка без OAuth. Сначала выводим все позиции, цены обновляем аккуратно для выбранной категории.</p>
       </div>
       <div class="language-switch" role="group" aria-label="Язык">
         <button id="lang-ru" type="button" class="lang-btn active">RU</button>
@@ -265,6 +267,124 @@
           <div id="notifications-list" class="cabinet-list notification-list"></div>
         </section>
         <div id="account-status" class="muted-status"></div>
+      </section>
+    </section>
+
+    <section id="admin-panel" class="admin-panel view-hidden" data-main-view="admin">
+      <div class="cabinet-header">
+        <div>
+          <h2 data-i18n="adminPanelTitle">Администрирование</h2>
+          <p data-i18n="adminPanelHint">Список локальных учеток, права на админку/ИИ и активность использования ресурса.</p>
+        </div>
+      </div>
+      <section class="admin-metrics-panel">
+        <div class="cabinet-section-head">
+          <div>
+            <h3 data-i18n="adminMetricsTitle">Метрики ИИ</h3>
+            <p class="panel-hint" data-i18n="adminMetricsHint">Локальная дневная квота и последние вызовы ИИ-функций.</p>
+          </div>
+        </div>
+        <div id="admin-metrics"></div>
+      </section>
+      <section class="admin-users-panel">
+        <div class="cabinet-section-head">
+          <div>
+            <h3 data-i18n="adminUsersTitle">Учетные записи</h3>
+            <p class="panel-hint" data-i18n="adminUsersHint">Права сохраняются в локальной SQLite-базе.</p>
+          </div>
+        </div>
+        <div id="admin-users-list" class="admin-users-list"></div>
+      </section>
+    </section>
+
+    <section id="ai-panel" class="ai-panel view-hidden" data-main-view="ai">
+      <div class="cabinet-header">
+        <div>
+          <h2 data-i18n="aiPanelTitle">ИИ-анализ рынка</h2>
+          <p data-i18n="aiPanelHint">Codex анализирует текущий рыночный JSON-контекст, возвращает проверяемые сигналы и сохраняет аудит входа/ответа.</p>
+        </div>
+      </div>
+      <div class="ai-context-strip">
+        <div>
+          <span class="summary-label" data-i18n="league">Лига</span>
+          <strong id="ai-context-league">-</strong>
+        </div>
+        <div>
+          <span class="summary-label" data-i18n="category">Категория</span>
+          <strong id="ai-context-category">-</strong>
+        </div>
+        <div>
+          <span class="summary-label" data-i18n="targetCurrency">Валюта оценки</span>
+          <strong id="ai-context-target">-</strong>
+        </div>
+        <div>
+          <span class="summary-label" data-i18n="status">Статус</span>
+          <strong id="ai-context-status">-</strong>
+        </div>
+      </div>
+      <div class="ai-controls">
+        <label class="form-field">
+          <span data-i18n="aiLeagueDay">День лиги</span>
+          <input id="ai-league-day" class="form-control" type="number" min="0" step="1" data-i18n-placeholder="aiLeagueDayPlaceholder" placeholder="Необязательно">
+        </label>
+        <label class="form-field">
+          <span data-i18n="aiRowLimit">Строк контекста</span>
+          <input id="ai-row-limit" class="form-control" type="number" min="1" max="250" step="1" value="80">
+        </label>
+        <label class="form-field">
+          <span data-i18n="aiMaxCandidates">Сигналов</span>
+          <input id="ai-max-candidates" class="form-control" type="number" min="1" max="20" step="1" value="10">
+        </label>
+        <label class="permission-toggle ai-refresh-toggle">
+          <input id="ai-refresh-before-analysis" type="checkbox">
+          <span data-i18n="aiRefreshBeforeAnalysis">Обновить рынок перед анализом</span>
+        </label>
+      </div>
+      <div class="action-row">
+        <button id="run-ai-analysis" class="btn btn-primary" type="button" data-i18n="aiRunAnalysis">Запустить анализ</button>
+        <span id="ai-analysis-status" class="muted-status"></span>
+      </div>
+      <div id="ai-analysis-result" class="ai-analysis-result">
+        <p class="text-secondary" data-i18n="aiAnalysisEmpty">Выберите категорию и запустите анализ. Codex не покупает предметы автоматически и не должен выдумывать отсутствующие данные.</p>
+      </div>
+      <section class="currency-analysis-panel">
+        <div class="cabinet-section-head">
+          <div>
+            <h3 data-i18n="currencyAnalysisTitle">Анализ валюты</h3>
+            <p class="panel-hint" data-i18n="currencyAnalysisHint">Тренд считается по сохраненным снимкам Currency, прогноз строится локально, а ИИ получает уже готовый контекст для интерпретации.</p>
+          </div>
+        </div>
+        <div class="ai-controls">
+          <label class="form-field">
+            <span data-i18n="currencyAnalysisCurrency">Валюта</span>
+            <select id="currency-analysis-id" class="form-control"></select>
+          </label>
+          <label class="form-field">
+            <span data-i18n="currencyHorizonHours">Горизонт, часов</span>
+            <input id="currency-horizon-hours" class="form-control" type="number" min="1" max="168" step="1" value="24">
+          </label>
+          <label class="form-field">
+            <span data-i18n="currencyForecastPoints">Точек прогноза</span>
+            <input id="currency-forecast-points" class="form-control" type="number" min="2" max="48" step="1" value="12">
+          </label>
+          <label class="form-field">
+            <span data-i18n="currencyHistoryLimit">Снимков истории</span>
+            <input id="currency-history-limit" class="form-control" type="number" min="2" max="2000" step="1" value="1500">
+          </label>
+          <label class="permission-toggle ai-refresh-toggle">
+            <input id="currency-refresh-before-analysis" type="checkbox">
+            <span data-i18n="currencyRefreshBeforeAnalysis">Обновить Currency перед расчетом</span>
+          </label>
+        </div>
+        <div class="action-row">
+          <button id="run-currency-analysis" class="btn btn-secondary" type="button" data-i18n="currencyRunAnalysis">Рассчитать тренд</button>
+          <button id="run-ai-currency-analysis" class="btn btn-primary" type="button" data-i18n="currencyRunAiAnalysis">Совет ИИ</button>
+          <span id="currency-analysis-status" class="muted-status"></span>
+        </div>
+        <div id="currency-analysis-result" class="currency-analysis-result">
+          <p class="text-secondary" data-i18n="currencyAnalysisEmpty">Выберите валюту и рассчитайте тренд. Для прогноза нужны сохраненные снимки рынка.</p>
+        </div>
+        <div id="currency-ai-result" class="currency-ai-result"></div>
       </section>
     </section>
 

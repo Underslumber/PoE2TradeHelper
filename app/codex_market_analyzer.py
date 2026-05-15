@@ -33,6 +33,7 @@ def build_codex_market_prompt(context: dict[str, Any]) -> str:
 Правила:
 - Учитывай фазу лиги, ликвидность, listing_count, volume, source, freshness и risk_flags.
 - Stackable-позиции можно оценивать по poe.ninja/trade2 агрегатам, если они есть.
+- Если schema_version = poe2-currency-trend-context/v1, оценивай только переданные price_history, trend и forecast; forecast - модельный ориентир, а не факт.
 - Rare/unique/equipment нельзя уверенно оценивать без сравнения похожих trade2 listings.
 - Не превращай buy_candidate в автопокупку: это только кандидат для ручной проверки.
 - Если данных мало, используй action=insufficient_data или action=watch и confidence=low.
@@ -220,8 +221,6 @@ def call_codex_cli(
         "exec",
         "--sandbox",
         "read-only",
-        "--ask-for-approval",
-        "never",
         "--ephemeral",
         "--color",
         "never",

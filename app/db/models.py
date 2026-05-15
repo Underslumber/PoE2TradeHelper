@@ -51,6 +51,8 @@ class User(Base):
     email_verified_at = Column(String)
     email_verification_token = Column(String, unique=True, index=True)
     email_verification_sent_at = Column(String)
+    is_admin = Column(Integer, nullable=False, default=0)
+    can_use_ai = Column(Integer, nullable=False, default=0)
     created_at = Column(String, nullable=False)
 
 
@@ -61,6 +63,18 @@ class UserSession(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(String, nullable=False)
     expires_at = Column(String, nullable=False)
+
+
+class AIUsageEvent(Base):
+    __tablename__ = "ai_usage_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    feature = Column(String, nullable=False, index=True)
+    created_at = Column(String, nullable=False, index=True)
+    success = Column(Integer, nullable=False, default=0)
+    status_code = Column(Integer)
+    duration_ms = Column(Integer)
 
 
 class PinnedPosition(Base):

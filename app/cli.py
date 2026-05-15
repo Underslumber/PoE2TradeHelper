@@ -10,6 +10,7 @@ from app.ai_context import load_ai_market_context
 from app.collector.discover import run_discovery, save_source_map
 from app.collector.sync import sync_all, sync_pair
 from app.codex_market_analyzer import run_codex_market_analysis
+from app.currency_analyzer import load_currency_trend_context
 from app.market_snapshots import collect_market_snapshots, parse_league_start, run_market_snapshot_loop, split_csv
 
 
@@ -53,6 +54,23 @@ def main():
     market_analyze_cmd.add_argument("--timeout-seconds", type=int, default=600)
     market_analyze_cmd.add_argument("--output-dir")
     market_analyze_cmd.add_argument("--no-save", action="store_true")
+
+    currency_analyze_cmd = sub.add_parser("currency-analyze")
+    currency_analyze_cmd.add_argument("--league", required=True)
+    currency_analyze_cmd.add_argument("--currency", required=True)
+    currency_analyze_cmd.add_argument("--target", default="exalted")
+    currency_analyze_cmd.add_argument("--status", choices=("online", "any"), default="any")
+    currency_analyze_cmd.add_argument("--league-day", type=int)
+    currency_analyze_cmd.add_argument("--history-limit", type=int, default=1500)
+    currency_analyze_cmd.add_argument("--horizon-hours", type=int, default=24)
+    currency_analyze_cmd.add_argument("--forecast-points", type=int, default=12)
+    currency_analyze_cmd.add_argument("--refresh", action="store_true")
+    currency_analyze_cmd.add_argument("--with-ai", action="store_true")
+    currency_analyze_cmd.add_argument("--codex-bin", default="codex")
+    currency_analyze_cmd.add_argument("--model")
+    currency_analyze_cmd.add_argument("--timeout-seconds", type=int, default=600)
+    currency_analyze_cmd.add_argument("--output-dir")
+    currency_analyze_cmd.add_argument("--no-save", action="store_true")
 
     market_snapshots_cmd = sub.add_parser("market-snapshots")
     market_snapshots_cmd.add_argument("--league", required=True)
@@ -118,6 +136,36 @@ def main():
             output_dir=args.output_dir,
             save=not args.no_save,
         )
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    elif args.command == "currency-analyze":
+        context = asyncio.run(
+            load_currency_trend_context(
+                league=args.league,
+                currency_id=args.currency,
+                target=args.target,
+                status=args.status,
+                league_day=args.league_day,
+                history_limit=max(1, args.history_limit),
+                horizon_hours=max(1, args.horizon_hours),
+                forecast_points=max(1, args.forecast_points),
+                refresh=args.refresh,
+            )
+        )
+        if args.with_ai:
+            payload = {
+                "context": context,
+                "ai": run_codex_market_analysis(
+                    context,
+                    codex_bin=args.codex_bin,
+                    model=args.model,
+                    timeout_seconds=args.timeout_seconds,
+                    output_dir=args.output_dir,
+                    save=not args.no_save,
+                ),
+            }
+        else:
+            payload = context
         json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
     elif args.command == "market-snapshots":

@@ -72,3 +72,27 @@ def test_run_codex_market_analysis_normalizes_without_saving(monkeypatch):
 
     assert result["analysis_path"] is None
     assert result["assessment"]["signals"][0]["confidence"] == "medium"
+
+
+def test_call_codex_cli_uses_current_exec_flags(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        output_path = command[command.index("--output-last-message") + 1]
+        with open(output_path, "w", encoding="utf-8") as handle:
+            handle.write('{"schema_version":"poe2-market-ai-assessment/v1","signals":[]}')
+        return FakeResult()
+
+    monkeypatch.setattr(analyzer.subprocess, "run", fake_run)
+
+    response = analyzer.call_codex_cli("prompt", output_dir=tmp_path, cwd=tmp_path)
+
+    assert "--ask-for-approval" not in captured["command"]
+    assert captured["command"][:4] == ["codex", "exec", "--sandbox", "read-only"]
+    assert response.startswith("{")

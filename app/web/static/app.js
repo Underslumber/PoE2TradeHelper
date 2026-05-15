@@ -101,6 +101,19 @@ const state = {
   historyTrends: [],
   historyTrendsKey: '',
   isLoadingHistoryTrends: false,
+  aiAnalysis: {
+    job: null,
+    isRunning: false,
+    pollTimer: null,
+  },
+  currencyAnalysis: {
+    context: null,
+    error: '',
+    isLoading: false,
+    aiJob: null,
+    aiRunning: false,
+    pollTimer: null,
+  },
   sellerLots: null,
   sellerLotsCache: {},
   sellerLotMarketCache: {},
@@ -113,6 +126,8 @@ const state = {
     pins: [],
     trades: [],
     notifications: [],
+    adminUsers: [],
+    adminMetrics: null,
     telegramConfigured: false,
     benchmarkCurrency: localStorage.getItem('poe2-account-benchmark') || 'divine',
     benchmarkRates: {},
@@ -172,6 +187,10 @@ function applyLanguage() {
   renderAdvice(state.advice);
   renderSellerLots();
   renderCabinet();
+  renderAdminNavigation();
+  renderAdminPanel();
+  renderAiNavigation();
+  renderAiPanel();
   renderDetailAccountStatus();
   switchMainView(state.mainView);
   fillDetailTargetSelect();
@@ -340,6 +359,10 @@ function renderDetailAccountStatus() {
   setDetailAccountStatus(state.account.authenticated ? '' : t('loginToUseCabinet'));
 }
 
+function accountCanUseAi() {
+  return Boolean(state.account.authenticated && state.account.user?.can_use_ai);
+}
+
 async function fetchAccountJson(url, options = {}) {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -404,6 +427,17 @@ async function loadAccountCollections() {
   const notificationsData = await fetchAccountJson('/api/account/notifications');
   state.account.notifications = notificationsData.notifications || [];
   state.account.telegramConfigured = Boolean(notificationsData.telegram_configured);
+  if (state.account.user?.is_admin) {
+    const [adminData, metricsData] = await Promise.all([
+      fetchAccountJson('/api/admin/users'),
+      fetchAccountJson('/api/admin/metrics'),
+    ]);
+    state.account.adminUsers = adminData.users || [];
+    state.account.adminMetrics = metricsData || null;
+  } else {
+    state.account.adminUsers = [];
+    state.account.adminMetrics = null;
+  }
 }
 
 async function loadAccountState() {
@@ -415,6 +449,8 @@ async function loadAccountState() {
     state.account.pins = [];
     state.account.trades = [];
     state.account.notifications = [];
+    state.account.adminUsers = [];
+    state.account.adminMetrics = null;
     state.account.telegramConfigured = false;
     if (state.account.authenticated) {
       await loadAccountCollections();
@@ -425,11 +461,17 @@ async function loadAccountState() {
     state.account.pins = [];
     state.account.trades = [];
     state.account.notifications = [];
+    state.account.adminUsers = [];
+    state.account.adminMetrics = null;
     state.account.telegramConfigured = false;
     setAccountStatus(error.message || String(error));
   } finally {
     state.isAccountLoading = false;
     renderCabinet();
+    renderAdminNavigation();
+    renderAdminPanel();
+    renderAiNavigation();
+    renderAiPanel();
     renderDetailAccountStatus();
   }
 }
@@ -438,6 +480,10 @@ async function refreshAccountData(message = '') {
   if (!state.account.authenticated) return;
   await loadAccountCollections();
   renderCabinet();
+  renderAdminNavigation();
+  renderAdminPanel();
+  renderAiNavigation();
+  renderAiPanel();
   renderDetailAccountStatus();
   if (message) setAccountStatus(message);
 }
@@ -522,13 +568,24 @@ async function logoutAccount() {
   try {
     await fetchAccountJson('/api/auth/logout', { method: 'POST' });
   } finally {
+    clearAiPollTimer();
+    clearCurrencyAiPollTimer();
     state.account.authenticated = false;
     state.account.user = null;
     state.account.pins = [];
     state.account.trades = [];
     state.account.notifications = [];
+    state.account.adminUsers = [];
+    state.account.adminMetrics = null;
     state.account.telegramConfigured = false;
+    state.currencyAnalysis.aiJob = null;
+    state.currencyAnalysis.aiRunning = false;
+    state.currencyAnalysis.error = '';
     renderCabinet();
+    renderAdminNavigation();
+    renderAdminPanel();
+    renderAiNavigation();
+    renderAiPanel();
     renderDetailAccountStatus();
   }
 }
@@ -765,6 +822,20 @@ async function testNotification(ruleId) {
   }
 }
 
+async function saveAdminUserPermissions(userId) {
+  const card = document.querySelector(`[data-admin-user-card="${userId}"]`);
+  if (!card) return;
+  try {
+    await sendAccountJson(`/api/admin/users/${userId}/permissions`, {
+      is_admin: Boolean(card.querySelector('[data-admin-permission="is_admin"]')?.checked),
+      can_use_ai: Boolean(card.querySelector('[data-admin-permission="can_use_ai"]')?.checked),
+    }, 'PATCH');
+    await refreshAccountData(t('adminPermissionsSaved'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+  }
+}
+
 function bindAccountEvents() {
   byId('login-form')?.addEventListener('submit', handleLogin);
   byId('register-form')?.addEventListener('submit', handleRegister);
@@ -786,6 +857,7 @@ function bindAccountEvents() {
     const pinId = Number(button.dataset.pinId || 0);
     const tradeId = Number(button.dataset.tradeId || 0);
     const ruleId = Number(button.dataset.ruleId || 0);
+    const userId = Number(button.dataset.userId || 0);
     if (action === 'start-trade') startTradeFromPin(pinId);
     if (action === 'remove-pin') deletePin(pinId);
     if (action === 'close-trade') closeTrade(tradeId);
@@ -793,6 +865,7 @@ function bindAccountEvents() {
     if (action === 'remove-notification') deleteNotification(ruleId);
     if (action === 'toggle-notification') toggleNotification(ruleId);
     if (action === 'test-notification') testNotification(ruleId);
+    if (action === 'save-user-permissions') saveAdminUserPermissions(userId);
   });
 }
 
@@ -1137,6 +1210,624 @@ function renderNotificationCard(rule) {
   `;
 }
 
+function adminFeatureLabel(feature) {
+  if (feature === 'market_context') return t('aiFeatureMarketContext');
+  if (feature === 'market_analysis') return t('aiTab');
+  if (feature === 'currency_analysis') return t('aiFeatureCurrencyAnalysis');
+  return feature;
+}
+
+function adminQuotaValue(value) {
+  return value === null || value === undefined ? t('quotaUnlimited') : formatAmount(value);
+}
+
+function renderAdminMetric(label, value, hint = '') {
+  return `
+    <div>
+      <span class="summary-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${hint ? `<small>${escapeHtml(hint)}</small>` : ''}
+    </div>
+  `;
+}
+
+function renderAdminMetrics(metrics) {
+  const container = byId('admin-metrics');
+  if (!container) return;
+  if (!metrics) {
+    container.innerHTML = `<p class="text-secondary">${t('adminMetricsEmpty')}</p>`;
+    return;
+  }
+  const quota = metrics.ai_quota || {};
+  const usage = metrics.ai_usage || {};
+  const users = metrics.users || {};
+  container.innerHTML = `
+    <div class="admin-summary">
+      ${renderAdminMetric(t('aiQuotaRemaining'), adminQuotaValue(quota.remaining), t('aiQuotaRemainingHint'))}
+      ${renderAdminMetric(t('aiQuotaUsedToday'), formatAmount(quota.used_today || 0), t('aiQuotaUsedTodayHint'))}
+      ${renderAdminMetric(t('aiQuotaDailyLimit'), adminQuotaValue(quota.daily_limit), t('aiQuotaDailyLimitHint'))}
+      ${renderAdminMetric(t('aiFailuresToday'), formatAmount(usage.failures_today || 0), t('aiFailuresTodayHint'))}
+      ${renderAdminMetric(t('adminUsersTotal'), formatAmount(users.total || 0), t('adminUsersTotalHint'))}
+      ${renderAdminMetric(t('adminAiUsers'), formatAmount(users.ai_enabled || 0), t('adminAiUsersHint'))}
+    </div>
+    <div class="admin-metrics-grid">
+      <section class="admin-metric-panel">
+        <h3>${t('adminUsageByDay')}</h3>
+        <div class="admin-usage-bars">
+          ${(usage.daily || []).map(day => {
+            const requests = Number(day.requests || 0);
+            const max = Math.max(1, ...(usage.daily || []).map(item => Number(item.requests || 0)));
+            const height = Math.max(4, Math.round((requests / max) * 56));
+            return `
+              <div class="admin-usage-day">
+                <span class="admin-usage-bar" style="height:${height}px"></span>
+                <strong>${formatAmount(requests)}</strong>
+                <small>${escapeHtml(day.date || '')}</small>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </section>
+      <section class="admin-metric-panel">
+        <h3>${t('adminTopAiUsers')}</h3>
+        ${(usage.top_users_today || []).length
+          ? `<div class="admin-activity-list">${usage.top_users_today.map(item => `
+            <div class="admin-activity-row">
+              <span>${escapeHtml(item.display_name || item.username || '-')}</span>
+              <strong>${formatAmount(item.requests || 0)}</strong>
+            </div>
+          `).join('')}</div>`
+          : `<p class="text-secondary">${t('adminNoAiActivity')}</p>`}
+      </section>
+      <section class="admin-metric-panel admin-recent-panel">
+        <h3>${t('adminRecentAiActivity')}</h3>
+        ${(usage.recent || []).length
+          ? `<div class="admin-activity-list">${usage.recent.map(item => `
+            <div class="admin-activity-row">
+              <span>${escapeHtml(item.display_name || item.username || '-')} / ${escapeHtml(adminFeatureLabel(item.feature || ''))}</span>
+              <strong>${item.success ? t('statusOk') : t('statusFailed')}</strong>
+              <small>${formatDateTime(item.created_at)}${item.duration_ms !== null && item.duration_ms !== undefined ? ` / ${formatAmount(item.duration_ms)} ms` : ''}</small>
+            </div>
+          `).join('')}</div>`
+          : `<p class="text-secondary">${t('adminNoAiActivity')}</p>`}
+      </section>
+    </div>
+  `;
+}
+
+function renderAdminUserCard(user) {
+  const isSelf = Number(user.id) === Number(state.account.user?.id);
+  const adminDisabled = isSelf ? 'disabled' : '';
+  const aiNote = user.effective_can_use_ai && !user.can_use_ai ? `<span>${t('adminAiImplicit')}</span>` : '';
+  return `
+    <article class="admin-user-card" data-admin-user-card="${user.id}">
+      <div class="admin-user-main">
+        <div>
+          <strong>${escapeHtml(user.display_name || user.username || '-')}</strong>
+          <small>${escapeHtml(user.username || '')}${user.email ? ` / ${escapeHtml(user.email)}` : ''}</small>
+        </div>
+        <div class="admin-user-badges">
+          ${user.is_admin ? `<span>${t('adminBadge')}</span>` : ''}
+          ${user.effective_can_use_ai ? `<span>${t('aiAccessBadge')}</span>` : ''}
+          ${user.email_verified ? `<span>${t('emailVerifiedBadge')}</span>` : `<span>${t('emailNotVerifiedBadge')}</span>`}
+        </div>
+      </div>
+      <div class="admin-permissions-row">
+        <label class="permission-toggle">
+          <input type="checkbox" data-admin-permission="is_admin" ${user.is_admin ? 'checked' : ''} ${adminDisabled}>
+          <span>${t('adminPermission')}</span>
+        </label>
+        <label class="permission-toggle">
+          <input type="checkbox" data-admin-permission="can_use_ai" ${user.can_use_ai ? 'checked' : ''}>
+          <span>${t('aiPermission')}</span>
+        </label>
+        ${aiNote}
+        <button class="btn btn-outline-light btn-sm" type="button" data-account-action="save-user-permissions" data-user-id="${user.id}">${t('savePermissions')}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAdminPanel() {
+  const panel = byId('admin-panel');
+  if (!panel) return;
+  const isAdmin = Boolean(state.account.user?.is_admin);
+  panel.classList.toggle('d-none', !isAdmin);
+  renderAdminMetrics(isAdmin ? state.account.adminMetrics : null);
+  const list = byId('admin-users-list');
+  if (!list) return;
+  if (!isAdmin) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = state.account.adminUsers.length
+    ? state.account.adminUsers.map(renderAdminUserCard).join('')
+    : `<p class="text-secondary">${t('adminUsersEmpty')}</p>`;
+}
+
+function renderAdminNavigation() {
+  const isAdmin = Boolean(state.account.user?.is_admin);
+  byId('admin-nav-tab')?.classList.toggle('d-none', !isAdmin);
+  if (!isAdmin && state.mainView === 'admin') {
+    switchMainView(state.account.authenticated ? 'cabinet' : 'market');
+  }
+}
+
+function aiActionLabel(action) {
+  const key = {
+    buy_candidate: 'aiActionBuyCandidate',
+    sell_candidate: 'aiActionSellCandidate',
+    hold: 'aiActionHold',
+    watch: 'aiActionWatch',
+    avoid: 'aiActionAvoid',
+    insufficient_data: 'aiActionInsufficientData',
+  }[action];
+  return key ? t(key) : action;
+}
+
+function renderAiNavigation() {
+  const canUseAi = accountCanUseAi();
+  byId('ai-nav-tab')?.classList.toggle('d-none', !canUseAi);
+  if (!canUseAi && state.mainView === 'ai') {
+    switchMainView(state.account.authenticated ? 'cabinet' : 'market');
+  }
+}
+
+function renderMainViewHeader() {
+  const mapping = {
+    market: ['market', 'marketHint'],
+    signals: ['detailedSignals', 'marketSignalsHint'],
+    ai: ['aiPanelTitle', 'aiPanelHint'],
+    lots: ['sellerLotsTitle', 'sellerLotsHint'],
+    cabinet: ['cabinetTitle', 'cabinetHint'],
+    admin: ['adminPanelTitle', 'adminPanelHint'],
+  };
+  const [titleKey, hintKey] = mapping[state.mainView] || mapping.market;
+  setText('main-view-title', t(titleKey));
+  setText('main-view-hint', t(hintKey));
+}
+
+function renderAiContextStrip() {
+  setText('ai-context-league', byId('live-league')?.value || '-');
+  setText('ai-context-category', categoryName(state.categoryMeta.find(item => item.id === state.selectedCategory) || { label: state.selectedCategory }));
+  setText('ai-context-target', currencyLabel(selectedTarget()));
+  setText('ai-context-status', t(byId('live-status')?.value === 'online' ? 'statusOnline' : 'statusAny'));
+}
+
+function renderAiListPanel(title, items, emptyText) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  return `
+    <section class="ai-list-panel">
+      <h3>${escapeHtml(title)}</h3>
+      ${list.length
+        ? `<div class="ai-list-tags">${list.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>`
+        : `<p class="text-secondary">${escapeHtml(emptyText)}</p>`}
+    </section>
+  `;
+}
+
+function renderAiSummary(assessment) {
+  const summary = assessment?.summary || {};
+  return `
+    <section class="ai-summary-card">
+      <h3>${t('aiSummary')}</h3>
+      <div class="ai-summary-grid">
+        <div><span class="summary-label">${t('aiMarketRead')}</span><strong>${escapeHtml(summary.market_read || '-')}</strong></div>
+        <div><span class="summary-label">${t('aiOverallRisk')}</span><strong>${escapeHtml(summary.overall_risk || '-')}</strong></div>
+        <div><span class="summary-label">${t('aiDataQuality')}</span><strong>${escapeHtml(summary.data_quality || '-')}</strong></div>
+        <div><span class="summary-label">${t('aiTimeHorizon')}</span><strong>${escapeHtml(summary.phase || '-')}</strong></div>
+      </div>
+    </section>
+  `;
+}
+
+function aiEvidenceValue(evidence, key) {
+  return escapeHtml(evidence?.[key] || '-');
+}
+
+function renderAiSignal(signal) {
+  const evidence = signal.evidence || {};
+  const risks = Array.isArray(signal.risks) ? signal.risks : [];
+  const checks = Array.isArray(signal.suggested_checks) ? signal.suggested_checks : [];
+  const invalidation = Array.isArray(signal.invalidation) ? signal.invalidation : [];
+  return `
+    <article class="ai-signal-card ${escapeHtml(signal.action || '')}">
+      <div class="ai-signal-head">
+        <div>
+          <strong>${escapeHtml(signal.item_name || signal.item_id || '-')}</strong>
+          <small>${escapeHtml(signal.category || '')}${signal.item_id ? ` / ${escapeHtml(signal.item_id)}` : ''}</small>
+        </div>
+        <div class="ai-signal-badges">
+          <span>${escapeHtml(aiActionLabel(signal.action))}</span>
+          <span>${escapeHtml(t('confidence'))}: ${escapeHtml(signal.confidence || '-')}</span>
+        </div>
+      </div>
+      <div class="ai-signal-meta">
+        ${signal.time_horizon ? `<span>${t('aiTimeHorizon')}: ${escapeHtml(signal.time_horizon)}</span>` : ''}
+      </div>
+      <p class="ai-signal-body"><strong>${t('aiThesis')}:</strong> ${escapeHtml(signal.thesis || '-')}</p>
+      <div class="ai-evidence-grid">
+        <div><span>${t('aiEvidencePriceAction')}</span><p>${aiEvidenceValue(evidence, 'price_action')}</p></div>
+        <div><span>${t('aiEvidenceLiquidity')}</span><p>${aiEvidenceValue(evidence, 'liquidity')}</p></div>
+        <div><span>${t('aiEvidenceDemandDriver')}</span><p>${aiEvidenceValue(evidence, 'demand_driver')}</p></div>
+        <div><span>${t('aiEvidenceBenchmarkView')}</span><p>${aiEvidenceValue(evidence, 'benchmark_view')}</p></div>
+      </div>
+      ${renderAiListPanel(t('aiRisks'), risks, '-')}
+      ${renderAiListPanel(t('aiSuggestedChecks'), checks, '-')}
+      ${renderAiListPanel(t('aiInvalidation'), invalidation, '-')}
+    </article>
+  `;
+}
+
+function renderAiAssessmentContent(job, emptyText = t('aiAnalysisEmpty')) {
+  const assessment = job?.assessment;
+  if (!assessment) {
+    return `<p class="text-secondary">${escapeHtml(emptyText)}</p>`;
+  }
+  const signals = Array.isArray(assessment.signals) ? assessment.signals : [];
+  const doNotTrade = (assessment.do_not_trade || []).map(item => `${item.item_id || '-'}: ${item.reason || '-'}`);
+  return `
+    ${renderAiSummary(assessment)}
+    <section class="ai-list-panel">
+      <h3>${t('aiSignals')}</h3>
+      ${signals.length ? `<div class="ai-signals-grid">${signals.map(renderAiSignal).join('')}</div>` : `<p class="text-secondary">${t('aiNoSignals')}</p>`}
+    </section>
+    ${renderAiListPanel(t('aiMissingData'), assessment.missing_data || [], t('aiNoMissingData'))}
+    ${renderAiListPanel(t('aiDoNotTrade'), doNotTrade, '-')}
+    ${job.analysis_path ? `<div class="ai-audit-path">${t('aiAuditPath')}: ${escapeHtml(job.analysis_path)}</div>` : ''}
+  `;
+}
+
+function renderAiAssessment(job) {
+  const result = byId('ai-analysis-result');
+  if (!result) return;
+  result.innerHTML = renderAiAssessmentContent(job);
+}
+
+function renderAiPanel() {
+  renderAiContextStrip();
+  const status = byId('ai-analysis-status');
+  const button = byId('run-ai-analysis');
+  if (button) button.disabled = Boolean(state.aiAnalysis.isRunning) || !accountCanUseAi();
+  if (!accountCanUseAi()) {
+    if (status) status.textContent = t('aiAnalysisNoAccess');
+    const result = byId('ai-analysis-result');
+    if (result) result.innerHTML = `<p class="text-secondary">${t('aiAnalysisNoAccess')}</p>`;
+    return;
+  }
+  const job = state.aiAnalysis.job;
+  if (status) {
+    if (state.aiAnalysis.isRunning) {
+      status.innerHTML = loadingMarkup(t('aiAnalysisRunning'), 'inline');
+    } else if (job?.status === 'completed') {
+      status.textContent = t('aiAnalysisComplete');
+    } else if (job?.status === 'failed') {
+      status.textContent = job.error || t('aiAnalysisFailed');
+    } else {
+      status.textContent = '';
+    }
+  }
+  if (job?.status === 'completed') {
+    renderAiAssessment(job);
+  } else if (job?.status === 'failed') {
+    const result = byId('ai-analysis-result');
+    if (result) result.innerHTML = `<p class="text-secondary">${escapeHtml(job.error || t('aiAnalysisFailed'))}</p>`;
+  } else if (!job) {
+    const result = byId('ai-analysis-result');
+    if (result) result.innerHTML = `<p class="text-secondary">${t('aiAnalysisEmpty')}</p>`;
+  }
+  renderCurrencyAnalysisPanel();
+}
+
+function clearAiPollTimer() {
+  if (state.aiAnalysis.pollTimer) {
+    clearTimeout(state.aiAnalysis.pollTimer);
+    state.aiAnalysis.pollTimer = null;
+  }
+}
+
+async function pollAiAnalysis(jobId) {
+  try {
+    const job = await fetchAccountJson(`/api/ai/market-analysis/${encodeURIComponent(jobId)}`);
+    state.aiAnalysis.job = job;
+    state.aiAnalysis.isRunning = ['queued', 'running'].includes(job.status);
+    renderAiPanel();
+    if (state.aiAnalysis.isRunning) {
+      state.aiAnalysis.pollTimer = setTimeout(() => pollAiAnalysis(jobId), 2500);
+    }
+  } catch (error) {
+    state.aiAnalysis.isRunning = false;
+    state.aiAnalysis.job = { status: 'failed', error: error.message || String(error) };
+    renderAiPanel();
+  }
+}
+
+async function runAiAnalysis() {
+  if (!accountCanUseAi() || state.aiAnalysis.isRunning) return;
+  clearAiPollTimer();
+  const payload = {
+    league: byId('live-league')?.value || '',
+    category: state.selectedCategory,
+    target: selectedTarget(),
+    status: byId('live-status')?.value || 'any',
+    league_day: byId('ai-league-day')?.value || null,
+    limit: Number(byId('ai-row-limit')?.value || 80),
+    max_candidates: Number(byId('ai-max-candidates')?.value || 10),
+    refresh: Boolean(byId('ai-refresh-before-analysis')?.checked),
+  };
+  state.aiAnalysis.isRunning = true;
+  state.aiAnalysis.job = { status: 'queued', params: payload };
+  renderAiPanel();
+  try {
+    const job = await sendAccountJson('/api/ai/market-analysis', payload);
+    state.aiAnalysis.job = job;
+    state.aiAnalysis.isRunning = ['queued', 'running'].includes(job.status);
+    renderAiPanel();
+    if (job.job_id && state.aiAnalysis.isRunning) {
+      state.aiAnalysis.pollTimer = setTimeout(() => pollAiAnalysis(job.job_id), 1200);
+    }
+  } catch (error) {
+    state.aiAnalysis.isRunning = false;
+    state.aiAnalysis.job = { status: 'failed', error: error.message || String(error) };
+    renderAiPanel();
+  }
+}
+
+function fillCurrencyAnalysisSelect() {
+  const select = byId('currency-analysis-id');
+  if (!select) return;
+  const entries = state.categories.Currency || [];
+  const current = select.value || (state.selectedCategory === 'Currency' && state.selectedItemId) || (hasTarget('divine') ? 'divine' : entries[0]?.id);
+  fillSelect(select, entries.map(entry => ({ id: entry.id, text: entryName(entry) })), current);
+}
+
+function currencyTrendLabel(value) {
+  const key = {
+    strengthening: 'currencyTrendStrengthening',
+    weakening: 'currencyTrendWeakening',
+    sideways: 'currencyTrendSideways',
+    unknown: 'currencyTrendUnknown',
+  }[value || 'unknown'];
+  return t(key || 'currencyTrendUnknown');
+}
+
+function volatilityLabel(value) {
+  const key = {
+    high: 'volatilityHigh',
+    medium: 'volatilityMedium',
+    low: 'volatilityLow',
+    unknown: 'volatilityUnknown',
+  }[value || 'unknown'];
+  return t(key || 'volatilityUnknown');
+}
+
+function dataQualityLabel(value) {
+  const key = {
+    good: 'dataQualityGood',
+    partial: 'dataQualityPartial',
+    poor: 'dataQualityPoor',
+  }[value || 'poor'];
+  return t(key || 'dataQualityPoor');
+}
+
+function currencyChangeCards(changes = {}) {
+  const windows = [
+    ['1h', 'currencyChange1h'],
+    ['6h', 'currencyChange6h'],
+    ['24h', 'currencyChange24h'],
+    ['72h', 'currencyChange72h'],
+    ['7d', 'currencyChange7d'],
+  ];
+  return `
+    <div class="currency-change-grid" aria-label="${t('currencyChangeWindows')}">
+      ${windows.map(([key, labelKey]) => {
+        const value = optionalFiniteNumber(changes[key]);
+        const className = value > 0 ? 'change-up' : value < 0 ? 'change-down' : '';
+        return `<div><span class="summary-label">${t(labelKey)}</span><strong class="${className}">${value === null ? '-' : formatChange(value)}</strong></div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function currencyAnalysisPayload() {
+  return {
+    league: byId('live-league')?.value || '',
+    currency_id: byId('currency-analysis-id')?.value || '',
+    target: selectedTarget(),
+    status: byId('live-status')?.value || 'any',
+    league_day: byId('ai-league-day')?.value || null,
+    history_limit: Number(byId('currency-history-limit')?.value || 1500),
+    horizon_hours: Number(byId('currency-horizon-hours')?.value || 24),
+    forecast_points: Number(byId('currency-forecast-points')?.value || 12),
+    refresh: Boolean(byId('currency-refresh-before-analysis')?.checked),
+  };
+}
+
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function renderCurrencyAnalysisContext(context) {
+  const result = byId('currency-analysis-result');
+  if (!result) return;
+  if (!context) {
+    result.innerHTML = `<p class="text-secondary">${t('currencyAnalysisEmpty')}</p>`;
+    return;
+  }
+  const currency = context.currency || {};
+  const trend = context.trend || {};
+  const forecast = context.forecast || {};
+  const changes = trend.change_pct || {};
+  const history = (context.price_history || [])
+    .map(point => ({ ts: Number(point.created_ts || 0), value: Number(point.value) }))
+    .filter(point => Number.isFinite(point.ts) && point.ts > 0 && Number.isFinite(point.value) && point.value > 0);
+  const forecastPoints = (forecast.points || [])
+    .map(point => ({ ts: Number(point.created_ts || 0), value: Number(point.value) }))
+    .filter(point => Number.isFinite(point.ts) && point.ts > 0 && Number.isFinite(point.value) && point.value > 0);
+  const latestPoint = history[history.length - 1];
+  const forecastSeries = latestPoint ? [latestPoint, ...forecastPoints] : forecastPoints;
+  const risks = Array.isArray(trend.risk_flags) ? trend.risk_flags : [];
+  const change24h = optionalFiniteNumber(trend.change_pct?.['24h']);
+  const forecastChange = optionalFiniteNumber(forecast.expected_change_pct);
+  result.innerHTML = `
+    <section class="ai-summary-card">
+      <h3>${t('currencyTrendSummary')}</h3>
+      <div class="currency-summary-grid">
+        <div><span class="summary-label">${t('currencyLatestPrice')}</span><strong>${currency.latest_price ? `${formatAmount(currency.latest_price)} ${currencyLabel(currency.target)}` : '-'}</strong></div>
+        <div><span class="summary-label">${t('currencyTrendDirection')}</span><strong>${escapeHtml(currencyTrendLabel(trend.direction))}</strong></div>
+        <div><span class="summary-label">${t('currencyVolatility')}</span><strong>${escapeHtml(volatilityLabel(trend.volatility))}</strong></div>
+        <div><span class="summary-label">${t('currencyDataQuality')}</span><strong>${escapeHtml(dataQualityLabel(trend.data_quality))}</strong></div>
+        <div><span class="summary-label">${t('currencyHistoryPoints')}</span><strong>${formatAmount(trend.history_points || 0)}</strong></div>
+      </div>
+      ${currencyChangeCards(changes)}
+    </section>
+    <section class="currency-analysis-charts">
+      <article class="currency-chart-card">
+        <h3>${t('currencyTrendChart')}</h3>
+        ${miniSignalChart(history.map(point => point.value), t('currencyTrendBasis'), null, change24h, { series: history, changeLabel: t('currencyChange24h') })}
+      </article>
+      <article class="currency-chart-card">
+        <h3>${t('currencyForecastChart')} · ${t('currencyExpectedChange')}: ${Number.isFinite(forecastChange) ? formatChange(forecastChange) : '-'}</h3>
+        ${miniSignalChart(forecastSeries.map(point => point.value), t('currencyForecastBasis'), null, forecastChange, { series: forecastSeries, changeLabel: t('currencyExpectedChange') })}
+        <p class="currency-forecast-note">${t('currencyForecastDisclaimer')} ${t('currencyForecastConfidence')}: ${escapeHtml(forecast.confidence || '-')}.</p>
+      </article>
+    </section>
+    <section class="ai-list-panel">
+      <h3>${t('currencyRiskFlags')}</h3>
+      ${risks.length ? `<div class="currency-risk-list">${risks.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : `<p class="text-secondary">${t('currencyNoRisks')}</p>`}
+    </section>
+  `;
+}
+
+function renderCurrencyAiResult() {
+  const result = byId('currency-ai-result');
+  if (!result) return;
+  const job = state.currencyAnalysis.aiJob;
+  if (state.currencyAnalysis.aiRunning) {
+    result.innerHTML = `<section class="ai-list-panel">${loadingMarkup(t('currencyAiRunning'))}</section>`;
+    return;
+  }
+  if (job?.status === 'completed') {
+    result.innerHTML = `<section><h3>${t('currencyAiAdvice')}</h3>${renderAiAssessmentContent(job, '')}</section>`;
+  } else if (job?.status === 'failed') {
+    result.innerHTML = `<p class="text-secondary">${escapeHtml(job.error || t('aiAnalysisFailed'))}</p>`;
+  } else {
+    result.innerHTML = '';
+  }
+}
+
+function renderCurrencyAnalysisPanel() {
+  fillCurrencyAnalysisSelect();
+  const status = byId('currency-analysis-status');
+  const runButton = byId('run-currency-analysis');
+  const aiButton = byId('run-ai-currency-analysis');
+  if (runButton) runButton.disabled = Boolean(state.currencyAnalysis.isLoading);
+  if (aiButton) aiButton.disabled = Boolean(state.currencyAnalysis.aiRunning) || !accountCanUseAi();
+  if (status) {
+    if (state.currencyAnalysis.isLoading) {
+      status.innerHTML = loadingMarkup(t('currencyAnalysisLoading'), 'inline');
+    } else if (state.currencyAnalysis.aiRunning) {
+      status.innerHTML = loadingMarkup(t('currencyAiRunning'), 'inline');
+    } else if (state.currencyAnalysis.error) {
+      status.textContent = t('currencyAnalysisFailed');
+    } else if (state.currencyAnalysis.context) {
+      status.textContent = t('currencyAnalysisReady');
+    } else {
+      status.textContent = '';
+    }
+  }
+  if (state.currencyAnalysis.error && !state.currencyAnalysis.context) {
+    const result = byId('currency-analysis-result');
+    if (result) result.innerHTML = `<p class="text-secondary">${escapeHtml(state.currencyAnalysis.error)}</p>`;
+  } else {
+    renderCurrencyAnalysisContext(state.currencyAnalysis.context);
+  }
+  renderCurrencyAiResult();
+}
+
+function clearCurrencyAiPollTimer() {
+  if (state.currencyAnalysis.pollTimer) {
+    clearTimeout(state.currencyAnalysis.pollTimer);
+    state.currencyAnalysis.pollTimer = null;
+  }
+}
+
+async function runCurrencyAnalysis() {
+  if (state.currencyAnalysis.isLoading) return null;
+  clearCurrencyAiPollTimer();
+  const payload = currencyAnalysisPayload();
+  state.currencyAnalysis.isLoading = true;
+  state.currencyAnalysis.aiJob = null;
+  state.currencyAnalysis.error = '';
+  renderCurrencyAnalysisPanel();
+  try {
+    const params = new URLSearchParams();
+    Object.entries(payload).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') params.set(key, String(value));
+    });
+    const response = await fetch(`/api/trade/currency-analysis?${params.toString()}`);
+    const context = await response.json();
+    if (!response.ok || context.error) {
+      const message = response.status === 404
+        ? t('currencyAnalysisBackendMissing')
+        : (context.error || context.detail || t('currencyAnalysisFailed'));
+      throw new Error(message);
+    }
+    state.currencyAnalysis.context = context;
+    return context;
+  } catch (error) {
+    state.currencyAnalysis.context = null;
+    state.currencyAnalysis.error = error.message || String(error);
+    return null;
+  } finally {
+    state.currencyAnalysis.isLoading = false;
+    renderCurrencyAnalysisPanel();
+  }
+}
+
+async function pollAiCurrencyAnalysis(jobId) {
+  try {
+    const job = await fetchAccountJson(`/api/ai/currency-analysis/${encodeURIComponent(jobId)}`);
+    state.currencyAnalysis.aiJob = job;
+    if (job.context) state.currencyAnalysis.context = job.context;
+    state.currencyAnalysis.aiRunning = ['queued', 'running'].includes(job.status);
+    renderCurrencyAnalysisPanel();
+    if (state.currencyAnalysis.aiRunning) {
+      state.currencyAnalysis.pollTimer = setTimeout(() => pollAiCurrencyAnalysis(jobId), 2500);
+    }
+  } catch (error) {
+    state.currencyAnalysis.aiRunning = false;
+    state.currencyAnalysis.aiJob = { status: 'failed', error: error.message || String(error) };
+    renderCurrencyAnalysisPanel();
+  }
+}
+
+async function runAiCurrencyAnalysis() {
+  if (!accountCanUseAi() || state.currencyAnalysis.aiRunning) return;
+  clearCurrencyAiPollTimer();
+  const payload = currencyAnalysisPayload();
+  state.currencyAnalysis.aiRunning = true;
+  state.currencyAnalysis.aiJob = { status: 'queued', params: payload };
+  state.currencyAnalysis.error = '';
+  renderCurrencyAnalysisPanel();
+  try {
+    const job = await sendAccountJson('/api/ai/currency-analysis', payload);
+    state.currencyAnalysis.aiJob = job;
+    if (job.context) state.currencyAnalysis.context = job.context;
+    state.currencyAnalysis.aiRunning = ['queued', 'running'].includes(job.status);
+    renderCurrencyAnalysisPanel();
+    if (job.job_id && state.currencyAnalysis.aiRunning) {
+      state.currencyAnalysis.pollTimer = setTimeout(() => pollAiCurrencyAnalysis(job.job_id), 1200);
+    }
+  } catch (error) {
+    state.currencyAnalysis.aiRunning = false;
+    state.currencyAnalysis.aiJob = { status: 'failed', error: error.message || String(error) };
+    renderCurrencyAnalysisPanel();
+  }
+}
+
 function renderNotificationPanel() {
   fillNotificationControls();
   const status = byId('telegram-config-status');
@@ -1193,6 +1884,7 @@ function renderCabinet() {
       : `<p class="text-secondary">${t('noClosedTrades')}</p>`;
   }
   queueAccountChartSeriesLoad();
+  renderAdminPanel();
   renderNotificationPanel();
 }
 
@@ -1381,6 +2073,7 @@ function renderCategories() {
       renderCategories();
       renderMarket();
       renderAdvice((state.rates[state.selectedCategory] || {}).advice || []);
+      renderAiPanel();
       loadLatestCachedRates();
     });
     list.appendChild(button);
@@ -2222,6 +2915,7 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
   const firstValue = data[0];
   const numericChange = Number(changeValue);
   const change = Number.isFinite(numericChange) ? numericChange : (firstValue ? ((data[data.length - 1] - firstValue) / firstValue) * 100 : null);
+  const changeLabel = options.changeLabel || t('sevenDayChange');
   return `
     <aside class="advice-chart ${directionClass}">
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${t('priceChartLabel')}">
@@ -2235,7 +2929,7 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
         ${valueLabels}
         ${dayLabels}
       </svg>
-      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatChartAmount(displayCurrent)}</span><span>${t('sevenDayChange')}: ${formatChange(change)}</span></div>
+      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatChartAmount(displayCurrent)}</span><span>${escapeHtml(changeLabel)}: ${formatChange(change)}</span></div>
       <div class="advice-chart-basis">${t('signalBasis')}: ${basisText}</div>
     </aside>
   `;
@@ -2367,8 +3061,15 @@ function openItemDetail(itemId) {
   renderSelectedItemDetail();
 }
 
+function allowedMainViews() {
+  const views = ['market', 'signals', 'lots', 'cabinet'];
+  if (state.account.user?.is_admin) views.push('admin');
+  if (accountCanUseAi()) views.push('ai');
+  return views;
+}
+
 function switchMainView(view) {
-  state.mainView = ['signals', 'lots', 'cabinet'].includes(view) ? view : 'market';
+  state.mainView = allowedMainViews().includes(view) ? view : 'market';
   document.querySelectorAll('.main-view-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.mainTab === state.mainView);
   });
@@ -2378,6 +3079,9 @@ function switchMainView(view) {
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
   if (state.mainView === 'lots') renderSellerLots();
   if (state.mainView === 'cabinet') renderCabinet();
+  if (state.mainView === 'admin') renderAdminPanel();
+  if (state.mainView === 'ai') renderAiPanel();
+  renderMainViewHeader();
   if (window.location.pathname === '/') {
     const params = new URLSearchParams(window.location.search);
     if (state.mainView === 'market') {
@@ -3420,6 +4124,22 @@ async function initLiveTrade() {
     byId('refresh-static').addEventListener('click', () => window.location.reload());
     byId('market-search').addEventListener('input', renderMarket);
     byId('search-lots')?.addEventListener('click', searchSellerLots);
+    byId('run-ai-analysis')?.addEventListener('click', runAiAnalysis);
+    byId('run-currency-analysis')?.addEventListener('click', runCurrencyAnalysis);
+    byId('run-ai-currency-analysis')?.addEventListener('click', runAiCurrencyAnalysis);
+    byId('currency-analysis-id')?.addEventListener('change', () => {
+      state.currencyAnalysis.context = null;
+      state.currencyAnalysis.error = '';
+      state.currencyAnalysis.aiJob = null;
+      renderCurrencyAnalysisPanel();
+    });
+    ['currency-horizon-hours', 'currency-forecast-points', 'currency-history-limit', 'currency-refresh-before-analysis'].forEach(id => {
+      byId(id)?.addEventListener('change', () => {
+        state.currencyAnalysis.error = '';
+        state.currencyAnalysis.aiJob = null;
+        renderCurrencyAnalysisPanel();
+      });
+    });
     bindAccountEvents();
     ['lot-seller', 'lot-query'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
@@ -3471,12 +4191,16 @@ async function initLiveTrade() {
         state.historyTrends = [];
         state.historyTrendsKey = '';
         state.isLoadingHistoryTrends = false;
+        state.currencyAnalysis.context = null;
+        state.currencyAnalysis.error = '';
+        state.currencyAnalysis.aiJob = null;
         state.detailDemandCache = {};
         state.detailSeriesCache = {};
         state.sellerLots = null;
         setText('last-snapshot', '-');
         setText('rate-source', '-');
         renderTargetCurrencyInfo();
+        renderAiPanel();
         renderMarket();
         renderAdvice([]);
         renderSelectedItemDetail();
@@ -3484,6 +4208,8 @@ async function initLiveTrade() {
       });
     });
     const requestedView = new URLSearchParams(window.location.search).get('view');
+    const requestedAdminView = requestedView === 'admin';
+    const requestedAiView = requestedView === 'ai';
     if (['market', 'signals', 'lots', 'cabinet'].includes(requestedView)) {
       state.mainView = requestedView;
     }
@@ -3501,7 +4227,15 @@ async function initLiveTrade() {
     });
     applyLanguage();
     loadLatestCachedRates();
-    loadAccountState().then(showVerificationQueryStatus);
+    loadAccountState().then(() => {
+      showVerificationQueryStatus();
+      if (requestedAdminView) {
+        switchMainView('admin');
+      }
+      if (requestedAiView) {
+        switchMainView('ai');
+      }
+    });
     scheduleAutoRefresh();
   } catch (error) {
     setLiveError(error.message || String(error));

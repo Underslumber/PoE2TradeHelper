@@ -44,9 +44,11 @@ PoE2 Trade Helper - черновик помощника для торговли 
 - Любые торговые выводы должны учитывать spread, малый объем, устаревшие/фейковые listings, комиссии/практическую исполнимость и риск price fixing.
 - Для прибыльности разделяй данные: raw listings, нормализованные цены, агрегаты/медианы, выводы/сигналы. Не смешивай это в одном неявном словаре.
 - Регулярные слепки stackable-рынка собирай через `app.market_snapshots` / `python -m app.cli market-snapshots`: по умолчанию `status=any`, основной target `exalted`, 5 минут первые 48 часов при заданном `--league-start`, затем 15 минут. Пока FastAPI-приложение активно, `app.market_service` запускает сбор по умолчанию и раз в 10 минут проверяет новые PoE2 trade-лиги. Не трактуй `volume` как точное количество закрытых сделок; это прокси спроса/активности.
-- Личный кабинет - локальная функция поверх SQLite: пользователи, сессии, закрепленные позиции, Telegram-уведомления и журнал сделок не требуют OAuth PoE. Новая регистрация требует подтверждения email; SMTP настраивается через `.env`, а без SMTP допустима локальная dev-ссылка подтверждения. Telegram bot token хранится в `.env`, пользователь указывает chat id и правила по закрепленным позициям.
+- Личный кабинет - локальная функция поверх SQLite: пользователи, сессии, закрепленные позиции, Telegram-уведомления, админские права, локальные метрики ИИ и журнал сделок не требуют OAuth PoE. Новая регистрация требует подтверждения email; SMTP настраивается через `.env`, а без SMTP допустима локальная dev-ссылка подтверждения. Telegram bot token хранится в `.env`, пользователь указывает chat id и правила по закрепленным позициям. Админский bootstrap идет через `ADMIN_USERNAME`/`ADMIN_PASSWORD`; если в базе нет админов, первый существующий или первый зарегистрированный пользователь получает админку. Веб-ИИ ограничивается локальной дневной квотой `AI_DAILY_QUOTA`; это не фактическая квота внешнего провайдера.
 - Сделки разделяй на отслеживание, открытый вход и закрытый выход. Номинальная маржа считается в валюте входа. Реальная маржа считается через benchmark: `(current_value / entry_value) / (current_benchmark / entry_benchmark) - 1`. На старте сезона не зашивай Divine Orb как единственный смысловой эталон: UI должен позволять выбрать Divine/Exalted/Chaos, а будущая корзина ликвидных валют/предметов должна идти отдельной моделью.
 - Для ИИ-анализа рынка сначала собирай контекст через `app.ai_context` / `/api/ai/market-context`: передавай снимки, агрегаты, внешние новости и риски как данные, но не позволяй ИИ выдумывать цены или автоматически покупать.
+- Валютный анализ держи в `app.currency_analyzer` / `/api/trade/currency-analysis` / `python -m app.cli currency-analyze`: локально считай историю, тренд, волатильность и осторожный прогноз по сохраненным снимкам Currency. ИИ передавай этот контекст через `/api/ai/currency-analysis`, но не позволяй ему заменять расчет цен или прогнозов.
+- В live UI вкладка ИИ должна показываться только пользователям с `can_use_ai` или админкой. Из браузера запускай анализ через backend-задачу `/api/ai/market-analysis`, а не прямым вызовом Codex CLI.
 - Codex CLI-анализатор рынка должен идти через `app.codex_market_analyzer` / `python -m app.cli market-analyze`: запускать `codex exec` только в read-only режиме, сохранять входной payload и ответ в `data/ai_market_analyses`, валидировать `action/confidence` и не превращать сигнал в автопокупку.
 - Если добавляешь анализ предметов, сначала сделай parser/normalizer для pasted item text или fetched listing, затем отдельный pricing engine.
 - Для будущего UI лучше строить тонкий интерфейс поверх отдельного API/service слоя в `app/`.
@@ -56,7 +58,7 @@ PoE2 Trade Helper - черновик помощника для торговли 
 Запускай после изменений в Python-коде:
 
 ```powershell
-python -m py_compile mcp_server.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py
+python -m py_compile mcp_server.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py
 ```
 
 Эта команда проверяет синтаксис ключевых Python-файлов без запуска приложения и без сетевых запросов.

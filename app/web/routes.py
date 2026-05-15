@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
+from time import perf_counter
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.account import (
@@ -30,7 +33,10 @@ from app.account import (
     verify_password,
 )
 from app.ai_context import load_ai_market_context
+from app.codex_market_analyzer import run_codex_market_analysis
+from app.currency_analyzer import load_currency_trend_context
 from app.db.models import (
+    AIUsageEvent,
     PinnedPosition,
     Row,
     Snapshot,
@@ -66,6 +72,13 @@ from app.trade2 import (
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
 SESSION_COOKIE = "poe2_session"
+AI_MARKET_CONTEXT_FEATURE = "market_context"
+AI_MARKET_ANALYSIS_FEATURE = "market_analysis"
+AI_CURRENCY_ANALYSIS_FEATURE = "currency_analysis"
+AI_MARKET_ANALYSIS_JOBS: dict[str, dict] = {}
+AI_CURRENCY_ANALYSIS_JOBS: dict[str, dict] = {}
+AI_MARKET_ANALYSIS_MAX_JOBS = 50
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def trade_api_error(exc: Exception) -> JSONResponse:
@@ -102,6 +115,16 @@ def _float_value(payload: dict, key: str, default: float | None = None) -> float
         return default
 
 
+def _int_value(payload: dict, key: str, default: int | None = None) -> int | None:
+    value = payload.get(key, default)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _session_user(request: Request, db: Session) -> User | None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
@@ -130,6 +153,32 @@ def require_user(request: Request, db: Session) -> User | JSONResponse:
     user = _session_user(request, db)
     if not user:
         return account_api_error("Требуется вход в аккаунт.", status_code=401, key="accountErrorLoginRequired")
+    return user
+
+
+def _user_is_admin(user: User) -> bool:
+    return bool(user.is_admin)
+
+
+def _user_can_use_ai(user: User) -> bool:
+    return bool(user.is_admin or user.can_use_ai)
+
+
+def require_admin(request: Request, db: Session) -> User | JSONResponse:
+    user = require_user(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    if not _user_is_admin(user):
+        return account_api_error("Нужен доступ администратора.", status_code=403, key="accountErrorAdminRequired")
+    return user
+
+
+def require_ai_access(request: Request, db: Session) -> User | JSONResponse:
+    user = require_user(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    if not _user_can_use_ai(user):
+        return account_api_error("Нет доступа к ИИ-функциям.", status_code=403, key="accountErrorAiAccessRequired")
     return user
 
 
@@ -173,7 +222,288 @@ def _user_payload(user: User | None) -> dict:
             "email": user.email,
             "email_verified": bool(user.email_verified_at),
             "display_name": user.display_name,
+            "is_admin": _user_is_admin(user),
+            "can_use_ai": _user_can_use_ai(user),
             "created_at": user.created_at,
+        },
+    }
+
+
+def _admin_user_payload(user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "email_verified": bool(user.email_verified_at),
+        "display_name": user.display_name,
+        "is_admin": _user_is_admin(user),
+        "can_use_ai": bool(user.can_use_ai),
+        "effective_can_use_ai": _user_can_use_ai(user),
+        "created_at": user.created_at,
+    }
+
+
+def _ai_daily_limit() -> int | None:
+    try:
+        limit = int(os.environ.get("AI_DAILY_QUOTA", "100"))
+    except ValueError:
+        limit = 100
+    return limit if limit > 0 else None
+
+
+def _ai_quota_window_start() -> str:
+    return utc_now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _ai_metered_events_today(db: Session) -> int:
+    return int(
+        db.scalar(
+            select(func.count(AIUsageEvent.id)).where(
+                AIUsageEvent.created_at >= _ai_quota_window_start(),
+                AIUsageEvent.status_code != 429,
+            )
+        )
+        or 0
+    )
+
+
+def _ai_quota_payload(db: Session) -> dict:
+    limit = _ai_daily_limit()
+    used = _ai_metered_events_today(db)
+    remaining = None if limit is None else max(limit - used, 0)
+    return {
+        "daily_limit": limit,
+        "used_today": used,
+        "remaining": remaining,
+        "window_start": _ai_quota_window_start(),
+    }
+
+
+def _record_ai_usage(
+    db: Session,
+    user: User,
+    *,
+    feature: str,
+    success: bool,
+    status_code: int,
+    duration_ms: int | None = None,
+) -> None:
+    db.add(
+        AIUsageEvent(
+            user_id=user.id,
+            feature=feature,
+            created_at=now_iso(),
+            success=1 if success else 0,
+            status_code=status_code,
+            duration_ms=duration_ms,
+        )
+    )
+    db.commit()
+
+
+def _prune_ai_market_analysis_jobs() -> None:
+    if len(AI_MARKET_ANALYSIS_JOBS) <= AI_MARKET_ANALYSIS_MAX_JOBS:
+        return
+    ordered = sorted(
+        AI_MARKET_ANALYSIS_JOBS.items(),
+        key=lambda item: str(item[1].get("created_at") or ""),
+    )
+    for job_id, _job in ordered[: max(0, len(ordered) - AI_MARKET_ANALYSIS_MAX_JOBS)]:
+        AI_MARKET_ANALYSIS_JOBS.pop(job_id, None)
+
+
+def _prune_ai_currency_analysis_jobs() -> None:
+    if len(AI_CURRENCY_ANALYSIS_JOBS) <= AI_MARKET_ANALYSIS_MAX_JOBS:
+        return
+    ordered = sorted(
+        AI_CURRENCY_ANALYSIS_JOBS.items(),
+        key=lambda item: str(item[1].get("created_at") or ""),
+    )
+    for job_id, _job in ordered[: max(0, len(ordered) - AI_MARKET_ANALYSIS_MAX_JOBS)]:
+        AI_CURRENCY_ANALYSIS_JOBS.pop(job_id, None)
+
+
+def _ai_market_analysis_job_payload(job: dict) -> dict:
+    return {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "duration_ms": job.get("duration_ms"),
+        "params": job.get("params") or {},
+        "context": job.get("context"),
+        "assessment": job.get("assessment"),
+        "analysis_path": job.get("analysis_path"),
+        "error": job.get("error"),
+    }
+
+
+async def _run_ai_market_analysis_job(job_id: str, params: dict) -> None:
+    job = AI_MARKET_ANALYSIS_JOBS.get(job_id)
+    if not job:
+        return
+    started = perf_counter()
+    job["status"] = "running"
+    job["started_at"] = now_iso()
+    try:
+        context = await load_ai_market_context(
+            league=params["league"],
+            category=params["category"],
+            target=params["target"],
+            status=params["status"],
+            league_day=params.get("league_day"),
+            limit=params["limit"],
+            refresh=params["refresh"],
+        )
+        context.setdefault("request", {})["max_candidates"] = params["max_candidates"]
+        result = await asyncio.to_thread(
+            run_codex_market_analysis,
+            context,
+            timeout_seconds=params["timeout_seconds"],
+            cwd=PROJECT_ROOT,
+        )
+        job["status"] = "completed"
+        job["assessment"] = result.get("assessment")
+        job["analysis_path"] = result.get("analysis_path")
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)
+    finally:
+        job["finished_at"] = now_iso()
+        job["duration_ms"] = int((perf_counter() - started) * 1000)
+
+
+def _schedule_ai_market_analysis_job(job_id: str, params: dict) -> None:
+    asyncio.create_task(_run_ai_market_analysis_job(job_id, params))
+
+
+async def _run_ai_currency_analysis_job(job_id: str, params: dict) -> None:
+    job = AI_CURRENCY_ANALYSIS_JOBS.get(job_id)
+    if not job:
+        return
+    started = perf_counter()
+    job["status"] = "running"
+    job["started_at"] = now_iso()
+    try:
+        context = await load_currency_trend_context(
+            league=params["league"],
+            currency_id=params["currency_id"],
+            target=params["target"],
+            status=params["status"],
+            league_day=params.get("league_day"),
+            history_limit=params["history_limit"],
+            horizon_hours=params["horizon_hours"],
+            forecast_points=params["forecast_points"],
+            refresh=params["refresh"],
+        )
+        context.setdefault("request", {})["max_candidates"] = 1
+        result = await asyncio.to_thread(
+            run_codex_market_analysis,
+            context,
+            timeout_seconds=params["timeout_seconds"],
+            cwd=PROJECT_ROOT,
+        )
+        job["status"] = "completed"
+        job["context"] = context
+        job["assessment"] = result.get("assessment")
+        job["analysis_path"] = result.get("analysis_path")
+    except Exception as exc:
+        job["status"] = "failed"
+        job["error"] = str(exc)
+    finally:
+        job["finished_at"] = now_iso()
+        job["duration_ms"] = int((perf_counter() - started) * 1000)
+
+
+def _schedule_ai_currency_analysis_job(job_id: str, params: dict) -> None:
+    asyncio.create_task(_run_ai_currency_analysis_job(job_id, params))
+
+
+def _parse_event_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _admin_metrics_payload(db: Session) -> dict:
+    users = db.scalars(select(User)).all()
+    users_by_id = {user.id: user for user in users}
+    now = utc_now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    since = today - timedelta(days=6)
+    events = db.scalars(
+        select(AIUsageEvent)
+        .where(AIUsageEvent.created_at >= since.isoformat())
+        .order_by(AIUsageEvent.created_at.desc())
+        .limit(500)
+    ).all()
+    today_events = [event for event in events if (_parse_event_datetime(event.created_at) or since) >= today]
+    daily = []
+    for offset in range(6, -1, -1):
+        day = today - timedelta(days=offset)
+        next_day = day + timedelta(days=1)
+        day_events = [
+            event
+            for event in events
+            if (parsed := _parse_event_datetime(event.created_at)) and day <= parsed < next_day
+        ]
+        daily.append(
+            {
+                "date": day.date().isoformat(),
+                "requests": len(day_events),
+                "failures": sum(1 for event in day_events if not event.success),
+            }
+        )
+    top_users = []
+    for user in users:
+        user_events = [event for event in today_events if event.user_id == user.id]
+        if user_events:
+            top_users.append(
+                {
+                    "user_id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "requests": len(user_events),
+                    "failures": sum(1 for event in user_events if not event.success),
+                    "last_at": max(user_events, key=lambda event: event.created_at).created_at,
+                }
+            )
+    top_users.sort(key=lambda item: (-item["requests"], item["username"]))
+    recent = []
+    for event in events[:20]:
+        user = users_by_id.get(event.user_id)
+        recent.append(
+            {
+                "id": event.id,
+                "created_at": event.created_at,
+                "username": user.username if user else "",
+                "display_name": user.display_name if user else "",
+                "feature": event.feature,
+                "success": bool(event.success),
+                "status_code": event.status_code,
+                "duration_ms": event.duration_ms,
+            }
+        )
+    return {
+        "users": {
+            "total": len(users),
+            "admins": sum(1 for user in users if _user_is_admin(user)),
+            "ai_enabled": sum(1 for user in users if _user_can_use_ai(user)),
+            "email_verified": sum(1 for user in users if user.email_verified_at),
+        },
+        "ai_quota": _ai_quota_payload(db),
+        "ai_usage": {
+            "events_today": len(today_events),
+            "failures_today": sum(1 for event in today_events if not event.success),
+            "total_events": int(db.scalar(select(func.count(AIUsageEvent.id))) or 0),
+            "daily": daily,
+            "top_users_today": top_users[:8],
+            "recent": recent,
         },
     }
 
@@ -460,6 +790,7 @@ def api_auth_register(
     existing_email = db.scalars(select(User).where(User.email == email)).first()
     if existing_email:
         return account_api_error("Такой email уже зарегистрирован.", status_code=409, key="accountErrorEmailTaken")
+    is_first_user = db.scalars(select(User.id)).first() is None
     user = User(
         username=username,
         email=email,
@@ -467,6 +798,8 @@ def api_auth_register(
         password_hash=hash_password(password),
         email_verification_token=new_email_verification_token(),
         email_verification_sent_at=now_iso(),
+        is_admin=1 if is_first_user else 0,
+        can_use_ai=1 if is_first_user else 0,
         created_at=now_iso(),
     )
     db.add(user)
@@ -546,6 +879,52 @@ def api_auth_logout(request: Request, response: Response, db: Session = Depends(
             db.commit()
     response.delete_cookie(SESSION_COOKIE)
     return {"authenticated": False}
+
+
+@router.get("/api/admin/users")
+def api_admin_users(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    if isinstance(admin, JSONResponse):
+        return admin
+    users = db.scalars(select(User).order_by(User.created_at.desc(), User.id.desc())).all()
+    return {"users": [_admin_user_payload(user) for user in users]}
+
+
+@router.get("/api/admin/metrics")
+def api_admin_metrics(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    if isinstance(admin, JSONResponse):
+        return admin
+    return _admin_metrics_payload(db)
+
+
+@router.patch("/api/admin/users/{user_id}/permissions")
+def api_admin_user_permissions(
+    user_id: int,
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    admin = require_admin(request, db)
+    if isinstance(admin, JSONResponse):
+        return admin
+    user = db.get(User, user_id)
+    if not user:
+        return account_api_error("Пользователь не найден.", status_code=404, key="accountErrorUserNotFound")
+    if "is_admin" in payload:
+        next_is_admin = 1 if bool(payload.get("is_admin")) else 0
+        if user.id == admin.id and not next_is_admin:
+            return account_api_error(
+                "Нельзя снять админский доступ с текущей учетной записи.",
+                status_code=400,
+                key="accountErrorAdminSelfDemote",
+            )
+        user.is_admin = next_is_admin
+    if "can_use_ai" in payload:
+        user.can_use_ai = 1 if bool(payload.get("can_use_ai")) else 0
+    db.commit()
+    db.refresh(user)
+    return {"user": _admin_user_payload(user)}
 
 
 @router.get("/api/account/pins")
@@ -1065,8 +1444,37 @@ def api_trade_item_history(
     }
 
 
+@router.get("/api/trade/currency-analysis")
+async def api_trade_currency_analysis(
+    league: str = Query(...),
+    currency_id: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    league_day: int | None = Query(None, ge=0),
+    history_limit: int = Query(1500, ge=2, le=2000),
+    horizon_hours: int = Query(24, ge=1, le=168),
+    forecast_points: int = Query(12, ge=2, le=48),
+    refresh: bool = Query(False),
+):
+    try:
+        return await load_currency_trend_context(
+            league=league,
+            currency_id=currency_id,
+            target=target,
+            status=status,
+            league_day=league_day,
+            history_limit=history_limit,
+            horizon_hours=horizon_hours,
+            forecast_points=forecast_points,
+            refresh=refresh,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
+
+
 @router.get("/api/ai/market-context")
 async def api_ai_market_context(
+    request: Request,
     league: str = Query(...),
     category: str = Query(...),
     target: str = Query("exalted"),
@@ -1074,9 +1482,25 @@ async def api_ai_market_context(
     league_day: int | None = Query(None, ge=0),
     limit: int = Query(80, ge=1, le=250),
     refresh: bool = Query(False),
+    db: Session = Depends(get_db),
 ):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    quota = _ai_quota_payload(db)
+    if quota["remaining"] == 0:
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_MARKET_CONTEXT_FEATURE,
+            success=False,
+            status_code=429,
+            duration_ms=0,
+        )
+        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+    started = perf_counter()
     try:
-        return await load_ai_market_context(
+        data = await load_ai_market_context(
             league=league,
             category=category,
             target=target,
@@ -1085,8 +1509,203 @@ async def api_ai_market_context(
             limit=limit,
             refresh=refresh,
         )
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_MARKET_CONTEXT_FEATURE,
+            success=True,
+            status_code=200,
+            duration_ms=int((perf_counter() - started) * 1000),
+        )
+        if isinstance(data, dict):
+            data["ai_quota"] = _ai_quota_payload(db)
+        return data
     except Exception as exc:
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_MARKET_CONTEXT_FEATURE,
+            success=False,
+            status_code=502,
+            duration_ms=int((perf_counter() - started) * 1000),
+        )
         return trade_api_error(exc)
+
+
+@router.post("/api/ai/market-analysis")
+async def api_ai_market_analysis_create(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    quota = _ai_quota_payload(db)
+    if quota["remaining"] == 0:
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_MARKET_ANALYSIS_FEATURE,
+            success=False,
+            status_code=429,
+            duration_ms=0,
+        )
+        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+
+    league = _text(payload, "league")
+    category = _text(payload, "category")
+    target = _text(payload, "target", "exalted") or "exalted"
+    status = _text(payload, "status", "any") or "any"
+    if status not in {"online", "any"}:
+        status = "any"
+    if not league or not category:
+        return account_api_error("Для ИИ-анализа нужны лига и категория.", key="accountErrorAiAnalysisPayload")
+
+    params = {
+        "league": league,
+        "category": category,
+        "target": target,
+        "status": status,
+        "league_day": _int_value(payload, "league_day"),
+        "limit": min(max(_int_value(payload, "limit", 80) or 80, 1), 250),
+        "max_candidates": min(max(_int_value(payload, "max_candidates", 10) or 10, 1), 20),
+        "refresh": bool(payload.get("refresh")),
+        "timeout_seconds": min(max(_int_value(payload, "timeout_seconds", 600) or 600, 30), 1800),
+    }
+    job_id = uuid.uuid4().hex
+    AI_MARKET_ANALYSIS_JOBS[job_id] = {
+        "job_id": job_id,
+        "user_id": user.id,
+        "status": "queued",
+        "created_at": now_iso(),
+        "params": params,
+        "assessment": None,
+        "analysis_path": None,
+        "error": None,
+    }
+    _prune_ai_market_analysis_jobs()
+    _record_ai_usage(
+        db,
+        user,
+        feature=AI_MARKET_ANALYSIS_FEATURE,
+        success=True,
+        status_code=202,
+        duration_ms=0,
+    )
+    _schedule_ai_market_analysis_job(job_id, params)
+    return JSONResponse(
+        _ai_market_analysis_job_payload(AI_MARKET_ANALYSIS_JOBS[job_id]) | {"ai_quota": _ai_quota_payload(db)},
+        status_code=202,
+    )
+
+
+@router.get("/api/ai/market-analysis/{job_id}")
+def api_ai_market_analysis_status(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    job = AI_MARKET_ANALYSIS_JOBS.get(job_id)
+    if not job:
+        return account_api_error("ИИ-анализ не найден.", status_code=404, key="accountErrorAiAnalysisNotFound")
+    if job.get("user_id") != user.id and not _user_is_admin(user):
+        return account_api_error("ИИ-анализ не найден.", status_code=404, key="accountErrorAiAnalysisNotFound")
+    payload = _ai_market_analysis_job_payload(job)
+    payload["ai_quota"] = _ai_quota_payload(db)
+    return payload
+
+
+@router.post("/api/ai/currency-analysis")
+async def api_ai_currency_analysis_create(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    quota = _ai_quota_payload(db)
+    if quota["remaining"] == 0:
+        _record_ai_usage(
+            db,
+            user,
+            feature=AI_CURRENCY_ANALYSIS_FEATURE,
+            success=False,
+            status_code=429,
+            duration_ms=0,
+        )
+        return account_api_error("Дневная квота ИИ-функций исчерпана.", status_code=429, key="accountErrorAiQuotaExceeded")
+
+    league = _text(payload, "league")
+    currency_id = _text(payload, "currency_id")
+    target = _text(payload, "target", "exalted") or "exalted"
+    status = _text(payload, "status", "any") or "any"
+    if status not in {"online", "any"}:
+        status = "any"
+    if not league or not currency_id:
+        return account_api_error("Для ИИ-анализа валюты нужны лига и валюта.", key="accountErrorAiCurrencyPayload")
+
+    params = {
+        "league": league,
+        "currency_id": currency_id,
+        "target": target,
+        "status": status,
+        "league_day": _int_value(payload, "league_day"),
+        "history_limit": min(max(_int_value(payload, "history_limit", 1500) or 1500, 2), 2000),
+        "horizon_hours": min(max(_int_value(payload, "horizon_hours", 24) or 24, 1), 168),
+        "forecast_points": min(max(_int_value(payload, "forecast_points", 12) or 12, 2), 48),
+        "refresh": bool(payload.get("refresh")),
+        "timeout_seconds": min(max(_int_value(payload, "timeout_seconds", 600) or 600, 30), 1800),
+    }
+    job_id = uuid.uuid4().hex
+    AI_CURRENCY_ANALYSIS_JOBS[job_id] = {
+        "job_id": job_id,
+        "user_id": user.id,
+        "status": "queued",
+        "created_at": now_iso(),
+        "params": params,
+        "context": None,
+        "assessment": None,
+        "analysis_path": None,
+        "error": None,
+    }
+    _prune_ai_currency_analysis_jobs()
+    _record_ai_usage(
+        db,
+        user,
+        feature=AI_CURRENCY_ANALYSIS_FEATURE,
+        success=True,
+        status_code=202,
+        duration_ms=0,
+    )
+    _schedule_ai_currency_analysis_job(job_id, params)
+    return JSONResponse(
+        _ai_market_analysis_job_payload(AI_CURRENCY_ANALYSIS_JOBS[job_id]) | {"ai_quota": _ai_quota_payload(db)},
+        status_code=202,
+    )
+
+
+@router.get("/api/ai/currency-analysis/{job_id}")
+def api_ai_currency_analysis_status(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    job = AI_CURRENCY_ANALYSIS_JOBS.get(job_id)
+    if not job:
+        return account_api_error("ИИ-анализ не найден.", status_code=404, key="accountErrorAiAnalysisNotFound")
+    if job.get("user_id") != user.id and not _user_is_admin(user):
+        return account_api_error("ИИ-анализ не найден.", status_code=404, key="accountErrorAiAnalysisNotFound")
+    payload = _ai_market_analysis_job_payload(job)
+    payload["ai_quota"] = _ai_quota_payload(db)
+    return payload
 
 
 @router.get("/api/rows")
