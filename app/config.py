@@ -31,6 +31,13 @@ MARKET_SNAPSHOT_INCLUDE_UNSUPPORTED: Final = os.environ.get("MARKET_SNAPSHOT_INC
     "no",
     "off",
 }
+FUNPAY_RUB_SNAPSHOT_ENABLED: Final = os.environ.get("FUNPAY_RUB_SNAPSHOT_ENABLED", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+FUNPAY_RUB_SNAPSHOT_TARGET: Final = os.environ.get("FUNPAY_RUB_SNAPSHOT_TARGET", "divine")
 
 for path in [DATA_DIR, STORAGE_DIR, RAW_DIR / "xhr", RAW_DIR / "html", RAW_DIR / "dom", ICONS_DIR]:
     path.mkdir(parents=True, exist_ok=True)

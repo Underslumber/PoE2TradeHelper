@@ -48,6 +48,7 @@ from app.db.models import (
 from app.db.session import get_session
 from app.export.export_csv import export_rows_csv
 from app.export.export_jsonl import export_rows_jsonl
+from app.funpay_market import load_funpay_rub_context
 from app.market_service import market_snapshot_service
 from app.notifications import (
     normalize_event_type,
@@ -166,6 +167,10 @@ def _user_can_use_ai(user: User) -> bool:
     return bool(user.is_admin or user.can_use_ai)
 
 
+def _user_fiat_rub_enabled(user: User) -> bool:
+    return bool(user.fiat_rub_enabled)
+
+
 def require_admin(request: Request, db: Session) -> User | JSONResponse:
     user = require_user(request, db)
     if isinstance(user, JSONResponse):
@@ -181,6 +186,19 @@ def require_ai_access(request: Request, db: Session) -> User | JSONResponse:
         return user
     if not _user_can_use_ai(user):
         return account_api_error("Нет доступа к ИИ-функциям.", status_code=403, key="accountErrorAiAccessRequired")
+    return user
+
+
+def require_fiat_rub_access(request: Request, db: Session) -> User | JSONResponse:
+    user = require_user(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    if not _user_fiat_rub_enabled(user):
+        return account_api_error(
+            "Рублевый рыночный слой выключен в профиле.",
+            status_code=403,
+            key="accountErrorFiatRubDisabled",
+        )
     return user
 
 
@@ -226,6 +244,8 @@ def _user_payload(user: User | None) -> dict:
             "display_name": user.display_name,
             "is_admin": _user_is_admin(user),
             "can_use_ai": _user_can_use_ai(user),
+            "fiat_rub_enabled": _user_fiat_rub_enabled(user),
+            "account_target_currency": user.account_target_currency or "exalted",
             "created_at": user.created_at,
         },
     }
@@ -241,6 +261,8 @@ def _admin_user_payload(user: User) -> dict:
         "is_admin": _user_is_admin(user),
         "can_use_ai": bool(user.can_use_ai),
         "effective_can_use_ai": _user_can_use_ai(user),
+        "fiat_rub_enabled": _user_fiat_rub_enabled(user),
+        "account_target_currency": user.account_target_currency or "exalted",
         "created_at": user.created_at,
     }
 
@@ -929,6 +951,24 @@ def api_admin_user_permissions(
     return {"user": _admin_user_payload(user)}
 
 
+@router.patch("/api/account/preferences")
+def api_account_preferences(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    user = require_user(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    if "fiat_rub_enabled" in payload:
+        user.fiat_rub_enabled = 1 if bool(payload.get("fiat_rub_enabled")) else 0
+    if "account_target_currency" in payload:
+        user.account_target_currency = _text(payload, "account_target_currency", "exalted") or "exalted"
+    db.commit()
+    db.refresh(user)
+    return _user_payload(user)
+
+
 @router.get("/api/account/pins")
 def api_account_pins(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db)
@@ -1276,6 +1316,30 @@ async def api_account_notification_test(rule_id: int, request: Request, db: Sess
     except Exception:
         return account_api_error("Не удалось отправить Telegram-сообщение.", status_code=502, key="accountErrorTelegramSend")
     return {"sent": True}
+
+
+@router.get("/api/account/funpay-rub")
+async def api_account_funpay_rub(
+    request: Request,
+    league: str = Query(...),
+    target: str = Query("divine"),
+    refresh: bool = Query(False),
+    history_days: int = Query(7, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    user = require_fiat_rub_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    try:
+        return await load_funpay_rub_context(
+            db,
+            league=league,
+            target_currency=target,
+            refresh=refresh,
+            history_days=history_days,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
 
 
 @router.get("/api/trade/leagues")

@@ -19,7 +19,10 @@ from app.config import (
     MARKET_SNAPSHOT_PAUSE_SECONDS,
     MARKET_SNAPSHOT_STATUS,
     MARKET_SNAPSHOT_TARGET,
+    FUNPAY_RUB_SNAPSHOT_ENABLED,
+    FUNPAY_RUB_SNAPSHOT_TARGET,
 )
+from app.funpay_market import collect_funpay_rub_market_snapshot
 from app.market_snapshots import (
     collect_market_snapshots,
     market_snapshot_interval_seconds,
@@ -55,6 +58,8 @@ class MarketSnapshotServiceSettings:
     league_start_ts: float | None = field(default_factory=lambda: parse_league_start(MARKET_SNAPSHOT_LEAGUE_START))
     league_check_minutes: float = MARKET_SNAPSHOT_LEAGUE_CHECK_MINUTES
     pause_seconds: float = MARKET_SNAPSHOT_PAUSE_SECONDS
+    funpay_rub_enabled: bool = FUNPAY_RUB_SNAPSHOT_ENABLED
+    funpay_rub_target: str = FUNPAY_RUB_SNAPSHOT_TARGET
 
 
 def _league_name(league: dict[str, Any]) -> str:
@@ -110,6 +115,9 @@ class MarketSnapshotService:
         self.next_collection_ts: float | None = None
         self.last_summary: dict[str, Any] | None = None
         self.last_error: str = ""
+        self.last_funpay_rub_collection_ts: float | None = None
+        self.last_funpay_rub_summary: dict[str, Any] | None = None
+        self.last_funpay_rub_error: str = ""
         self.running = False
 
     async def start(self) -> None:
@@ -147,6 +155,13 @@ class MarketSnapshotService:
             "next_collection_ts": self.next_collection_ts,
             "last_summary": self.last_summary,
             "last_error": self.last_error,
+            "funpay_rub": {
+                "enabled": self.settings.funpay_rub_enabled,
+                "target_currency": self.settings.funpay_rub_target,
+                "last_collection_ts": self.last_funpay_rub_collection_ts,
+                "last_summary": self.last_funpay_rub_summary,
+                "last_error": self.last_funpay_rub_error,
+            },
         }
 
     async def _run(self) -> None:
@@ -159,6 +174,9 @@ class MarketSnapshotService:
                     continue
 
                 cycle_started = time.time()
+                rub_summary = None
+                if self.settings.funpay_rub_enabled:
+                    rub_summary = await self._collect_funpay_rub_snapshot()
                 try:
                     summary = await collect_market_snapshots(
                         league=self.current_league,
@@ -177,6 +195,10 @@ class MarketSnapshotService:
                     raise
                 except Exception as exc:
                     self.last_error = str(exc)
+                    summary = None
+
+                if summary is not None and rub_summary is not None:
+                    summary["funpay_rub"] = rub_summary
 
                 interval_seconds = market_snapshot_interval_seconds(
                     now_ts=time.time(),
@@ -250,6 +272,22 @@ class MarketSnapshotService:
         if known is not None:
             return known
         return self._league_switched_starts.get(self.current_league)
+
+    async def _collect_funpay_rub_snapshot(self) -> dict[str, Any] | None:
+        try:
+            summary = await collect_funpay_rub_market_snapshot(
+                league=self.current_league,
+                target_currency=self.settings.funpay_rub_target,
+            )
+            self.last_funpay_rub_summary = summary
+            self.last_funpay_rub_collection_ts = float(summary.get("created_ts") or time.time())
+            self.last_funpay_rub_error = ""
+            return summary
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_funpay_rub_error = str(exc)
+            return None
 
 
 market_snapshot_service = MarketSnapshotService()

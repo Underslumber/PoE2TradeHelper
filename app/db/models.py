@@ -53,6 +53,8 @@ class User(Base):
     email_verification_sent_at = Column(String)
     is_admin = Column(Integer, nullable=False, default=0)
     can_use_ai = Column(Integer, nullable=False, default=0)
+    fiat_rub_enabled = Column(Integer, nullable=False, default=0)
+    account_target_currency = Column(String, nullable=False, default="exalted")
     created_at = Column(String, nullable=False)
 
 
@@ -165,6 +167,37 @@ class MarketHistory(Base):
     errors_json = Column(Text)
     timestamp = Column(Float, nullable=False, index=True)
     created_at = Column(String, nullable=False)
+
+
+class FunpayRubSnapshot(Base):
+    __tablename__ = "funpay_rub_snapshots"
+
+    id = Column(String, primary_key=True)
+    created_at = Column(String, nullable=False)
+    created_ts = Column(Float, nullable=False, index=True)
+    source_url = Column(String, nullable=False)
+    offer_count = Column(Integer, nullable=False, default=0)
+    mapped_offer_count = Column(Integer, nullable=False, default=0)
+    raw_json = Column(Text)
+
+
+class FunpayRubOffer(Base):
+    __tablename__ = "funpay_rub_offers"
+
+    snapshot_id = Column(String, ForeignKey("funpay_rub_snapshots.id"), primary_key=True)
+    offer_id = Column(String, primary_key=True)
+    league = Column(String, nullable=False, index=True)
+    league_id = Column(String, index=True)
+    currency_name = Column(String, nullable=False)
+    side_id = Column(String, nullable=False, index=True)
+    trade_item_id = Column(String, index=True)
+    seller_id = Column(String)
+    seller_name = Column(String)
+    seller_reviews = Column(Integer)
+    seller_online = Column(Integer, nullable=False, default=0)
+    stock = Column(Float)
+    rub_per_unit = Column(Float, nullable=False)
+    raw_json = Column(Text)
 
 
 class CacheEntry(Base):

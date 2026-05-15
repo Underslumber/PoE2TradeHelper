@@ -14,6 +14,8 @@ USER_COLUMNS = {
     "email_verification_sent_at": "VARCHAR",
     "is_admin": "INTEGER DEFAULT 0",
     "can_use_ai": "INTEGER DEFAULT 0",
+    "fiat_rub_enabled": "INTEGER DEFAULT 0",
+    "account_target_currency": "VARCHAR DEFAULT 'exalted'",
 }
 
 USER_INDEXES = [
@@ -66,6 +68,8 @@ def _migrate_users_table() -> None:
             conn.exec_driver_sql(statement)
         conn.exec_driver_sql("UPDATE users SET is_admin = 0 WHERE is_admin IS NULL")
         conn.exec_driver_sql("UPDATE users SET can_use_ai = 0 WHERE can_use_ai IS NULL")
+        conn.exec_driver_sql("UPDATE users SET fiat_rub_enabled = 0 WHERE fiat_rub_enabled IS NULL")
+        conn.exec_driver_sql("UPDATE users SET account_target_currency = 'exalted' WHERE account_target_currency IS NULL OR account_target_currency = ''")
 
 
 def _migrate_trade_journal_table() -> None:

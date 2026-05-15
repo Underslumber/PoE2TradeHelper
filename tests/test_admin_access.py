@@ -148,6 +148,34 @@ def test_ai_market_context_requires_ai_permission(client_and_session, monkeypatc
     assert allowed.json()["ai_quota"]["used_today"] == 1
 
 
+def test_funpay_rub_context_requires_profile_opt_in(client_and_session, monkeypatch):
+    client, SessionLocal = client_and_session
+    add_user(SessionLocal, "trader")
+
+    async def fake_funpay_context(db, **kwargs):
+        return {"ok": True, "league": kwargs["league"], "target_currency": kwargs["target_currency"]}
+
+    monkeypatch.setattr(routes, "load_funpay_rub_context", fake_funpay_context)
+    login(client, "trader")
+
+    denied = client.get("/api/account/funpay-rub", params={"league": "Test", "target": "divine"})
+    assert denied.status_code == 403
+    assert denied.json()["error_key"] == "accountErrorFiatRubDisabled"
+
+    preferences = client.patch(
+        "/api/account/preferences",
+        json={"fiat_rub_enabled": True, "account_target_currency": "divine"},
+    )
+    assert preferences.status_code == 200
+    assert preferences.json()["user"]["fiat_rub_enabled"] is True
+    assert preferences.json()["user"]["account_target_currency"] == "divine"
+
+    allowed = client.get("/api/account/funpay-rub", params={"league": "Test", "target": "divine"})
+    assert allowed.status_code == 200
+    assert allowed.json()["ok"] is True
+    assert allowed.json()["league"] == "Test"
+
+
 def test_admin_metrics_include_ai_quota_and_recent_usage(client_and_session, monkeypatch):
     client, SessionLocal = client_and_session
     admin = add_user(SessionLocal, "admin", is_admin=True)

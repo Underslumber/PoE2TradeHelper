@@ -114,6 +114,13 @@ const state = {
     aiRunning: false,
     pollTimer: null,
   },
+  rubMarket: {
+    context: null,
+    error: '',
+    isLoading: false,
+    loadedKey: '',
+  },
+  accountActiveTab: localStorage.getItem('poe2-account-tab') || 'tracking',
   sellerLots: null,
   sellerLotsCache: {},
   sellerLotMarketCache: {},
@@ -129,6 +136,7 @@ const state = {
     adminUsers: [],
     adminMetrics: null,
     telegramConfigured: false,
+    targetCurrency: localStorage.getItem('poe2-account-target') || 'exalted',
     benchmarkCurrency: localStorage.getItem('poe2-account-benchmark') || 'divine',
     benchmarkRates: {},
   },
@@ -178,6 +186,7 @@ function applyLanguage() {
   byId('lang-en')?.classList.toggle('active', state.lang === 'en');
   fillStatusSelect();
   fillTargetCurrencySelect();
+  fillAccountTargetCurrencySelect();
   fillBenchmarkCurrencySelect();
   fillAutoRefreshSelect();
   fillChartDaysSelects();
@@ -191,6 +200,7 @@ function applyLanguage() {
   renderAdminPanel();
   renderAiNavigation();
   renderAiPanel();
+  renderRubMarketPanel();
   renderDetailAccountStatus();
   switchMainView(state.mainView);
   fillDetailTargetSelect();
@@ -363,6 +373,17 @@ function accountCanUseAi() {
   return Boolean(state.account.authenticated && state.account.user?.can_use_ai);
 }
 
+function accountFiatRubEnabled() {
+  return Boolean(state.account.authenticated && state.account.user?.fiat_rub_enabled);
+}
+
+function applyAccountUserPreferences(user) {
+  if (user?.account_target_currency) {
+    state.account.targetCurrency = user.account_target_currency;
+    localStorage.setItem('poe2-account-target', state.account.targetCurrency);
+  }
+}
+
 async function fetchAccountJson(url, options = {}) {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -396,13 +417,16 @@ function accountItemName(item) {
   return state.lang === 'ru' ? (item.item_name_ru || item.item_name) : item.item_name;
 }
 
-function selectedItemPayload() {
+async function selectedItemPayload(targetOverride = null) {
   if (!state.selectedItemId) return null;
   const entry = findEntry(state.selectedItemId);
   if (!entry) return null;
-  const categoryRates = state.rates[state.selectedCategory] || {};
+  const target = targetOverride || selectedTarget();
+  let categoryRates = state.rates[state.selectedCategory] || {};
+  if (target && categoryRates.target !== target) {
+    categoryRates = await ensureRatesForTarget(target);
+  }
   const row = rowsById(categoryRates).get(entry.id) || {};
-  const target = categoryRates.target || selectedTarget();
   return {
     league: byId('live-league')?.value || '',
     category: state.selectedCategory,
@@ -410,7 +434,7 @@ function selectedItemPayload() {
     item_name: entry.text || entryName(entry),
     item_name_ru: entry.text_ru || entry.text || entryName(entry),
     icon_url: entry.image || '',
-    target_currency: target,
+    target_currency: categoryRates.target || target,
     last_price: rateValue(row),
     last_source: categoryRates.source || '',
   };
@@ -446,12 +470,16 @@ async function loadAccountState() {
     const data = await fetchAccountJson('/api/auth/me');
     state.account.authenticated = Boolean(data.authenticated);
     state.account.user = data.user || null;
+    applyAccountUserPreferences(state.account.user);
     state.account.pins = [];
     state.account.trades = [];
     state.account.notifications = [];
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
     state.account.telegramConfigured = false;
+    state.rubMarket.context = null;
+    state.rubMarket.error = '';
+    state.rubMarket.loadedKey = '';
     if (state.account.authenticated) {
       await loadAccountCollections();
     }
@@ -464,6 +492,9 @@ async function loadAccountState() {
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
     state.account.telegramConfigured = false;
+    state.rubMarket.context = null;
+    state.rubMarket.error = '';
+    state.rubMarket.loadedKey = '';
     setAccountStatus(error.message || String(error));
   } finally {
     state.isAccountLoading = false;
@@ -498,6 +529,7 @@ async function handleLogin(event) {
     });
     state.account.authenticated = Boolean(data.authenticated);
     state.account.user = data.user || null;
+    applyAccountUserPreferences(state.account.user);
     await refreshAccountData(t('loginDone'));
   } catch (error) {
     setAccountStatus(error.message || String(error));
@@ -516,6 +548,7 @@ async function handleRegister(event) {
     });
     state.account.authenticated = Boolean(data.authenticated);
     state.account.user = data.user || null;
+    applyAccountUserPreferences(state.account.user);
     if (data.verification_required) {
       renderCabinet();
       renderVerificationStatus(data, t('registerCheckEmail'));
@@ -581,6 +614,10 @@ async function logoutAccount() {
     state.currencyAnalysis.aiJob = null;
     state.currencyAnalysis.aiRunning = false;
     state.currencyAnalysis.error = '';
+    state.rubMarket.context = null;
+    state.rubMarket.error = '';
+    state.rubMarket.loadedKey = '';
+    state.rubMarket.isLoading = false;
     renderCabinet();
     renderAdminNavigation();
     renderAdminPanel();
@@ -604,12 +641,12 @@ async function pinSelectedPosition() {
     setAccountStatus(t('loginRequiredForPin'));
     return;
   }
-  const payload = selectedItemPayload();
-  if (!payload) {
-    setDetailAccountStatus(t('selectItemFirst'));
-    return;
-  }
   try {
+    const payload = await selectedItemPayload(accountTargetCurrency());
+    if (!payload) {
+      setDetailAccountStatus(t('selectItemFirst'));
+      return;
+    }
     await sendAccountJson('/api/account/pins', payload);
     await refreshAccountData(t('pinSaved'));
     setDetailAccountStatus(t('pinSaved'));
@@ -673,7 +710,13 @@ async function createTradeFromPayload(payload, message) {
 }
 
 async function markSelectedEntry() {
-  const payload = selectedItemPayload();
+  let payload = null;
+  try {
+    payload = await selectedItemPayload(accountTargetCurrency());
+  } catch (error) {
+    setDetailAccountStatus(error.message || String(error));
+    return;
+  }
   if (!payload) {
     setDetailAccountStatus(t('selectItemFirst'));
     return;
@@ -836,6 +879,31 @@ async function saveAdminUserPermissions(userId) {
   }
 }
 
+async function saveAccountPreferences(payload) {
+  if (!state.account.authenticated) return;
+  try {
+    const data = await sendAccountJson('/api/account/preferences', payload, 'PATCH');
+    state.account.user = data.user || state.account.user;
+    applyAccountUserPreferences(state.account.user);
+    if (Object.prototype.hasOwnProperty.call(payload, 'fiat_rub_enabled') && accountFiatRubEnabled()) {
+      state.accountActiveTab = 'rub';
+      localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+    }
+    if (!accountFiatRubEnabled()) {
+      state.rubMarket.context = null;
+      state.rubMarket.error = '';
+      state.rubMarket.loadedKey = '';
+      state.accountActiveTab = 'tracking';
+      localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+    }
+    renderCabinet();
+    setAccountStatus(t('accountPreferencesSaved'));
+  } catch (error) {
+    setAccountStatus(error.message || String(error));
+    renderCabinet();
+  }
+}
+
 function bindAccountEvents() {
   byId('login-form')?.addEventListener('submit', handleLogin);
   byId('register-form')?.addEventListener('submit', handleRegister);
@@ -843,10 +911,25 @@ function bindAccountEvents() {
   byId('logout-button')?.addEventListener('click', logoutAccount);
   byId('pin-selected')?.addEventListener('click', pinSelectedPosition);
   byId('entry-selected')?.addEventListener('click', markSelectedEntry);
+  byId('account-target-currency')?.addEventListener('change', event => {
+    state.account.targetCurrency = event.target.value || defaultTarget();
+    localStorage.setItem('poe2-account-target', state.account.targetCurrency);
+    saveAccountPreferences({ account_target_currency: state.account.targetCurrency });
+  });
   byId('benchmark-currency')?.addEventListener('change', event => {
     state.account.benchmarkCurrency = event.target.value || defaultTarget();
     localStorage.setItem('poe2-account-benchmark', state.account.benchmarkCurrency);
     renderCabinet();
+  });
+  byId('fiat-rub-enabled')?.addEventListener('change', event => {
+    saveAccountPreferences({ fiat_rub_enabled: Boolean(event.target.checked) });
+  });
+  byId('refresh-rub-market')?.addEventListener('click', () => loadRubMarket({ refresh: true }));
+  byId('cabinet-panel')?.addEventListener('click', event => {
+    const tab = event.target.closest('[data-account-tab]');
+    if (!tab) return;
+    event.preventDefault();
+    setAccountTab(tab.dataset.accountTab || 'tracking');
   });
   byId('notification-form')?.addEventListener('submit', createNotification);
   byId('cabinet-panel')?.addEventListener('click', event => {
@@ -866,6 +949,38 @@ function bindAccountEvents() {
     if (action === 'toggle-notification') toggleNotification(ruleId);
     if (action === 'test-notification') testNotification(ruleId);
     if (action === 'save-user-permissions') saveAdminUserPermissions(userId);
+  });
+}
+
+function normalizeAccountTab() {
+  if (!state.account.authenticated || (state.accountActiveTab === 'rub' && !accountFiatRubEnabled())) {
+    state.accountActiveTab = 'tracking';
+  }
+  if (!['tracking', 'rub'].includes(state.accountActiveTab)) {
+    state.accountActiveTab = 'tracking';
+  }
+}
+
+function setAccountTab(tab) {
+  if (tab === 'rub' && !accountFiatRubEnabled()) return;
+  state.accountActiveTab = tab === 'rub' ? 'rub' : 'tracking';
+  localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+  renderCabinet();
+  if (state.accountActiveTab === 'rub') {
+    loadRubMarket().catch(() => {});
+  }
+}
+
+function renderAccountTabs() {
+  normalizeAccountTab();
+  document.querySelectorAll('[data-account-tab]').forEach(button => {
+    const tab = button.dataset.accountTab || 'tracking';
+    button.classList.toggle('active', tab === state.accountActiveTab);
+    button.classList.toggle('is-hidden', tab === 'rub' && !accountFiatRubEnabled());
+  });
+  document.querySelectorAll('[data-account-tab-panel]').forEach(panel => {
+    if (panel.id === 'rub-market-panel') return;
+    panel.classList.toggle('d-none', (panel.dataset.accountTabPanel || 'tracking') !== state.accountActiveTab);
   });
 }
 
@@ -927,6 +1042,7 @@ function renderAccountMarketMeta(item) {
     ${market.volume ? `<span>${t('volume')}: ${formatAmount(market.volume)}</span>` : ''}
     ${market.source ? `<span>${t('source')}: ${escapeHtml(market.source)}</span>` : ''}
     ${timestamp ? `<span>${t('marketSnapshot')}: ${escapeHtml(timestamp)}</span>` : ''}
+    ${rubEquivalentMeta(market.price, target)}
   `;
 }
 
@@ -1828,6 +1944,215 @@ async function runAiCurrencyAnalysis() {
   }
 }
 
+function rubMarketTarget() {
+  if (hasTarget('divine')) return 'divine';
+  return state.account.benchmarkCurrency || selectedTarget() || defaultTarget();
+}
+
+function rubMarketKey() {
+  return `${byId('live-league')?.value || ''}|${rubMarketTarget()}`;
+}
+
+function formatRub(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '-';
+  return new Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', {
+    style: 'currency',
+    currency: 'RUB',
+    maximumFractionDigits: number < 1 ? 4 : 2,
+  }).format(number);
+}
+
+function rubMarketPrice(row) {
+  const value = Number(row?.market_price ?? row?.trimmed_median ?? row?.median);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function rubRateFor(currencyId) {
+  if (!accountFiatRubEnabled()) return null;
+  const row = state.rubMarket.context?.by_currency?.[currencyId];
+  return rubMarketPrice(row);
+}
+
+function rubEquivalent(value, currencyId) {
+  const amount = Number(value);
+  const rate = rubRateFor(currencyId);
+  if (!Number.isFinite(amount) || amount <= 0 || !rate) return null;
+  return amount * rate;
+}
+
+function rubEquivalentMeta(value, currencyId) {
+  const rubValue = rubEquivalent(value, currencyId);
+  if (rubValue === null) return '';
+  return `<span>${t('rubEquivalent')}: ${formatRub(rubValue)}</span>`;
+}
+
+function rubHistorySeries() {
+  return (state.rubMarket.context?.focus_hourly_history || state.rubMarket.context?.focus_history || [])
+    .map(point => ({ ts: Number(point.hour_ts || point.created_ts || 0), value: rubMarketPrice(point) }))
+    .filter(point => Number.isFinite(point.ts) && point.ts > 0 && Number.isFinite(point.value) && point.value > 0);
+}
+
+async function loadRubMarket(options = {}) {
+  if (!accountFiatRubEnabled() || state.rubMarket.isLoading) return;
+  const key = rubMarketKey();
+  if (!options.refresh && state.rubMarket.context && state.rubMarket.loadedKey === key) return;
+  state.rubMarket.isLoading = true;
+  state.rubMarket.error = '';
+  renderRubMarketPanel();
+  try {
+    const params = new URLSearchParams({
+      league: byId('live-league')?.value || '',
+      target: rubMarketTarget(),
+      refresh: options.refresh ? 'true' : 'false',
+      history_days: '7',
+    });
+    const data = await fetchAccountJson(`/api/account/funpay-rub?${params.toString()}`);
+    state.rubMarket.context = data;
+    state.rubMarket.loadedKey = key;
+  } catch (error) {
+    state.rubMarket.error = error.message || String(error);
+  } finally {
+    state.rubMarket.isLoading = false;
+    renderRubMarketPanel();
+    renderCabinet();
+  }
+}
+
+function rubFlowLabel(row) {
+  const stockDelta = optionalFiniteNumber(row.listed_stock_delta_last);
+  const offersDelta = optionalFiniteNumber(row.offers_delta_last);
+  const parts = [];
+  if (stockDelta !== null) {
+    const label = stockDelta > 0 ? t('rubSupplyAdded') : stockDelta < 0 ? t('rubSupplyReduced') : t('rubSupplyFlat');
+    parts.push(`${label}: ${formatAmount(Math.abs(stockDelta))}`);
+  }
+  if (offersDelta !== null) {
+    const label = offersDelta > 0 ? t('rubOffersAdded') : offersDelta < 0 ? t('rubOffersRemoved') : t('rubOffersFlat');
+    parts.push(`${label}: ${formatAmount(Math.abs(offersDelta))}`);
+  }
+  return parts.join(' · ') || '-';
+}
+
+function rubSignalText(row) {
+  const change = optionalFiniteNumber(row.change_24h_pct);
+  const stockDelta = optionalFiniteNumber(row.listed_stock_delta_last);
+  const offersDelta = optionalFiniteNumber(row.offers_delta_last);
+  if (change === null) return t('rubSignalNeedHistory');
+  if (change >= 5 && (stockDelta !== null && stockDelta < 0 || offersDelta !== null && offersDelta < 0)) {
+    return t('rubSignalSellWindow');
+  }
+  if (change <= -5 && (stockDelta !== null && stockDelta > 0 || offersDelta !== null && offersDelta > 0)) {
+    return t('rubSignalBuyWindow');
+  }
+  if (change >= 5) return t('rubSignalRising');
+  if (change <= -5) return t('rubSignalFalling');
+  return t('rubSignalNeutral');
+}
+
+function rubLowMarketBasis(row) {
+  const lowOffers = optionalFiniteNumber(row.low_market_offers);
+  const totalOffers = optionalFiniteNumber(row.offers);
+  const ignored = optionalFiniteNumber(row.ignored_high_offers);
+  const lowStock = optionalFiniteNumber(row.low_market_stock);
+  const ceiling = optionalFiniteNumber(row.low_market_ceiling);
+  const parts = [];
+  if (lowOffers !== null && totalOffers !== null) parts.push(`${t('rubLowMarketOffers')}: ${formatAmount(lowOffers)} / ${formatAmount(totalOffers)}`);
+  if (lowStock !== null) parts.push(`${t('rubLowMarketStock')}: ${formatAmount(lowStock)}`);
+  if (ignored !== null && ignored > 0) parts.push(`${t('rubIgnoredHighOffers')}: ${formatAmount(ignored)}`);
+  if (ceiling !== null) parts.push(`${t('rubLowMarketCeiling')}: ${formatRub(ceiling)}`);
+  return parts.join(' · ') || t('rubLowMarketFallback');
+}
+
+function renderRubMarketPanel() {
+  const panel = byId('rub-market-panel');
+  const toggle = byId('fiat-rub-enabled');
+  if (toggle) toggle.checked = accountFiatRubEnabled();
+  if (!panel) return;
+  const shouldShow = accountFiatRubEnabled() && state.accountActiveTab === 'rub';
+  panel.classList.toggle('d-none', !shouldShow);
+  if (!shouldShow) return;
+  const status = byId('rub-market-status');
+  if (status) {
+    if (state.rubMarket.isLoading) {
+      status.innerHTML = loadingMarkup(t('rubMarketLoading'), 'inline');
+    } else {
+      status.textContent = state.rubMarket.error || '';
+    }
+  }
+  if (!state.rubMarket.context && !state.rubMarket.isLoading && !state.rubMarket.error) {
+    loadRubMarket().catch(() => {});
+    return;
+  }
+  const context = state.rubMarket.context || {};
+  const focus = context.focus || {};
+  const focusPrice = rubMarketPrice(focus);
+  const summary = byId('rub-market-summary');
+  if (summary) {
+    const snapshot = context.snapshot || {};
+    summary.innerHTML = `
+      <div>
+        <span class="summary-label">${t('rubLowMarketRate')}</span>
+        <strong>${focusPrice ? formatRub(focusPrice) : '-'}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('rubChange24h')}</span>
+        <strong class="${Number(focus.change_24h_pct) > 0 ? 'change-up' : Number(focus.change_24h_pct) < 0 ? 'change-down' : ''}">${focus.change_24h_pct === null || focus.change_24h_pct === undefined ? '-' : formatChange(focus.change_24h_pct)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('rubListedStock')}</span>
+        <strong>${formatAmount(focus.listed_stock)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('rubSellers')}</span>
+        <strong>${formatAmount(focus.seller_count || 0)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('marketSnapshot')}</span>
+        <strong>${snapshot.created_at ? formatDateTime(snapshot.created_at) : '-'}</strong>
+      </div>
+    `;
+  }
+  const chart = byId('rub-market-chart');
+  if (chart) {
+    const history = rubHistorySeries();
+    chart.innerHTML = history.length >= 2
+      ? miniSignalChart(history.map(point => point.value), t('rubHourlyLowMarket'), focusPrice, focus.change_24h_pct, { series: history, changeLabel: t('rubChange24h') })
+      : `<div class="account-market-chart empty">${t('rubHistoryNoData')}</div>`;
+  }
+  const analytics = byId('rub-market-analytics');
+  if (analytics) {
+    analytics.innerHTML = focusPrice
+      ? `
+        <article class="rub-analysis-card">
+          <span class="summary-label">${t('rubPriceBasis')}</span>
+          <strong>${formatRub(focus.best)} - ${formatRub(focus.low_market_ceiling || focusPrice)}</strong>
+          <small>${escapeHtml(rubLowMarketBasis(focus))}</small>
+        </article>
+        <article class="rub-analysis-card">
+          <span class="summary-label">${t('rubFlow')}</span>
+          <strong>${escapeHtml(rubFlowLabel(focus))}</strong>
+          <small>${t('rubFlowProxyHint')}</small>
+        </article>
+        <article class="rub-analysis-card">
+          <span class="summary-label">${t('rubMarketSignal')}</span>
+          <strong>${escapeHtml(rubSignalText(focus))}</strong>
+          <small>${t('rubMarketSignalHint')}</small>
+        </article>
+        <article class="rub-analysis-card">
+          <span class="summary-label">${t('rubDepth')}</span>
+          <strong>${formatAmount(focus.low_market_sellers || focus.seller_count || 0)} / ${formatAmount(focus.online_sellers || 0)}</strong>
+          <small>${t('rubDepthHint')}</small>
+        </article>
+      `
+      : `<p class="text-secondary">${t('rubMarketNoData')}</p>`;
+  }
+  const sourceLink = byId('rub-market-source-link');
+  if (sourceLink) {
+    sourceLink.href = context.source_url || 'https://funpay.com/chips/209/';
+  }
+}
+
 function renderNotificationPanel() {
   fillNotificationControls();
   const status = byId('telegram-config-status');
@@ -1856,9 +2181,14 @@ function renderCabinet() {
     setText('pinned-count', '0');
     setText('open-trades-count', '0');
     setText('closed-trades-count', '0');
+    renderAccountTabs();
+    renderRubMarketPanel();
     return;
   }
+  fillAccountTargetCurrencySelect();
   fillBenchmarkCurrencySelect();
+  renderAccountTabs();
+  renderRubMarketPanel();
   setText('account-user-label', state.account.user?.display_name || state.account.user?.username || '');
   const openTrades = state.account.trades.filter(trade => trade.status !== 'closed');
   const closedTrades = state.account.trades.filter(trade => trade.status === 'closed');
@@ -1924,6 +2254,15 @@ function currencyMarkup(target) {
 
 function selectedTarget() {
   return byId('target-currency')?.value || defaultTarget();
+}
+
+function accountTargetCurrency() {
+  const fallback = defaultTarget();
+  if (!hasTarget(state.account.targetCurrency)) {
+    state.account.targetCurrency = fallback;
+    localStorage.setItem('poe2-account-target', state.account.targetCurrency);
+  }
+  return state.account.targetCurrency || fallback;
 }
 
 function renderCurrencyElement(element, target) {
@@ -2034,6 +2373,12 @@ function fillBenchmarkCurrencySelect() {
   const selected = hasTarget(state.account.benchmarkCurrency) ? state.account.benchmarkCurrency : fallback;
   state.account.benchmarkCurrency = selected;
   fillSelect(select, targetOptions(false), selected);
+}
+
+function fillAccountTargetCurrencySelect() {
+  const select = byId('account-target-currency');
+  if (!select) return;
+  fillSelect(select, targetOptions(false), accountTargetCurrency());
 }
 
 function fillAutoRefreshSelect() {
@@ -3068,6 +3413,15 @@ function allowedMainViews() {
   return views;
 }
 
+function renderMainControls() {
+  document.querySelectorAll('[data-main-control-views]').forEach(element => {
+    const views = String(element.dataset.mainControlViews || '')
+      .split(/\s+/)
+      .filter(Boolean);
+    element.classList.toggle('view-hidden', !views.includes(state.mainView));
+  });
+}
+
 function switchMainView(view) {
   state.mainView = allowedMainViews().includes(view) ? view : 'market';
   document.querySelectorAll('.main-view-tab').forEach(button => {
@@ -3076,6 +3430,7 @@ function switchMainView(view) {
   document.querySelectorAll('[data-main-view]').forEach(element => {
     element.classList.toggle('view-hidden', element.dataset.mainView !== state.mainView);
   });
+  renderMainControls();
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
   if (state.mainView === 'lots') renderSellerLots();
   if (state.mainView === 'cabinet') renderCabinet();
@@ -4194,6 +4549,9 @@ async function initLiveTrade() {
         state.currencyAnalysis.context = null;
         state.currencyAnalysis.error = '';
         state.currencyAnalysis.aiJob = null;
+        state.rubMarket.context = null;
+        state.rubMarket.error = '';
+        state.rubMarket.loadedKey = '';
         state.detailDemandCache = {};
         state.detailSeriesCache = {};
         state.sellerLots = null;

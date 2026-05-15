@@ -12,6 +12,7 @@ from app.collector.sync import sync_all, sync_pair
 from app.codex_market_analyzer import run_codex_market_analysis
 from app.currency_analyzer import load_currency_trend_context
 from app.db.migrate import migrate
+from app.funpay_market import collect_funpay_rub_market_snapshot, run_funpay_rub_snapshot_loop
 from app.market_snapshots import collect_market_snapshots, parse_league_start, run_market_snapshot_loop, split_csv
 
 
@@ -87,6 +88,16 @@ def main():
     market_snapshots_cmd.add_argument("--max-cycles", type=int)
     market_snapshots_cmd.add_argument("--pause-seconds", type=float, default=1.0)
     market_snapshots_cmd.add_argument("--skip-unsupported", action="store_true")
+
+    funpay_rub_cmd = sub.add_parser("funpay-rub-snapshots")
+    funpay_rub_cmd.add_argument("--league", required=True)
+    funpay_rub_cmd.add_argument("--target", default="divine")
+    funpay_rub_cmd.add_argument("--once", action="store_true")
+    funpay_rub_cmd.add_argument("--interval-minutes", type=float, default=15.0)
+    funpay_rub_cmd.add_argument("--early-interval-minutes", type=float, default=5.0)
+    funpay_rub_cmd.add_argument("--early-days", type=float, default=2.0)
+    funpay_rub_cmd.add_argument("--league-start", help="ISO timestamp; uses early interval while inside the early window")
+    funpay_rub_cmd.add_argument("--max-cycles", type=int)
 
     sub.add_parser("run")
     args = parser.parse_args()
@@ -209,6 +220,34 @@ def main():
                     early_days=args.early_days,
                     league_start_ts=parse_league_start(args.league_start),
                     pause_seconds=args.pause_seconds,
+                    max_cycles=args.max_cycles,
+                    on_summary=print_summary,
+                )
+            )
+    elif args.command == "funpay-rub-snapshots":
+        if args.once:
+            payload = asyncio.run(
+                collect_funpay_rub_market_snapshot(
+                    league=args.league,
+                    target_currency=args.target,
+                )
+            )
+            json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write("\n")
+        else:
+            def print_summary(summary):
+                json.dump(summary, sys.stdout, ensure_ascii=False)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+            asyncio.run(
+                run_funpay_rub_snapshot_loop(
+                    league=args.league,
+                    target_currency=args.target,
+                    interval_minutes=args.interval_minutes,
+                    early_interval_minutes=args.early_interval_minutes,
+                    early_days=args.early_days,
+                    league_start_ts=parse_league_start(args.league_start),
                     max_cycles=args.max_cycles,
                     on_summary=print_summary,
                 )
