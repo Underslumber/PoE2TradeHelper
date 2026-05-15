@@ -68,9 +68,11 @@ from app.trade2 import (
     read_history,
     read_latest_rates,
 )
+from app.version import APP_VERSION
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
+templates.env.globals["app_version"] = APP_VERSION
 SESSION_COOKIE = "poe2_session"
 AI_MARKET_CONTEXT_FEATURE = "market_context"
 AI_MARKET_ANALYSIS_FEATURE = "market_analysis"

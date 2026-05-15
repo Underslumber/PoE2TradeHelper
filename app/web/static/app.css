@@ -30,6 +30,19 @@ body {
   object-fit: contain;
   width: 64px;
 }
+.brand-label {
+  display: grid;
+  gap: 2px;
+  line-height: 1.05;
+}
+.brand-name {
+  font-weight: 700;
+}
+.brand-version {
+  color: #91a7b7;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
 .app-shell {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);

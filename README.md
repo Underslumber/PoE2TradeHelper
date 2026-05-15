@@ -8,6 +8,7 @@
 
 - MCP-слой в `mcp_server.py` для базовой работы с PoE2 `trade2`: лиги, static data, search, fetch и exchange.
 - Новый FastAPI-интерфейс в `app/` поверх отдельного торгового слоя `app/trade2.py`.
+- Единый источник версии в `app/version.py`; версия выводится под названием приложения в верхней панели UI и используется для cache-busting статических файлов.
 - Live UI на `/`, который загружает актуальные лиги и категории из `trade2/data/*`, показывает список позиций и умеет обновлять цены выбранной категории.
 - Для поддерживаемых категорий `get_category_rates` сначала использует прямой JSON endpoint poe.ninja, затем откатывается на `trade2/exchange`.
 - Нормализация static entries, exchange listings и poe.ninja overview в единый формат строк.

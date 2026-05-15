@@ -31,6 +31,7 @@ PoE2 Trade Helper - черновик помощника для торговли 
 ## Подход к разработке
 
 - Предпочитай минимальные, небьющие изменения. Не добавляй абстракции, пока они не убирают реальную сложность.
+- Версия приложения хранится в едином источнике `app/version.py`; текущая стартовая версия `0.1.0`. При каждом осмысленном изменении кода, UI, поведения API, схемы данных, конфигурации или пользовательской документации обновляй версию в том же изменении по SemVer: patch для совместимых исправлений и внутренних правок, minor для новых совместимых возможностей, major для ломающих изменений или миграций, требующих ручных действий. UI должен брать версию только из этого источника.
 - Строго разделяй русскую и английскую локализации UI: весь видимый текст должен идти через `app/web/static/i18n.js` или шаблонные `data-i18n`-ключи. Не смешивай русские fallback-строки в английском интерфейсе и английские fallback-строки в русском интерфейсе.
 - Для русских названий валют, фрагментов и других trade2-позиций сначала опирайся на официальный локализованный справочник `https://ru.pathofexile.com/api/trade2/data/static`. Ручные переводы допустимы только как временный fallback, когда официального термина нет.
 - В русской версии видимого UI не показывай английские названия предметов, валют и категорий. Технические id можно оставлять только в диагностике или явно технических местах.
@@ -58,7 +59,7 @@ PoE2 Trade Helper - черновик помощника для торговли 
 Запускай после изменений в Python-коде:
 
 ```powershell
-python -m py_compile mcp_server.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py app\db\migrate_jsonl_to_sqlite.py app\trade\api_client.py app\trade\cache.py app\trade\history.py app\trade\logic.py app\trade\market.py app\trade\math_utils.py
+python -m py_compile mcp_server.py app\version.py app\account.py app\ai_context.py app\codex_market_analyzer.py app\currency_analyzer.py app\market_service.py app\market_snapshots.py app\trade2.py app\cli.py app\web\main.py app\web\routes.py app\db\migrate_jsonl_to_sqlite.py app\trade\api_client.py app\trade\cache.py app\trade\history.py app\trade\logic.py app\trade\market.py app\trade\math_utils.py
 ```
 
 Эта команда проверяет синтаксис ключевых Python-файлов без запуска приложения и без сетевых запросов.
