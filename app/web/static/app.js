@@ -247,8 +247,42 @@ function formatChartAmount(value) {
     return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
   }
   if (Number.isInteger(number)) return String(number);
-  const rounded = number.toFixed(1).replace(/\.0$/, '');
-  return rounded === '0' || rounded === '-0' ? formatAmount(number) : rounded;
+  const abs = Math.abs(number);
+  const decimals = abs >= 100 ? 1 : abs >= 10 ? 2 : abs >= 1 ? 3 : abs >= 0.1 ? 4 : 6;
+  return number.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function chartDecimalsForStep(step) {
+  const normalizedStep = Math.abs(Number(step));
+  if (!Number.isFinite(normalizedStep) || normalizedStep <= 0) return null;
+  let decimals = 0;
+  let scaled = normalizedStep;
+  while (scaled < 1 && decimals < 6) {
+    scaled *= 10;
+    decimals += 1;
+  }
+  return Math.min(6, decimals + 1);
+}
+
+function formatChartAmountWithDecimals(value, decimals) {
+  if (value === null || value === undefined || value === '') return '-';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  if (Math.abs(number) >= 1000) {
+    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
+  }
+  if (decimals === null || decimals === undefined) return formatChartAmount(number);
+  if (Number.isInteger(number) && decimals <= 0) return String(number);
+  return number.toFixed(Math.max(0, Math.min(6, decimals))).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function chartAmountFormatter(minValue, maxValue, tickCount = 6) {
+  const min = Number(minValue);
+  const max = Number(maxValue);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return formatChartAmount;
+  const step = Math.abs(max - min) / Math.max(1, tickCount);
+  const decimals = chartDecimalsForStep(step);
+  return value => formatChartAmountWithDecimals(value, decimals);
 }
 
 function chartDayOptions() {
@@ -3223,6 +3257,7 @@ function renderSparkline(values, options = {}) {
   const area = `${leftPad},${plotBottom} ${polyline} ${plotRight},${plotBottom}`;
   const gridY = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1].map(ratio => topPad + ratio * plotHeight);
   const valueAtY = y => max - ((y - topPad) / plotHeight) * range;
+  const yValueFormatter = chartAmountFormatter(min, max, gridY.length - 1);
   const tickStep = Math.max(1, Math.ceil((displayData.length - 1) / 6));
   const gridPoints = points.filter((_, index) => index === 0 || index === points.length - 1 || index % tickStep === 0);
   const gridX = gridPoints.map(point => point.x);
@@ -3246,7 +3281,7 @@ function renderSparkline(values, options = {}) {
       ${gridY.map(y => `<line class="detail-chart-grid" x1="${leftPad}" y1="${y.toFixed(2)}" x2="${plotRight}" y2="${y.toFixed(2)}"></line>`).join('')}
       <polygon class="detail-chart-area" points="${area}"></polygon>
       <polyline class="detail-chart-line" points="${polyline}"></polyline>
-      ${gridY.map(y => `<text class="detail-chart-y-label" x="${leftPad - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${formatChartAmount(valueAtY(y))}</text>`).join('')}
+      ${gridY.map(y => `<text class="detail-chart-y-label" x="${leftPad - 8}" y="${(y + 4).toFixed(2)}" text-anchor="end">${yValueFormatter(valueAtY(y))}</text>`).join('')}
       ${dayLabels.map(({ point, label }) => `<text class="detail-chart-x-label" x="${point.x.toFixed(2)}" y="${height - 9}" text-anchor="middle">${label}</text>`).join('')}
     </svg>
   `;
@@ -3312,8 +3347,9 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
   const absoluteCurrent = Number(currentValue);
   const canScaleValues = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 && data.every(value => value > 0);
   const scale = canScaleValues ? absoluteCurrent / data[data.length - 1] : null;
+  const yValueFormatter = chartAmountFormatter(scale ? min * scale : min, scale ? max * scale : max, gridY.length - 1);
   const valueLabels = canScaleValues ? [gridY[0], gridY[2], gridY[4]].map(y => (
-    `<text class="advice-chart-y-label" x="${leftPad - 7}" y="${(y + 3).toFixed(2)}" text-anchor="end">${formatChartAmount(valueAtY(y) * scale)}</text>`
+    `<text class="advice-chart-y-label" x="${leftPad - 7}" y="${(y + 3).toFixed(2)}" text-anchor="end">${yValueFormatter(valueAtY(y) * scale)}</text>`
   )).join('') : '';
   const displayCurrent = Number.isFinite(absoluteCurrent) && absoluteCurrent > 0 ? absoluteCurrent : data[data.length - 1];
   const firstValue = data[0];
@@ -3333,7 +3369,7 @@ function miniSignalChart(values, basisText, currentValue = null, changeValue = n
         ${valueLabels}
         ${dayLabels}
       </svg>
-      <div class="advice-chart-label"><span>${t('currentPoint')}: ${formatChartAmount(displayCurrent)}</span><span>${escapeHtml(changeLabel)}: ${formatChange(change)}</span></div>
+      <div class="advice-chart-label"><span>${t('currentPoint')}: ${yValueFormatter(displayCurrent)}</span><span>${escapeHtml(changeLabel)}: ${formatChange(change)}</span></div>
       <div class="advice-chart-basis">${t('signalBasis')}: ${basisText}</div>
     </aside>
   `;
