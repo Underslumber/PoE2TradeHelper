@@ -90,6 +90,7 @@ const state = {
   detailRates: {},
   advice: [],
   mainView: 'market',
+  categorySidebarOpen: false,
   activeAdviceTab: 'market',
   crossDeals: [],
   crossDealsKey: '',
@@ -203,6 +204,7 @@ function applyLanguage() {
   renderRubMarketPanel();
   renderDetailAccountStatus();
   switchMainView(state.mainView);
+  renderCategorySidebar();
   fillDetailTargetSelect();
   renderSelectedItemDetail();
 }
@@ -2483,10 +2485,12 @@ function fillAutoRefreshSelect() {
 function renderCategories() {
   const list = byId('category-list');
   if (!list) return;
+  const sidebarOpen = isCategorySidebarOpen();
   list.innerHTML = '';
   state.categoryMeta.forEach(category => {
     const button = document.createElement('button');
     button.type = 'button';
+    button.tabIndex = sidebarOpen ? 0 : -1;
     button.className = `category-button ${category.id === state.selectedCategory ? 'active' : ''}`;
     button.innerHTML = `
       ${category.icon ? `<img src="${category.icon}" alt="">` : '<span class="category-placeholder"></span>'}
@@ -2508,6 +2512,9 @@ function renderCategories() {
       state.detailSeriesCache = {};
       setText('category-title', categoryName(category));
       byId('item-detail-panel')?.classList.add('d-none');
+      if (!categorySidebarPinned()) {
+        switchMainView('market');
+      }
       renderCategories();
       renderMarket();
       renderAdvice((state.rates[state.selectedCategory] || {}).advice || []);
@@ -3508,6 +3515,42 @@ function allowedMainViews() {
   return views;
 }
 
+function categorySidebarPinned() {
+  return state.mainView === 'market' || state.mainView === 'signals';
+}
+
+function isCategorySidebarOpen() {
+  return categorySidebarPinned() || state.categorySidebarOpen;
+}
+
+function renderCategorySidebar() {
+  const shell = document.querySelector('.app-shell');
+  if (!shell) return;
+  const pinned = categorySidebarPinned();
+  const open = isCategorySidebarOpen();
+  shell.classList.toggle('categories-drawer-pinned', pinned);
+  shell.classList.toggle('categories-drawer-open', open);
+  shell.classList.toggle('categories-drawer-collapsed', !open);
+  const toggle = byId('category-sidebar-toggle');
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? t('collapseCategories') : t('expandCategories'));
+    toggle.title = open ? t('collapseCategories') : t('expandCategories');
+    const icon = toggle.querySelector('.category-sidebar-toggle-icon');
+    if (icon) icon.textContent = open ? '‹' : '›';
+  }
+  const list = byId('category-list');
+  if (list) {
+    list.setAttribute('aria-hidden', String(!open));
+    if ('inert' in list) {
+      list.inert = !open;
+    }
+    list.querySelectorAll('button').forEach(button => {
+      button.tabIndex = open ? 0 : -1;
+    });
+  }
+}
+
 function renderMainControls() {
   document.querySelectorAll('[data-main-control-views]').forEach(element => {
     const views = String(element.dataset.mainControlViews || '')
@@ -3519,6 +3562,9 @@ function renderMainControls() {
 
 function switchMainView(view) {
   state.mainView = allowedMainViews().includes(view) ? view : 'market';
+  if (!categorySidebarPinned()) {
+    state.categorySidebarOpen = false;
+  }
   document.querySelectorAll('.main-view-tab').forEach(button => {
     button.classList.toggle('active', button.dataset.mainTab === state.mainView);
   });
@@ -3531,6 +3577,7 @@ function switchMainView(view) {
   if (state.mainView === 'cabinet') renderCabinet();
   if (state.mainView === 'admin') renderAdminPanel();
   if (state.mainView === 'ai') renderAiPanel();
+  renderCategorySidebar();
   renderMainViewHeader();
   if (window.location.pathname === '/') {
     const params = new URLSearchParams(window.location.search);
@@ -4572,6 +4619,10 @@ async function initLiveTrade() {
     setText('category-title', categoryName(state.categoryMeta.find(c => c.id === state.selectedCategory) || { label: state.selectedCategory }));
     byId('refresh-rates').addEventListener('click', refreshRates);
     byId('refresh-static').addEventListener('click', () => window.location.reload());
+    byId('category-sidebar-toggle')?.addEventListener('click', () => {
+      state.categorySidebarOpen = !isCategorySidebarOpen();
+      renderCategorySidebar();
+    });
     byId('market-search').addEventListener('input', renderMarket);
     byId('search-lots')?.addEventListener('click', searchSellerLots);
     byId('run-ai-analysis')?.addEventListener('click', runAiAnalysis);

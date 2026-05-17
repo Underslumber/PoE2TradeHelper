@@ -61,10 +61,22 @@ body {
   font-weight: 600;
 }
 .app-shell {
+  --category-menu-width: 236px;
+  --category-rail-width: 44px;
+  --category-sidebar-width: calc(var(--category-menu-width) + var(--category-rail-width));
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: var(--category-menu-width) minmax(0, 1fr);
   gap: 22px;
   min-height: calc(100vh - 76px);
+  overflow-x: clip;
+  transition: grid-template-columns 0.18s ease, gap 0.18s ease;
+}
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) {
+  grid-template-columns: var(--category-sidebar-width) minmax(0, 1fr);
+}
+.app-shell.categories-drawer-collapsed {
+  gap: 14px;
+  grid-template-columns: var(--category-rail-width) minmax(0, 1fr);
 }
 .side-panel {
   background: #101920;
@@ -72,6 +84,71 @@ body {
   border-radius: 4px;
   align-self: start;
   overflow: hidden;
+  position: relative;
+  transition: transform 0.18s ease;
+  width: var(--category-menu-width);
+}
+.app-shell.categories-drawer-collapsed .side-panel {
+  transform: translateX(calc(var(--category-menu-width) * -1));
+  width: var(--category-sidebar-width);
+}
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .side-panel {
+  width: var(--category-sidebar-width);
+}
+.category-sidebar-toggle {
+  align-items: center;
+  background: #101920;
+  border: 0;
+  border-left: 1px solid #22313b;
+  color: #8fe8cf;
+  cursor: pointer;
+  display: flex;
+  font-size: 1.8rem;
+  font-weight: 800;
+  justify-content: center;
+  line-height: 1;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  transition: background-color 0.16s ease, color 0.16s ease, right 0.16s ease, width 0.16s ease, box-shadow 0.16s ease;
+  width: var(--category-rail-width);
+  z-index: 2;
+}
+.category-sidebar-toggle:hover,
+.category-sidebar-toggle:focus-visible {
+  background: #17232d;
+  box-shadow: inset 2px 0 0 rgba(0, 209, 154, 0.45), 0 0 18px rgba(0, 209, 154, 0.08);
+  color: #b9ffec;
+  outline: none;
+  width: calc(var(--category-rail-width) + 4px);
+}
+.category-sidebar-toggle-icon {
+  transform: translateY(-1px);
+  transition: transform 0.16s ease;
+}
+.category-sidebar-toggle:hover .category-sidebar-toggle-icon,
+.category-sidebar-toggle:focus-visible .category-sidebar-toggle-icon {
+  transform: translate(2px, -1px);
+}
+.app-shell.categories-drawer-pinned .category-sidebar-toggle {
+  display: none;
+}
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .side-title,
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .category-list {
+  width: calc(var(--category-menu-width) - 2px);
+}
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .category-sidebar-toggle {
+  background: rgba(16, 25, 32, 0.96);
+}
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .category-sidebar-toggle:hover .category-sidebar-toggle-icon,
+.app-shell.categories-drawer-open:not(.categories-drawer-pinned) .category-sidebar-toggle:focus-visible .category-sidebar-toggle-icon {
+  transform: translate(-2px, -1px);
+}
+.app-shell.categories-drawer-collapsed .side-title,
+.app-shell.categories-drawer-collapsed .category-list {
+  pointer-events: none;
+  visibility: hidden;
 }
 .side-title {
   background: #17232d;
@@ -1866,10 +1943,37 @@ body {
   .app-shell {
     grid-template-columns: 1fr;
     min-height: 0;
+    overflow-x: visible;
+  }
+  .app-shell.categories-drawer-collapsed {
+    gap: 14px;
+    grid-template-columns: var(--category-rail-width) minmax(0, 1fr);
   }
   .side-panel {
     max-height: 50vh;
     overflow-y: auto;
+    width: 100%;
+  }
+  .app-shell.categories-drawer-collapsed .side-panel {
+    height: 100%;
+    max-height: none;
+    min-height: 260px;
+    overflow: hidden;
+    transform: none;
+    width: var(--category-rail-width);
+  }
+  .app-shell.categories-drawer-open:not(.categories-drawer-pinned) {
+    grid-template-columns: 1fr;
+  }
+  .app-shell.categories-drawer-open:not(.categories-drawer-pinned) .side-panel {
+    width: 100%;
+  }
+  .app-shell.categories-drawer-open:not(.categories-drawer-pinned) .side-title,
+  .app-shell.categories-drawer-open:not(.categories-drawer-pinned) .category-list {
+    width: calc(100% - var(--category-rail-width));
+  }
+  .app-shell.categories-drawer-pinned .category-sidebar-toggle {
+    display: none;
   }
   .filters-grid,
   .lot-search-grid,
