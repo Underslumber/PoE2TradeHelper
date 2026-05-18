@@ -110,6 +110,18 @@ def _option_map(soup: BeautifulSoup, name: str) -> dict[str, str]:
     }
 
 
+def _dedupe_funpay_offers(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique_offers = []
+    seen_offer_ids = set()
+    for offer in offers:
+        offer_id = str(offer.get("offer_id") or "")
+        if not offer_id or offer_id in seen_offer_ids:
+            continue
+        seen_offer_ids.add(offer_id)
+        unique_offers.append(offer)
+    return unique_offers
+
+
 def parse_funpay_chips_html(html: str, *, source_url: str = FUNPAY_POE2_CHIPS_URL) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     servers = _option_map(soup, "server")
@@ -150,7 +162,7 @@ def parse_funpay_chips_html(html: str, *, source_url: str = FUNPAY_POE2_CHIPS_UR
         "source_url": source_url,
         "servers": servers,
         "sides": sides,
-        "offers": offers,
+        "offers": _dedupe_funpay_offers(offers),
     }
 
 
@@ -166,8 +178,8 @@ async def fetch_funpay_chips_html(url: str = FUNPAY_POE2_CHIPS_URL) -> str:
         return response.text
 
 
-def _snapshot_summary(parsed: dict[str, Any]) -> dict[str, Any]:
-    offers = parsed.get("offers") or []
+def _snapshot_summary(parsed: dict[str, Any], offers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    offers = _dedupe_funpay_offers(parsed.get("offers") or []) if offers is None else offers
     return {
         "servers": parsed.get("servers") or {},
         "sides": parsed.get("sides") or {},
@@ -178,8 +190,8 @@ def _snapshot_summary(parsed: dict[str, Any]) -> dict[str, Any]:
 
 def save_funpay_rub_snapshot(db: Session, parsed: dict[str, Any], *, created_ts: float | None = None) -> FunpayRubSnapshot:
     created_ts = time.time() if created_ts is None else created_ts
-    offers = parsed.get("offers") or []
-    summary = _snapshot_summary(parsed)
+    offers = _dedupe_funpay_offers(parsed.get("offers") or [])
+    summary = _snapshot_summary(parsed, offers)
     snapshot = FunpayRubSnapshot(
         id=f"funpay-rub-{int(created_ts * 1000)}",
         created_at=datetime.fromtimestamp(created_ts, tz=timezone.utc).isoformat(),

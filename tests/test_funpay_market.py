@@ -1,6 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
-from app.funpay_market import aggregate_funpay_offers, build_funpay_calendar_recommendations, parse_funpay_chips_html
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from app.db.models import Base, FunpayRubOffer
+from app.funpay_market import (
+    aggregate_funpay_offers,
+    build_funpay_calendar_recommendations,
+    parse_funpay_chips_html,
+    save_funpay_rub_snapshot,
+)
 
 
 def test_parse_funpay_chips_html_extracts_public_offer_rows():
@@ -36,6 +45,41 @@ def test_parse_funpay_chips_html_extracts_public_offer_rows():
     assert offer["seller_online"] is True
     assert offer["stock"] == 400
     assert offer["rub_per_unit"] == 12.5
+
+
+def test_save_funpay_rub_snapshot_deduplicates_repeated_offer_ids():
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+    offer = {
+        "offer_id": "2485611-582-209-12280-106",
+        "offer_url": "https://funpay.com/chips/offer?id=2485611-582-209-12280-106",
+        "league": "Fate of the Vaal",
+        "league_id": "12280",
+        "currency_name": "Божественные сферы",
+        "side_id": "106",
+        "trade_item_id": "divine",
+        "seller_id": "2485611",
+        "seller_name": "seller",
+        "seller_reviews": 1041,
+        "seller_online": True,
+        "stock": 400,
+        "rub_per_unit": 12.5,
+    }
+    parsed = {
+        "source_url": "https://funpay.com/chips/209/",
+        "servers": {"12280": "Fate of the Vaal"},
+        "sides": {"106": "Божественные сферы"},
+        "offers": [offer, {**offer, "rub_per_unit": 99.9}],
+    }
+
+    with Session(engine) as db:
+        snapshot = save_funpay_rub_snapshot(db, parsed, created_ts=1779101864.895)
+        rows = db.scalars(select(FunpayRubOffer)).all()
+
+    assert snapshot.offer_count == 1
+    assert len(rows) == 1
+    assert rows[0].offer_id == "2485611-582-209-12280-106"
+    assert rows[0].rub_per_unit == 12.5
 
 
 def test_aggregate_funpay_offers_trims_price_outlier():
