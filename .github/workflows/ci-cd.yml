@@ -22,7 +22,7 @@ jobs:
     name: Проверки
     runs-on: ubuntu-latest
     env:
-      USER_AGENT: poe2-trade-helper-ci/0.1 (contact: github-actions)
+      USER_AGENT: "poe2-trade-helper-ci/0.1 (contact: github-actions)"
       MARKET_SNAPSHOT_ENABLED: "false"
       FUNPAY_RUB_SNAPSHOT_ENABLED: "false"
     steps:
