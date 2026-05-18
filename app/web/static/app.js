@@ -142,9 +142,10 @@ const state = {
     benchmarkRates: {},
   },
   isAccountLoading: false,
-  autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 60000),
+  autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 30000),
   autoRefreshTimer: null,
   isRefreshing: false,
+  isCheckingLatest: false,
   sort: { key: 'name', direction: 'asc' },
 };
 
@@ -379,6 +380,20 @@ function formatDateTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
+}
+
+function snapshotLabel(data = {}) {
+  if (data.stored) return t('savedSnapshotLabel');
+  if (data.cached) return t('cacheLabel');
+  return '';
+}
+
+function formatSnapshotStamp(data = {}) {
+  const createdTs = Number(data.created_ts || 0);
+  if (!createdTs) return '-';
+  const stamp = new Date(createdTs * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
+  const label = snapshotLabel(data);
+  return label ? `${stamp} ${label}` : stamp;
 }
 
 // Account, pins, and trade journal
@@ -702,9 +717,17 @@ async function accountBenchmarkPrice(targetCurrency, benchmarkCurrency, leagueOv
   }
   const params = new URLSearchParams({ league, category: 'Currency', target: targetCurrency, status });
   try {
-    const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    let data = null;
+    try {
+      data = await fetchLatestStoredRates({ league, category: 'Currency', target: targetCurrency, status });
+    } catch {
+      data = null;
+    }
+    if (!data) {
+      const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
+      data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    }
     const price = rateValue(rowsById(data).get(benchmarkCurrency));
     state.account.benchmarkRates[key] = price;
     return price;
@@ -2397,6 +2420,7 @@ function statusOptions() {
 function autoRefreshOptions() {
   return [
     { id: '0', text: t('autoRefreshOff') },
+    { id: '30000', text: t('autoRefresh30s') },
     { id: '60000', text: t('autoRefresh1m') },
     { id: '300000', text: t('autoRefresh5m') },
     { id: '1800000', text: t('autoRefresh30m') },
@@ -2551,9 +2575,7 @@ function renderMarket() {
   setText('items-total', entries.length);
   setText('priced-total', [...rateRows.values()].filter(row => row.best !== null && row.best !== undefined).length);
   setText('rate-source', categoryRates.source || '-');
-  setText('last-snapshot', categoryRates.created_ts
-    ? `${new Date(categoryRates.created_ts * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US')}${categoryRates.cached ? ` ${t('cacheLabel')}` : ''}`
-    : '-');
+  setText('last-snapshot', formatSnapshotStamp(categoryRates));
   renderSortIndicators();
   body.innerHTML = '';
   if (!entries.length) {
@@ -2877,10 +2899,27 @@ async function ensureRatesForTarget(target) {
   const tableRates = state.rates[state.selectedCategory] || {};
   if (tableRates.target === target) return tableRates;
   const key = ratesCacheKey(target);
-  if (state.detailRates[key]) return state.detailRates[key];
-
   const league = byId('live-league').value;
   const status = byId('live-status').value;
+  const cached = state.detailRates[key];
+  let stored = null;
+  try {
+    stored = await fetchLatestStoredRates({
+      league,
+      category: state.selectedCategory,
+      target,
+      status,
+      sinceTs: Number(cached?.created_ts || 0),
+    });
+  } catch {
+    stored = null;
+  }
+  if (stored) {
+    state.detailRates[key] = stored;
+    return stored;
+  }
+  if (cached) return cached;
+
   const params = new URLSearchParams({ league, category: state.selectedCategory, target, status });
   const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
   const data = await response.json();
@@ -4479,6 +4518,36 @@ async function loadCrossCurrencyDeals() {
 
 // Data loading
 
+function currentRatesContext(category = state.selectedCategory, target = selectedTarget()) {
+  return {
+    league: byId('live-league')?.value || '',
+    category,
+    target,
+    status: byId('live-status')?.value || 'any',
+  };
+}
+
+function ratesContextMatches(data, context) {
+  return (
+    (!data.league || data.league === context.league)
+    && (!data.category || data.category === context.category)
+    && (!data.target || data.target === context.target)
+    && (!data.status || data.status === context.status)
+  );
+}
+
+async function fetchLatestStoredRates({ league, category, target, status, sinceTs = 0 }) {
+  if (!league || !category || !target || !status) return null;
+  const params = new URLSearchParams({ league, category, target, status });
+  if (Number(sinceTs) > 0) params.set('since_ts', String(Number(sinceTs)));
+  const response = await fetch(`/api/trade/category-rates/latest?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+  if (data.unchanged) return null;
+  if ((!data.stored && !data.cached) || !Array.isArray(data.rows) || !data.rows.length) return null;
+  return data;
+}
+
 async function loadHistoryTrends(currentData) {
   const key = historyTrendsKey(currentData);
   if (!currentData?.created_ts || state.historyTrendsKey === key || state.isLoadingHistoryTrends) return;
@@ -4510,7 +4579,21 @@ async function loadHistoryTrends(currentData) {
 }
 
 function applyRatesData(data) {
-  state.rates[state.selectedCategory] = data;
+  const category = data.category || state.selectedCategory;
+  const previousTs = Number((state.rates[category] || {}).created_ts || 0);
+  const currentTs = Number(data.created_ts || 0);
+  state.rates[category] = data;
+  if (currentTs > previousTs) {
+    state.crossDealsKey = '';
+    state.activeTradesKey = '';
+    state.account.benchmarkRates = {};
+  }
+  const contextPrefix = `${data.league || byId('live-league')?.value || ''}|${category}|`;
+  Object.keys(state.detailRates).forEach(key => {
+    if (key.startsWith(contextPrefix) && state.detailRates[key]?.target === data.target) {
+      delete state.detailRates[key];
+    }
+  });
   setText('rate-source', data.source || '-');
   renderMarket();
   renderAdvice(data.advice || []);
@@ -4521,24 +4604,29 @@ function applyRatesData(data) {
   }
 }
 
-async function loadLatestCachedRates() {
-  const league = byId('live-league')?.value;
-  const target = byId('target-currency')?.value;
-  const status = byId('live-status')?.value;
-  if (!league || !target || !status) return false;
+async function loadLatestCachedRates(options = {}) {
+  if (state.isCheckingLatest || (options.onlyIfNew && state.isRefreshing)) return false;
   const category = state.selectedCategory;
-  const params = new URLSearchParams({ league, category, target, status });
+  const context = currentRatesContext(category);
+  if (!context.league || !context.target || !context.status) return false;
+  const currentTs = Number((state.rates[category] || {}).created_ts || 0);
+  state.isCheckingLatest = true;
   try {
-    const response = await fetch(`/api/trade/category-rates/latest?${params.toString()}`);
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
-    if (category !== state.selectedCategory || !data.cached || !Array.isArray(data.rows) || !data.rows.length) {
+    const data = await fetchLatestStoredRates({ ...context, sinceTs: options.onlyIfNew ? currentTs : 0 });
+    if (!data || category !== state.selectedCategory || !ratesContextMatches(data, context)) {
       return false;
     }
+    if (options.onlyIfNew && currentTs > 0 && Number(data.created_ts || 0) <= currentTs) return false;
     applyRatesData(data);
+    if (!options.silent) {
+      const statusEl = byId('rate-status');
+      if (statusEl) statusEl.textContent = t('savedSnapshotLoaded');
+    }
     return true;
   } catch {
     return false;
+  } finally {
+    state.isCheckingLatest = false;
   }
 }
 
@@ -4550,7 +4638,7 @@ function scheduleAutoRefresh() {
   if (!state.autoRefreshMs) return;
   state.autoRefreshTimer = setInterval(() => {
     if (!document.hidden) {
-      refreshRates({ silent: true });
+      loadLatestCachedRates({ onlyIfNew: true, silent: true });
     }
   }, state.autoRefreshMs);
 }
@@ -4569,10 +4657,9 @@ async function refreshRates(options = {}) {
     const response = await fetch(`/api/trade/category-rates?${params.toString()}`);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
-    const stamp = new Date(data.created_ts * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
-    setText('last-snapshot', data.cached ? `${stamp} ${t('cacheLabel')}` : stamp);
+    setText('last-snapshot', formatSnapshotStamp(data));
     applyRatesData(data);
-    statusEl.textContent = data.cached ? t('cacheLabel') : '';
+    statusEl.textContent = snapshotLabel(data);
   } catch (error) {
     setLiveError(error.message || String(error));
     statusEl.textContent = '';

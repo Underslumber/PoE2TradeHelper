@@ -7,6 +7,8 @@ from app.db.models import Base, FunpayRubOffer
 from app.funpay_market import (
     aggregate_funpay_offers,
     build_funpay_calendar_recommendations,
+    build_funpay_rub_context,
+    funpay_league_key,
     parse_funpay_chips_html,
     save_funpay_rub_snapshot,
 )
@@ -80,6 +82,88 @@ def test_save_funpay_rub_snapshot_deduplicates_repeated_offer_ids():
     assert len(rows) == 1
     assert rows[0].offer_id == "2485611-582-209-12280-106"
     assert rows[0].rub_per_unit == 12.5
+
+
+def test_funpay_league_key_matches_trade2_league_names():
+    assert funpay_league_key("Fate of the Vaal") == funpay_league_key("Fate of the Vaal")
+    assert funpay_league_key("HC Fate of the Vaal") == funpay_league_key("Fate of the Vaal [Hardcore]")
+    assert funpay_league_key("Standard") == funpay_league_key("[Standard]")
+    assert funpay_league_key("Hardcore") == funpay_league_key("[Hardcore]")
+
+
+def test_funpay_context_uses_trade2_league_mapping_for_funpay_rows():
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+    base_offer = {
+        "offer_id": "offer-softcore",
+        "offer_url": "https://funpay.com/chips/offer?id=offer-softcore",
+        "league": "Fate of the Vaal",
+        "league_id": "12280",
+        "currency_name": "Божественные сферы",
+        "side_id": "106",
+        "trade_item_id": "divine",
+        "seller_id": "seller-softcore",
+        "seller_name": "softcore",
+        "seller_reviews": 100,
+        "seller_online": True,
+        "stock": 100,
+        "rub_per_unit": 10.0,
+    }
+    parsed = {
+        "source_url": "https://funpay.com/chips/209/",
+        "servers": {
+            "12280": "Fate of the Vaal",
+            "12281": "Fate of the Vaal [Hardcore]",
+            "10980": "[Hardcore]",
+            "10979": "[Standard]",
+        },
+        "sides": {"106": "Божественные сферы"},
+        "offers": [
+            base_offer,
+            {
+                **base_offer,
+                "offer_id": "offer-hardcore-challenge",
+                "league": "Fate of the Vaal [Hardcore]",
+                "league_id": "12281",
+                "seller_id": "seller-hardcore-challenge",
+                "seller_name": "hardcore-challenge",
+                "rub_per_unit": 20.0,
+            },
+            {
+                **base_offer,
+                "offer_id": "offer-standard",
+                "league": "[Standard]",
+                "league_id": "10979",
+                "seller_id": "seller-standard",
+                "seller_name": "standard",
+                "rub_per_unit": 30.0,
+            },
+            {
+                **base_offer,
+                "offer_id": "offer-hardcore",
+                "league": "[Hardcore]",
+                "league_id": "10980",
+                "seller_id": "seller-hardcore",
+                "seller_name": "hardcore",
+                "rub_per_unit": 40.0,
+            },
+        ],
+    }
+
+    with Session(engine) as db:
+        snapshot = save_funpay_rub_snapshot(db, parsed, created_ts=1779101864.895)
+        hardcore_challenge = build_funpay_rub_context(db, snapshot, league="HC Fate of the Vaal")
+        standard = build_funpay_rub_context(db, snapshot, league="Standard")
+        hardcore = build_funpay_rub_context(db, snapshot, league="Hardcore")
+
+    assert hardcore_challenge["focus"]["league"] == "Fate of the Vaal [Hardcore]"
+    assert hardcore_challenge["focus"]["market_price"] == 20.0
+    assert hardcore_challenge["funpay_league"]["matched"] is True
+    assert hardcore_challenge["funpay_league"]["matched_leagues"][0]["league_id"] == "12281"
+    assert standard["focus"]["league"] == "[Standard]"
+    assert standard["focus"]["market_price"] == 30.0
+    assert hardcore["focus"]["league"] == "[Hardcore]"
+    assert hardcore["focus"]["market_price"] == 40.0
 
 
 def test_aggregate_funpay_offers_trims_price_outlier():

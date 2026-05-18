@@ -8,7 +8,7 @@ from time import perf_counter
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -1440,10 +1440,24 @@ def api_trade_category_rates_latest(
     category: str = Query(...),
     target: str = Query("exalted"),
     status: str = Query("any", pattern="^(online|any)$"),
+    since_ts: Annotated[float | None, Query(ge=0)] = None,
 ):
     latest = read_latest_rates(league=league, category=category, target=target, status=status)
     if not latest:
-        return {"cached": False, "rows": []}
+        return {"cached": False, "stored": False, "rows": []}
+    latest["stored"] = True
+    if since_ts is not None and float(latest.get("created_ts") or 0) <= since_ts:
+        return {
+            "cached": True,
+            "stored": True,
+            "unchanged": True,
+            "created_ts": latest.get("created_ts"),
+            "league": latest.get("league") or league,
+            "category": latest.get("category") or category,
+            "target": latest.get("target") or target,
+            "status": latest.get("status") or status,
+            "source": latest.get("source") or "",
+        }
     return latest
 
 

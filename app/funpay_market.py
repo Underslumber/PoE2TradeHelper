@@ -122,6 +122,30 @@ def _dedupe_funpay_offers(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique_offers
 
 
+def funpay_league_key(value: str | None) -> str:
+    text = re.sub(r"[\[\]()]|[-_]+", " ", str(value or "").lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    hardcore = False
+    if text.startswith("hc "):
+        hardcore = True
+        text = text[3:].strip()
+    tokens = text.split()
+    if "hardcore" in tokens:
+        hardcore = True
+        tokens = [token for token in tokens if token != "hardcore"]
+        text = " ".join(tokens).strip()
+    if hardcore:
+        return f"hardcore:{text}" if text else "hardcore"
+    return text
+
+
+def _funpay_league_matches(funpay_league: str | None, trade_league: str | None) -> bool:
+    trade_key = funpay_league_key(trade_league)
+    return not trade_key or funpay_league_key(funpay_league) == trade_key
+
+
 def parse_funpay_chips_html(html: str, *, source_url: str = FUNPAY_POE2_CHIPS_URL) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     servers = _option_map(soup, "server")
@@ -430,9 +454,10 @@ def aggregate_funpay_offers(offers: list[FunpayRubOffer]) -> dict[str, Any]:
 
 def _offers_for_snapshot(db: Session, snapshot_id: str, *, league: str | None = None) -> list[FunpayRubOffer]:
     stmt = select(FunpayRubOffer).where(FunpayRubOffer.snapshot_id == snapshot_id)
-    if league:
-        stmt = stmt.where(FunpayRubOffer.league == league)
-    return list(db.scalars(stmt).all())
+    offers = list(db.scalars(stmt).all())
+    if not league:
+        return offers
+    return [offer for offer in offers if _funpay_league_matches(offer.league, league)]
 
 
 def _history_points(
@@ -448,13 +473,14 @@ def _history_points(
         .join(FunpayRubOffer, FunpayRubOffer.snapshot_id == FunpayRubSnapshot.id)
         .where(
             FunpayRubSnapshot.created_ts >= since_ts,
-            FunpayRubOffer.league == league,
             FunpayRubOffer.trade_item_id == trade_item_id,
         )
         .order_by(FunpayRubSnapshot.created_ts.asc())
     )
     grouped: dict[str, dict[str, Any]] = {}
     for snapshot, offer in db.execute(stmt).all():
+        if not _funpay_league_matches(offer.league, league):
+            continue
         item = grouped.setdefault(
             snapshot.id,
             {
@@ -693,6 +719,32 @@ def build_funpay_calendar_recommendations(hourly_history: list[dict[str, Any]]) 
     }
 
 
+def _funpay_league_summary(offers: list[FunpayRubOffer], requested_league: str) -> dict[str, Any]:
+    requested_key = funpay_league_key(requested_league)
+    options: dict[tuple[str, str], dict[str, Any]] = {}
+    for offer in offers:
+        key = (offer.league_id or "", offer.league or "")
+        item = options.setdefault(
+            key,
+            {
+                "league": offer.league,
+                "league_id": offer.league_id,
+                "key": funpay_league_key(offer.league),
+                "offer_count": 0,
+            },
+        )
+        item["offer_count"] += 1
+    available = sorted(options.values(), key=lambda item: (item.get("league") or "", item.get("league_id") or ""))
+    matched = [item for item in available if item.get("key") == requested_key]
+    return {
+        "requested": requested_league,
+        "key": requested_key,
+        "matched": bool(matched),
+        "matched_leagues": matched,
+        "available_leagues": available,
+    }
+
+
 def _group_latest_rows(
     db: Session,
     snapshot: FunpayRubSnapshot,
@@ -715,6 +767,8 @@ def build_funpay_rub_context(
     cached: bool = False,
     history_days: int = 7,
 ) -> dict[str, Any]:
+    latest_offers = _offers_for_snapshot(db, snapshot.id)
+    league_summary = _funpay_league_summary(latest_offers, league)
     grouped = _group_latest_rows(db, snapshot, league=league)
     since_ts = float(snapshot.created_ts or time.time()) - max(1, history_days) * 86400
     rows = []
@@ -762,6 +816,7 @@ def build_funpay_rub_context(
         "source_url": snapshot.source_url,
         "cached": cached,
         "league": league,
+        "funpay_league": league_summary,
         "target_currency": target_currency,
         "snapshot": {
             "id": snapshot.id,
@@ -796,6 +851,13 @@ async def load_funpay_rub_context(
             "source_url": FUNPAY_POE2_CHIPS_URL,
             "cached": False,
             "league": league,
+            "funpay_league": {
+                "requested": league,
+                "key": funpay_league_key(league),
+                "matched": False,
+                "matched_leagues": [],
+                "available_leagues": [],
+            },
             "target_currency": target_currency,
             "snapshot": None,
             "rows": [],

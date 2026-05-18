@@ -1,0 +1,105 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poe2tradehelper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Проверки
+    runs-on: ubuntu-latest
+    env:
+      USER_AGENT: poe2-trade-helper-ci/0.1 (contact: github-actions)
+      MARKET_SNAPSHOT_ENABLED: "false"
+      FUNPAY_RUB_SNAPSHOT_ENABLED: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile Python
+        run: python -m compileall mcp_server.py app
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+  deploy:
+    name: Деплой на сервер
+    needs: checks
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.POE2_DEPLOY_ENABLED == 'true'
+    environment: production
+    concurrency:
+      group: poe2tradehelper-production
+      cancel-in-progress: false
+    env:
+      DEPLOY_HOST: ${{ secrets.POE2_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.POE2_DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.POE2_DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.POE2_DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PORT: ${{ vars.POE2_DEPLOY_PORT }}
+      DEPLOY_APP_DIR: ${{ vars.POE2_DEPLOY_APP_DIR }}
+      DEPLOY_SERVICE: ${{ vars.POE2_DEPLOY_SERVICE }}
+      DEPLOY_HEALTH_URL: ${{ vars.POE2_DEPLOY_HEALTH_URL }}
+      APP_REPO_URL: https://github.com/Underslumber/PoE2TradeHelper.git
+      APP_BRANCH: main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required for deployment"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/poe2tradehelper_deploy
+          chmod 600 ~/.ssh/poe2tradehelper_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        shell: bash
+        run: |
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          DEPLOY_APP_DIR="${DEPLOY_APP_DIR:-/srv/poe2tradehelper/repo}"
+          DEPLOY_SERVICE="${DEPLOY_SERVICE:-poe2tradehelper.service}"
+          DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-}"
+
+          ssh -i ~/.ssh/poe2tradehelper_deploy \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_REPO_URL=${APP_REPO_URL@Q} APP_BRANCH=${APP_BRANCH@Q} APP_DIR=${DEPLOY_APP_DIR@Q} APP_SERVICE=${DEPLOY_SERVICE@Q} HEALTH_URL=${DEPLOY_HEALTH_URL@Q} bash -s" \
+            < scripts/deploy_server.sh
