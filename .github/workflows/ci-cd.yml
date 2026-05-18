@@ -1,6 +1,6 @@
-"name": "CI/CD"
+name: CI CD
 
-"on":
+on:
   push:
     branches:
       - main
@@ -102,5 +102,5 @@ jobs:
           ssh -i ~/.ssh/poe2tradehelper_deploy \
             -p "$DEPLOY_PORT" \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_REPO_URL=${APP_REPO_URL@Q} APP_BRANCH=${APP_BRANCH@Q} APP_DIR=${DEPLOY_APP_DIR@Q} APP_SERVICE=${DEPLOY_SERVICE@Q} HEALTH_URL=${DEPLOY_HEALTH_URL@Q} bash -s" \
+            "APP_REPO_URL=\"$APP_REPO_URL\" APP_BRANCH=\"$APP_BRANCH\" APP_DIR=\"$DEPLOY_APP_DIR\" APP_SERVICE=\"$DEPLOY_SERVICE\" HEALTH_URL=\"$DEPLOY_HEALTH_URL\" bash -s" \
             < scripts/deploy_server.sh
