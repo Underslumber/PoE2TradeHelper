@@ -72,7 +72,6 @@ const i18n = window.POE2_I18N || { ru: {}, en: {} };
 const HISTORY_SERIES_LIMIT = 1500;
 const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
 const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
-const GATED_MAIN_VIEWS = ['admin', 'ai'];
 
 const state = {
   lang: localStorage.getItem('poe2-lang') || 'ru',
@@ -667,12 +666,22 @@ function renderVerificationStatus(data, message) {
 
 function showVerificationQueryStatus() {
   const params = new URLSearchParams(window.location.search);
+  let handled = false;
   if (params.get('verified') === '1') {
     switchMainView('cabinet');
     setAccountStatus(t('emailVerified'));
+    handled = true;
   } else if (params.get('verify') === 'invalid') {
     switchMainView('cabinet');
     setAccountStatus(t('emailVerificationInvalid'));
+    handled = true;
+  }
+  if (handled && window.location.pathname === '/') {
+    params.delete('verified');
+    params.delete('verify');
+    params.delete('view');
+    const query = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
   }
 }
 
@@ -1591,7 +1600,7 @@ function renderAdminNavigation() {
   const isAdmin = Boolean(state.account.user?.is_admin);
   byId('admin-nav-tab')?.classList.toggle('d-none', !isAdmin);
   if (!isAdmin && state.mainView === 'admin') {
-    switchMainView(state.account.authenticated ? 'cabinet' : 'market');
+    switchMainView('market');
   }
 }
 
@@ -1631,7 +1640,7 @@ function renderAiNavigation() {
   const canUseAi = accountCanUseAi();
   byId('ai-nav-tab')?.classList.toggle('d-none', !canUseAi);
   if (!canUseAi && state.mainView === 'ai') {
-    switchMainView(state.account.authenticated ? 'cabinet' : 'market');
+    switchMainView('market');
   }
 }
 
@@ -3838,10 +3847,6 @@ function allowedMainViews() {
   return views;
 }
 
-function isKnownMainView(view) {
-  return PUBLIC_MAIN_VIEWS.includes(view) || GATED_MAIN_VIEWS.includes(view);
-}
-
 function categorySidebarPinned() {
   return state.mainView === 'market' || state.mainView === 'signals';
 }
@@ -3889,7 +3894,6 @@ function renderMainControls() {
 
 function switchMainView(view) {
   state.mainView = allowedMainViews().includes(view) ? view : 'market';
-  localStorage.setItem(MAIN_VIEW_STORAGE_KEY, state.mainView);
   if (!categorySidebarPinned()) {
     state.categorySidebarOpen = false;
   }
@@ -3914,7 +3918,7 @@ function switchMainView(view) {
   renderMainViewHeader();
   if (window.location.pathname === '/') {
     const params = new URLSearchParams(window.location.search);
-    if (state.mainView === 'market') {
+    if (state.mainView === 'market' || state.mainView === 'cabinet') {
       params.delete('view');
     } else {
       params.set('view', state.mainView);
@@ -5127,17 +5131,12 @@ async function initLiveTrade() {
       });
     });
     const requestedView = new URLSearchParams(window.location.search).get('view');
-    const storedView = localStorage.getItem(MAIN_VIEW_STORAGE_KEY);
     const requestedAdminView = requestedView === 'admin';
     const requestedAiView = requestedView === 'ai';
-    const storedGatedView = GATED_MAIN_VIEWS.includes(storedView) ? storedView : '';
-    const deferredMainView = requestedAdminView || requestedAiView ? requestedView : storedGatedView;
+    const deferredMainView = requestedAdminView || requestedAiView ? requestedView : '';
+    localStorage.removeItem(MAIN_VIEW_STORAGE_KEY);
     if (PUBLIC_MAIN_VIEWS.includes(requestedView)) {
       state.mainView = requestedView;
-    } else if (!requestedView && PUBLIC_MAIN_VIEWS.includes(storedView)) {
-      state.mainView = storedView;
-    } else if (requestedView && !isKnownMainView(requestedView)) {
-      localStorage.removeItem(MAIN_VIEW_STORAGE_KEY);
     }
     document.querySelectorAll('[data-sort-key]').forEach(button => {
       button.addEventListener('click', () => {

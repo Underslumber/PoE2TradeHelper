@@ -26,6 +26,24 @@ def test_best_operations_does_not_render_synthetic_market_chains() -> None:
     assert "marketChains" not in app_js
 
 
+def test_root_view_does_not_restore_cabinet_from_local_storage() -> None:
+    app_js = (Path(__file__).resolve().parents[1] / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "localStorage.setItem(MAIN_VIEW_STORAGE_KEY" not in app_js
+    assert "PUBLIC_MAIN_VIEWS.includes(storedView)" not in app_js
+    assert "const storedView = localStorage.getItem(MAIN_VIEW_STORAGE_KEY)" not in app_js
+
+
+def test_cabinet_view_is_not_persisted_in_url() -> None:
+    app_js = (Path(__file__).resolve().parents[1] / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "state.mainView === 'market' || state.mainView === 'cabinet'" in app_js
+    assert "params.delete('verified')" in app_js
+    assert "params.delete('verify')" in app_js
+    assert "params.delete('view')" in app_js
+    assert "state.account.authenticated ? 'cabinet' : 'market'" not in app_js
+
+
 def test_russian_ui_translates_internal_risk_flags() -> None:
     root = Path(__file__).resolve().parents[1]
     app_js = (root / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
