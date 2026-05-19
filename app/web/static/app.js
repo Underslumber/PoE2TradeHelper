@@ -70,6 +70,9 @@ window.initEconomyTable = initEconomyTable;
 
 const i18n = window.POE2_I18N || { ru: {}, en: {} };
 const HISTORY_SERIES_LIMIT = 1500;
+const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
+const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
+const GATED_MAIN_VIEWS = ['admin', 'ai'];
 
 const state = {
   lang: localStorage.getItem('poe2-lang') || 'ru',
@@ -3808,10 +3811,14 @@ function openItemDetail(itemId) {
 }
 
 function allowedMainViews() {
-  const views = ['market', 'signals', 'lots', 'cabinet'];
+  const views = [...PUBLIC_MAIN_VIEWS];
   if (state.account.user?.is_admin) views.push('admin');
   if (accountCanUseAi()) views.push('ai');
   return views;
+}
+
+function isKnownMainView(view) {
+  return PUBLIC_MAIN_VIEWS.includes(view) || GATED_MAIN_VIEWS.includes(view);
 }
 
 function categorySidebarPinned() {
@@ -3861,6 +3868,7 @@ function renderMainControls() {
 
 function switchMainView(view) {
   state.mainView = allowedMainViews().includes(view) ? view : 'market';
+  localStorage.setItem(MAIN_VIEW_STORAGE_KEY, state.mainView);
   if (!categorySidebarPinned()) {
     state.categorySidebarOpen = false;
   }
@@ -5161,10 +5169,17 @@ async function initLiveTrade() {
       });
     });
     const requestedView = new URLSearchParams(window.location.search).get('view');
+    const storedView = localStorage.getItem(MAIN_VIEW_STORAGE_KEY);
     const requestedAdminView = requestedView === 'admin';
     const requestedAiView = requestedView === 'ai';
-    if (['market', 'signals', 'lots', 'cabinet'].includes(requestedView)) {
+    const storedGatedView = GATED_MAIN_VIEWS.includes(storedView) ? storedView : '';
+    const deferredMainView = requestedAdminView || requestedAiView ? requestedView : storedGatedView;
+    if (PUBLIC_MAIN_VIEWS.includes(requestedView)) {
       state.mainView = requestedView;
+    } else if (!requestedView && PUBLIC_MAIN_VIEWS.includes(storedView)) {
+      state.mainView = storedView;
+    } else if (requestedView && !isKnownMainView(requestedView)) {
+      localStorage.removeItem(MAIN_VIEW_STORAGE_KEY);
     }
     document.querySelectorAll('[data-sort-key]').forEach(button => {
       button.addEventListener('click', () => {
@@ -5182,11 +5197,8 @@ async function initLiveTrade() {
     loadLatestCachedRates();
     loadAccountState().then(() => {
       showVerificationQueryStatus();
-      if (requestedAdminView) {
-        switchMainView('admin');
-      }
-      if (requestedAiView) {
-        switchMainView('ai');
+      if (deferredMainView) {
+        switchMainView(deferredMainView);
       }
     });
     scheduleAutoRefresh();
