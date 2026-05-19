@@ -1208,6 +1208,72 @@ body {
   display: block;
   margin-top: 4px;
 }
+.trade-note-input {
+  margin-top: 10px;
+}
+.item-parser-panel,
+.ai-history-panel,
+.recipe-signal-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  margin-top: 22px;
+  padding-top: 18px;
+}
+.item-parser-text {
+  min-height: 160px;
+  resize: vertical;
+}
+.item-parser-card,
+.ai-history-card {
+  background: rgba(15, 23, 42, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 14px;
+}
+.item-parser-mods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.item-parser-mods span {
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  color: #dbeafe;
+  padding: 5px 8px;
+}
+.item-parser-market {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin: 14px 0 10px;
+}
+.item-parser-market > div {
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  padding: 10px;
+}
+.item-parser-market strong {
+  display: block;
+  margin-top: 4px;
+}
+.item-parser-samples {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.item-parser-samples span {
+  color: #cbd5e1;
+  font-size: 0.88rem;
+}
+.ai-history-list,
+.recipe-signal-list {
+  display: grid;
+  gap: 12px;
+}
+.ai-history-card p {
+  margin: 8px 0;
+}
 .trade-pnl-row {
   align-items: center;
   display: flex;
@@ -1589,7 +1655,7 @@ body {
 .market-health-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   margin-bottom: 18px;
 }
 .market-health-grid > div {

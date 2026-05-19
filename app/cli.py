@@ -11,10 +11,15 @@ from app.ai_context import load_ai_market_context
 from app.collector.discover import run_discovery, save_source_map
 from app.collector.sync import sync_all, sync_pair
 from app.codex_market_analyzer import run_codex_market_analysis
+from app.currency_cycles import load_currency_cycles
 from app.currency_analyzer import load_currency_trend_context
 from app.db.migrate import migrate
 from app.funpay_market import collect_funpay_rub_market_snapshot, run_funpay_rub_snapshot_loop
+from app.history_compaction import compact_market_history
+from app.item_parser import parse_item_text
 from app.market_snapshots import collect_market_snapshots, parse_league_start, run_market_snapshot_loop, split_csv
+from app.notification_worker import process_due_telegram_notifications
+from app.trade2 import get_pasted_item_market
 
 
 def run_web():
@@ -76,6 +81,18 @@ def main():
     currency_analyze_cmd.add_argument("--output-dir")
     currency_analyze_cmd.add_argument("--no-save", action="store_true")
 
+    currency_cycles_cmd = sub.add_parser("currency-cycles")
+    currency_cycles_cmd.add_argument("--league", required=True)
+    currency_cycles_cmd.add_argument("--base", default="exalted")
+    currency_cycles_cmd.add_argument("--targets", default="exalted,divine,chaos")
+    currency_cycles_cmd.add_argument("--status", choices=("online", "any"), default="online")
+    currency_cycles_cmd.add_argument("--max-steps", type=int, default=4)
+    currency_cycles_cmd.add_argument("--min-margin", type=float, default=0.001)
+    currency_cycles_cmd.add_argument("--fee-pct", type=float, default=0.003)
+    currency_cycles_cmd.add_argument("--min-volume", type=float, default=1.0)
+    currency_cycles_cmd.add_argument("--limit", type=int, default=30)
+    currency_cycles_cmd.add_argument("--no-cache", action="store_true")
+
     market_snapshots_cmd = sub.add_parser("market-snapshots")
     market_snapshots_cmd.add_argument("--league", required=True)
     market_snapshots_cmd.add_argument("--target", default="exalted")
@@ -100,6 +117,21 @@ def main():
     funpay_rub_cmd.add_argument("--early-days", type=float, default=2.0)
     funpay_rub_cmd.add_argument("--league-start", help="ISO timestamp; uses early interval while inside the early window")
     funpay_rub_cmd.add_argument("--max-cycles", type=int)
+
+    compact_history_cmd = sub.add_parser("compact-history")
+    compact_history_cmd.add_argument("--now-ts", type=float)
+
+    notification_check_cmd = sub.add_parser("notifications-check")
+    notification_check_cmd.add_argument("--league")
+
+    item_text_cmd = sub.add_parser("parse-item-text")
+    item_text_cmd.add_argument("--text")
+
+    price_item_text_cmd = sub.add_parser("price-item-text")
+    price_item_text_cmd.add_argument("--league", required=True)
+    price_item_text_cmd.add_argument("--target", default="exalted")
+    price_item_text_cmd.add_argument("--status", choices=["online", "any"], default="any")
+    price_item_text_cmd.add_argument("--text")
 
     sub.add_parser("run")
     args = parser.parse_args()
@@ -185,6 +217,23 @@ def main():
             payload = context
         json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
         sys.stdout.write("\n")
+    elif args.command == "currency-cycles":
+        payload = asyncio.run(
+            load_currency_cycles(
+                league=args.league,
+                base=args.base,
+                targets=split_csv(args.targets),
+                status=args.status,
+                max_steps=args.max_steps,
+                min_margin=args.min_margin,
+                fee_pct=args.fee_pct,
+                min_volume=args.min_volume,
+                limit=args.limit,
+                use_cache=not args.no_cache,
+            )
+        )
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
     elif args.command == "market-snapshots":
         categories = split_csv(args.categories)
         currency_targets = split_csv(args.currency_targets)
@@ -254,6 +303,31 @@ def main():
                     on_summary=print_summary,
                 )
             )
+    elif args.command == "compact-history":
+        payload = compact_market_history(now_ts=args.now_ts)
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    elif args.command == "notifications-check":
+        payload = asyncio.run(process_due_telegram_notifications(league=args.league))
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    elif args.command == "parse-item-text":
+        text = args.text if args.text is not None else sys.stdin.read()
+        payload = parse_item_text(text)
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    elif args.command == "price-item-text":
+        text = args.text if args.text is not None else sys.stdin.read()
+        payload = asyncio.run(
+            get_pasted_item_market(
+                league=args.league,
+                text=text,
+                target=args.target,
+                status=args.status,
+            )
+        )
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
     elif args.command == "run":
         run_web()
     else:

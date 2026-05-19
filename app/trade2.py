@@ -19,6 +19,9 @@ from urllib.parse import quote
 import httpx
 
 from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, USER_AGENT
+from app.item_parser import parse_item_text
+from app.profitability import enrich_trade_advice, execution_quality
+from app.recipes import analyze_recipes
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
@@ -308,6 +311,13 @@ async def get_category_rates(
         cached = SQLiteCacheManager.get(cache_key)
         if cached:
             cached["cached"] = True
+            for row in cached.get("rows") or []:
+                if "execution" not in row:
+                    row["execution"] = execution_quality(row, snapshot_ts=cached.get("created_ts"))
+            if "advice" not in cached:
+                cached["advice"] = build_trade_advice(category, cached.get("rows") or [], target, snapshot_ts=cached.get("created_ts"))
+            if "recipes" not in cached:
+                cached["recipes"] = analyze_recipes(category, cached.get("rows") or [], target, snapshot_ts=cached.get("created_ts"))
             return cached
 
     categories = await get_trade_static()
@@ -338,11 +348,12 @@ async def get_category_rates(
             await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
         rate_by_id = {entry["id"]: _rate_stats(all_rows, entry["id"]) for entry in entries}
 
+    created_ts = time.time()
     rows = []
     for entry in entries:
         item_id = entry["id"]
         stats = rate_by_id.get(item_id, {})
-        rows.append(
+        row = (
             {
                 "id": item_id,
                 "text": entry["text"],
@@ -359,9 +370,11 @@ async def get_category_rates(
                 "max_volume_rate": stats.get("max_volume_rate"),
             }
         )
+        row["execution"] = execution_quality(row, snapshot_ts=created_ts)
+        rows.append(row)
 
     snapshot = {
-        "created_ts": time.time(),
+        "created_ts": created_ts,
         "league": league,
         "category": category,
         "target": target,
@@ -378,7 +391,8 @@ async def get_category_rates(
         "target": target,
         "status": status,
         "rows": rows,
-        "advice": build_trade_advice(category, rows, target),
+        "advice": build_trade_advice(category, rows, target, snapshot_ts=snapshot["created_ts"]),
+        "recipes": analyze_recipes(category, rows, target, snapshot_ts=snapshot["created_ts"]),
         "errors": errors,
         "source": source,
         "cached": False,
@@ -395,6 +409,18 @@ async def get_exchange_offers(
     status: str = "online",
 ) -> dict[str, Any]:
     return normalize_exchange_result(await _post_exchange(league, [have], [want], status=status))
+
+
+async def get_exchange_offers_many(
+    league: str,
+    have: str,
+    want: list[str],
+    status: str = "online",
+) -> dict[str, Any]:
+    wants = [item for item in want if item and item != have]
+    if not wants:
+        return {"query_id": None, "total": 0, "rows": []}
+    return normalize_exchange_result(await _post_exchange(league, [have], wants, status=status), limit=250)
 
 
 async def _post_search(
@@ -675,6 +701,10 @@ def _lot_affix_keys(lot: dict[str, Any]) -> tuple[str, ...]:
     }
     if stat_ids:
         return tuple(sorted(stat_ids))
+    return _lot_text_affix_keys(lot)
+
+
+def _lot_text_affix_keys(lot: dict[str, Any]) -> tuple[str, ...]:
     keys = {
         key
         for mod in (lot.get("explicit_mods") or [])
@@ -728,6 +758,7 @@ def _filter_comparable_lots(target: dict[str, Any], lots: list[dict[str, Any]], 
     target_base = _lot_base_key(target)
     target_name = _clean_trade_text(target.get("name")).lower()
     target_affixes = set(_lot_affix_keys(target))
+    target_uses_stat_ids = any(key.startswith("stat:") for key in target_affixes)
     profile = _comparable_lot_profile(target, looseness)
     required_affixes = profile["required_affixes"]
     comparable: list[dict[str, Any]] = []
@@ -745,11 +776,40 @@ def _filter_comparable_lots(target: dict[str, Any], lots: list[dict[str, Any]], 
         if not _item_level_matches(target.get("item_level"), lot.get("item_level"), profile["level_tolerance"]):
             continue
         if required_affixes:
-            overlap = len(target_affixes & set(_lot_affix_keys(lot)))
+            candidate_affixes = set(_lot_affix_keys(lot) if target_uses_stat_ids else _lot_text_affix_keys(lot))
+            overlap = len(target_affixes & candidate_affixes)
             if overlap < required_affixes:
                 continue
         comparable.append(lot)
     return comparable
+
+
+def _parsed_item_lot(parsed: dict[str, Any]) -> dict[str, Any]:
+    type_line = parsed.get("type_line") or parsed.get("display_name") or parsed.get("name") or ""
+    return {
+        "id": "pasted-item",
+        "seller": "",
+        "online": False,
+        "indexed": "",
+        "stash": "",
+        "price_amount": None,
+        "price_currency": "",
+        "stack_size": 1,
+        "display_name": parsed.get("display_name") or type_line,
+        "name": parsed.get("name") or "",
+        "type_line": type_line,
+        "base_type": type_line,
+        "rarity": parsed.get("rarity") or "",
+        "item_level": parsed.get("item_level"),
+        "identified": None,
+        "corrupted": False,
+        "icon": "",
+        "implicit_mods": [],
+        "explicit_mods": parsed.get("mods") or [],
+        "rune_mods": [],
+        "desecrated_mods": [],
+        "stat_mods": [],
+    }
 
 
 def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
@@ -1305,6 +1365,67 @@ async def get_seller_lot_market(
         "verdict": _verdict_for_lot(lot, lot_market),
     }
 
+
+async def get_pasted_item_market(
+    league: str,
+    text: str,
+    target: str = "exalted",
+    status: str = "any",
+) -> dict[str, Any]:
+    parsed = parse_item_text(text)
+    lot = _parsed_item_lot(parsed)
+    if not lot.get("base_type"):
+        market = _empty_market_payload(lot, "item text has no base type")
+        return {
+            "schema_version": "poe2-pasted-item-market/v1",
+            "league": league,
+            "target": target,
+            "status": status,
+            "parsed": parsed,
+            "market": {**market.get("stats", {}), "comparison": market.get("comparison")},
+            "sample_lots": [],
+            "source": "pasted-text",
+        }
+
+    try:
+        currency_rates = await asyncio.wait_for(
+            get_category_rates(league=league, category="Currency", target=target, status="any"),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        )
+        rates = _currency_rates_by_id(currency_rates, target)
+    except (asyncio.TimeoutError, httpx.HTTPError):
+        rates = {target: 1.0}
+
+    try:
+        market = await asyncio.wait_for(
+            _fetch_similar_market(league, lot, "", target, status, rates),
+            timeout=SELLER_MARKET_PER_LOT_TIMEOUT * 2,
+        )
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        market = _empty_market_payload(lot, "market analysis timeout")
+    except Exception as exc:
+        market = _empty_market_payload(lot, str(exc))
+
+    lot_market = {
+        "query_id": market.get("query_id"),
+        "total": market.get("total"),
+        "candidate_count": market.get("candidate_count"),
+        "filtered_count": market.get("filtered_count"),
+        "cached": market.get("cached", False),
+        "comparison": market.get("comparison"),
+        **market.get("stats", {}),
+    }
+    return {
+        "schema_version": "poe2-pasted-item-market/v1",
+        "league": league,
+        "target": target,
+        "status": status,
+        "parsed": parsed,
+        "market": lot_market,
+        "sample_lots": (market.get("lots") or [])[:10],
+        "source": "trade2/search+fetch",
+    }
+
 def _rate_stats(rows: list[dict[str, Any]], item_id: str) -> dict[str, Any]:
     ratios = [row["ratio"] for row in rows if row.get("have_currency") == item_id and isinstance(row.get("ratio"), float)]
     if not ratios:
@@ -1429,7 +1550,12 @@ def build_category_meta(categories: dict[str, list[dict[str, str | None]]]) -> l
     ]
 
 
-def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -> list[dict[str, Any]]:
+def build_trade_advice(
+    category: str,
+    rows: list[dict[str, Any]],
+    target: str,
+    snapshot_ts: float | None = None,
+) -> list[dict[str, Any]]:
     if category != "Delirium":
         if category == "Fragments":
             return [
@@ -1468,7 +1594,8 @@ def build_trade_advice(category: str, rows: list[dict[str, Any]], target: str) -
             if path_advice:
                 advice.append(path_advice)
     severity_rank = {"signal": 0, "weak": 1, "watch": 2}
-    return sorted(advice, key=lambda item: (severity_rank.get(item.get("severity"), 9), -item.get("profit", 0)))
+    sorted_advice = sorted(advice, key=lambda item: (severity_rank.get(item.get("severity"), 9), -item.get("profit", 0)))
+    return enrich_trade_advice(sorted_advice, rows, snapshot_ts=snapshot_ts)
 
 
 def _build_emotion_path_advice(
@@ -1518,6 +1645,10 @@ def _build_emotion_path_advice(
         title_en = "Watch"
         risk_ru = "Маржа слишком мала или отрицательная для действия."
         risk_en = "Margin is too small or negative for action."
+    source_name_ru = source_row.get("text_ru") or source_row.get("text") or source
+    result_name_ru = result_row.get("text_ru") or result_row.get("text") or result
+    source_name_en = source_row.get("text") or source_row.get("text_ru") or source
+    result_name_en = result_row.get("text") or result_row.get("text_ru") or result
     return {
         "kind": "emotion_path",
         "severity": severity,
@@ -1525,10 +1656,10 @@ def _build_emotion_path_advice(
         "result": result,
         "path_steps": path_steps,
         "input_count": input_count,
-        "source_name_ru": source_row.get("text_ru"),
-        "result_name_ru": result_row.get("text_ru"),
-        "source_name_en": source_row.get("text"),
-        "result_name_en": result_row.get("text"),
+        "source_name_ru": source_name_ru,
+        "result_name_ru": result_name_ru,
+        "source_name_en": source_name_en,
+        "result_name_en": result_name_en,
         "craft_cost": craft_cost,
         "result_value": result_value,
         "profit": profit,
@@ -1545,13 +1676,13 @@ def _build_emotion_path_advice(
         "title_ru": title_ru,
         "title_en": title_en,
         "message_ru": (
-            f"{input_count} x {source_row.get('text_ru')} -> {result_row.get('text_ru')} "
+            f"{input_count} x {source_name_ru} -> {result_name_ru} "
             f"({path_steps} шаг.): "
             f"прибыль {profit:.4f} {target}, маржа {margin:.1%}, "
             f"минимальный объем {min_volume:.1f}. {risk_ru}"
         ),
         "message_en": (
-            f"{input_count} x {source_row.get('text')} -> {result_row.get('text')} "
+            f"{input_count} x {source_name_en} -> {result_name_en} "
             f"({path_steps} step{'s' if path_steps != 1 else ''}): "
             f"profit {profit:.4f} {target}, margin {margin:.1%}, "
             f"minimum volume {min_volume:.1f}. {risk_en}"
@@ -1572,7 +1703,13 @@ def read_latest_rates(league: str, category: str, target: str = "exalted", statu
         history_path=HISTORY_PATH,
     )
     if snapshot and "advice" not in snapshot:
-        snapshot["advice"] = build_trade_advice(category, snapshot.get("rows") or [], target)
+        snapshot["advice"] = build_trade_advice(category, snapshot.get("rows") or [], target, snapshot_ts=snapshot.get("created_ts"))
+    if snapshot and "recipes" not in snapshot:
+        snapshot["recipes"] = analyze_recipes(category, snapshot.get("rows") or [], target, snapshot_ts=snapshot.get("created_ts"))
+    if snapshot:
+        for row in snapshot.get("rows") or []:
+            if "execution" not in row:
+                row["execution"] = execution_quality(row, snapshot_ts=snapshot.get("created_ts"))
     return snapshot
 
 

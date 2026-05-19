@@ -93,6 +93,7 @@ const state = {
   categorySidebarOpen: false,
   activeAdviceTab: 'market',
   crossDeals: [],
+  crossDealsMeta: null,
   crossDealsKey: '',
   isLoadingCrossDeals: false,
   activeTrades: [],
@@ -106,6 +107,18 @@ const state = {
     job: null,
     isRunning: false,
     pollTimer: null,
+  },
+  aiHistory: {
+    items: [],
+    isLoading: false,
+    error: '',
+    loaded: false,
+  },
+  itemParser: {
+    result: null,
+    isLoading: false,
+    error: '',
+    loadingKey: '',
   },
   currencyAnalysis: {
     context: null,
@@ -202,6 +215,8 @@ function applyLanguage() {
   renderAdminPanel();
   renderAiNavigation();
   renderAiPanel();
+  renderAiHistory();
+  renderItemParser();
   renderRubMarketPanel();
   renderDetailAccountStatus();
   switchMainView(state.mainView);
@@ -464,6 +479,17 @@ function sendAccountJson(url, body, method = 'POST') {
   });
 }
 
+async function sendJson(url, body, method = 'POST') {
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || data.detail || t('tradeError'));
+  return data;
+}
+
 function accountItemName(item) {
   return state.lang === 'ru' ? (item.item_name_ru || item.item_name) : item.item_name;
 }
@@ -715,6 +741,20 @@ async function accountBenchmarkPrice(targetCurrency, benchmarkCurrency, leagueOv
   if (Object.prototype.hasOwnProperty.call(state.account.benchmarkRates, key)) {
     return state.account.benchmarkRates[key];
   }
+  if (String(benchmarkCurrency).startsWith('basket:')) {
+    try {
+      const params = new URLSearchParams({ league, target: targetCurrency, benchmark: benchmarkCurrency, status });
+      const response = await fetch(`/api/trade/benchmark?${params.toString()}`);
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+      const value = Number(data.value);
+      state.account.benchmarkRates[key] = Number.isFinite(value) && value > 0 ? value : null;
+      return state.account.benchmarkRates[key];
+    } catch {
+      state.account.benchmarkRates[key] = null;
+      return null;
+    }
+  }
   const params = new URLSearchParams({ league, category: 'Currency', target: targetCurrency, status });
   try {
     let data = null;
@@ -808,6 +848,10 @@ async function startTradeFromPin(pinId) {
     entry_price: price,
     entry_currency: pin.target_currency,
     benchmark_currency: state.account.benchmarkCurrency || 'divine',
+    fee_amount: Number(document.querySelector(`[data-pin-fee-amount="${pinId}"]`)?.value || 0) || null,
+    fee_currency: pin.target_currency,
+    strategy_tag: document.querySelector(`[data-pin-strategy="${pinId}"]`)?.value || '',
+    entry_reason: document.querySelector(`[data-pin-entry-reason="${pinId}"]`)?.value || '',
   }, t('tradeOpened'));
 }
 
@@ -824,6 +868,9 @@ async function closeTrade(tradeId) {
     await sendAccountJson(`/api/account/trades/${tradeId}`, {
       exit_price: exitPrice,
       exit_currency: trade.entry_currency,
+      fee_amount: Number(document.querySelector(`[data-trade-fee-amount="${tradeId}"]`)?.value || trade.fee_amount || 0) || null,
+      fee_currency: trade.entry_currency,
+      exit_reason: document.querySelector(`[data-trade-exit-reason="${tradeId}"]`)?.value || '',
       ...(exitBenchmarkPrice ? { exit_benchmark_price: exitBenchmarkPrice } : {}),
     }, 'PATCH');
     await refreshAccountData(t('tradeClosed'));
@@ -1260,9 +1307,18 @@ function renderPinCard(pin) {
           <span>${t('quantity')}</span>
           <input class="form-control form-control-sm" type="number" min="0.0001" step="any" value="1" data-pin-quantity="${pin.id}">
         </label>
+        <label class="compact-field">
+          <span>${t('tradeFee')}</span>
+          <input class="form-control form-control-sm" type="number" min="0" step="any" value="" data-pin-fee-amount="${pin.id}">
+        </label>
+        <label class="compact-field">
+          <span>${t('strategyTag')}</span>
+          <input class="form-control form-control-sm" value="" data-pin-strategy="${pin.id}" placeholder="${t('strategyTagPlaceholder')}">
+        </label>
         <button class="btn btn-primary btn-sm" type="button" data-account-action="start-trade" data-pin-id="${pin.id}">${t('markEntry')}</button>
         <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-pin" data-pin-id="${pin.id}">${t('unpinPosition')}</button>
       </div>
+      <input class="form-control form-control-sm trade-note-input" value="" data-pin-entry-reason="${pin.id}" placeholder="${t('entryReasonPlaceholder')}">
       <div class="pin-meta"><span>${t('entryWillUseBenchmark')}: ${currencyLabel(state.account.benchmarkCurrency || 'divine')}</span><span>${t('entryCurrency')}: ${currencyLabel(target)}</span></div>
     </article>
   `;
@@ -1330,6 +1386,10 @@ function renderTradeCard(trade) {
         ${isOpen ? renderAccountMarketMeta(trade) : ''}
         ${trade.exit_at ? `<span>${t('exitMoment')}: ${formatDateTime(trade.exit_at)}</span>` : ''}
         ${trade.exit_price ? `<span>${t('exitPrice')}: ${priceWithCurrency(trade.exit_price, trade.exit_currency)}</span>` : ''}
+        ${trade.fee_amount ? `<span>${t('tradeFee')}: ${priceWithCurrency(trade.fee_amount, trade.fee_currency || trade.entry_currency)}</span>` : ''}
+        ${trade.strategy_tag ? `<span>${t('strategyTag')}: ${escapeHtml(trade.strategy_tag)}</span>` : ''}
+        ${trade.entry_reason ? `<span>${t('entryReason')}: ${escapeHtml(trade.entry_reason)}</span>` : ''}
+        ${trade.exit_reason ? `<span>${t('exitReason')}: ${escapeHtml(trade.exit_reason)}</span>` : ''}
       </div>
       ${isOpen ? renderOpenTradeSnapshot(trade) : `
         <div class="pin-meta">${benchmarkSummary(trade, 'closed')}</div>
@@ -1342,9 +1402,14 @@ function renderTradeCard(trade) {
             <span>${t('exitPrice')}</span>
             <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(exitPriceValue)}" data-trade-exit-price="${trade.id}">
           </label>
+          <label class="compact-field">
+            <span>${t('tradeFee')}</span>
+            <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(trade.fee_amount || '')}" data-trade-fee-amount="${trade.id}">
+          </label>
           <button class="btn btn-primary btn-sm" type="button" data-account-action="close-trade" data-trade-id="${trade.id}">${t('markExit')}</button>
           <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-trade" data-trade-id="${trade.id}">${t('deleteTrade')}</button>
         </div>
+        <input class="form-control form-control-sm trade-note-input" value="" data-trade-exit-reason="${trade.id}" placeholder="${t('exitReasonPlaceholder')}">
       ` : `
         <div class="pin-trade-row">
           <button class="btn btn-outline-light btn-sm" type="button" data-account-action="remove-trade" data-trade-id="${trade.id}">${t('deleteTrade')}</button>
@@ -1692,6 +1757,64 @@ function renderAiPanel() {
     if (result) result.innerHTML = `<p class="text-secondary">${t('aiAnalysisEmpty')}</p>`;
   }
   renderCurrencyAnalysisPanel();
+  renderAiHistory();
+}
+
+function renderAiHistory() {
+  const list = byId('ai-history-list');
+  if (!list) return;
+  if (!accountCanUseAi()) {
+    list.innerHTML = '';
+    return;
+  }
+  if (state.aiHistory.isLoading) {
+    list.innerHTML = loadingMarkup(t('aiHistoryLoading'));
+    return;
+  }
+  if (state.aiHistory.error) {
+    list.innerHTML = `<p class="text-secondary">${escapeHtml(state.aiHistory.error)}</p>`;
+    return;
+  }
+  if (!state.aiHistory.loaded) {
+    list.innerHTML = `<p class="text-secondary">${t('aiHistoryEmpty')}</p>`;
+    return;
+  }
+  if (!state.aiHistory.items.length) {
+    list.innerHTML = `<p class="text-secondary">${t('aiHistoryEmpty')}</p>`;
+    return;
+  }
+  list.innerHTML = state.aiHistory.items.map(item => `
+    <article class="ai-history-card">
+      <div>
+        <strong>${escapeHtml([item.league, item.category || item.item, item.target].filter(Boolean).join(' / ') || item.file)}</strong>
+        <small>${formatDateTime(item.created_at)} · ${escapeHtml(item.file || '')}</small>
+      </div>
+      <p>${escapeHtml(item.market_read || t('aiNoSignals'))}</p>
+      <div class="pin-meta">
+        <span>${t('aiOverallRisk')}: ${escapeHtml(item.overall_risk || '-')}</span>
+        <span>${t('aiDataQuality')}: ${escapeHtml(item.data_quality || '-')}</span>
+        <span>${t('aiSignals')}: ${formatAmount(item.signals_count || 0)}</span>
+      </div>
+      ${item.path ? `<div class="ai-audit-path">${t('aiAuditPath')}: ${escapeHtml(item.path)}</div>` : ''}
+    </article>
+  `).join('');
+}
+
+async function loadAiHistory() {
+  if (!accountCanUseAi() || state.aiHistory.isLoading) return;
+  state.aiHistory.isLoading = true;
+  state.aiHistory.error = '';
+  renderAiHistory();
+  try {
+    const data = await fetchAccountJson('/api/ai/history?limit=20');
+    state.aiHistory.items = data.analyses || [];
+    state.aiHistory.loaded = true;
+  } catch (error) {
+    state.aiHistory.error = error.message || String(error);
+  } finally {
+    state.aiHistory.isLoading = false;
+    renderAiHistory();
+  }
 }
 
 function clearAiPollTimer() {
@@ -2353,6 +2476,7 @@ function currencyEntry(target) {
 }
 
 function currencyLabel(target) {
+  if (String(target || '').startsWith('basket:')) return t('marketBasketBenchmark');
   const entry = currencyEntry(target);
   if (!entry) return target || '-';
   return entryName(entry);
@@ -2404,6 +2528,13 @@ function targetOptions(includeAuto = false) {
     .map(entry => ({ id: entry.id, text: state.lang === 'ru' ? entryName(entry) : `${entryName(entry)} (${entry.id})` }));
   if (!includeAuto) return ordered;
   return [{ id: 'auto', text: t('autoTarget') }, ...ordered];
+}
+
+function benchmarkOptions() {
+  return [
+    { id: 'basket:liquid-core', text: t('marketBasketBenchmark') },
+    ...targetOptions(false),
+  ];
 }
 
 function availableTargetIds() {
@@ -2488,10 +2619,12 @@ function fillTargetCurrencySelect() {
 function fillBenchmarkCurrencySelect() {
   const select = byId('benchmark-currency');
   if (!select) return;
-  const fallback = hasTarget('divine') ? 'divine' : defaultTarget();
-  const selected = hasTarget(state.account.benchmarkCurrency) ? state.account.benchmarkCurrency : fallback;
+  const fallback = 'basket:liquid-core';
+  const selected = state.account.benchmarkCurrency && (state.account.benchmarkCurrency.startsWith('basket:') || hasTarget(state.account.benchmarkCurrency))
+    ? state.account.benchmarkCurrency
+    : fallback;
   state.account.benchmarkCurrency = selected;
-  fillSelect(select, targetOptions(false), selected);
+  fillSelect(select, benchmarkOptions(), selected);
 }
 
 function fillAccountTargetCurrencySelect() {
@@ -2525,6 +2658,7 @@ function renderCategories() {
       state.selectedCategory = category.id;
       state.selectedItemId = null;
       state.crossDeals = [];
+      state.crossDealsMeta = null;
       state.crossDealsKey = '';
       state.activeTrades = [];
       state.marketChains = [];
@@ -2718,6 +2852,123 @@ function renderSellerLots() {
   list.innerHTML = lots.map(renderSellerLotCard).join('');
 }
 
+function renderItemParser() {
+  const result = byId('item-parser-result');
+  const status = byId('item-parser-status');
+  if (!result) return;
+  if (status) {
+    if (state.itemParser.isLoading) {
+      status.innerHTML = loadingMarkup(t(state.itemParser.loadingKey || 'itemParserLoading'), 'inline');
+    } else {
+      status.textContent = state.itemParser.error || '';
+    }
+  }
+  const payload = state.itemParser.result;
+  const parsed = payload?.parsed || payload;
+  if (!parsed) {
+    result.innerHTML = '';
+    return;
+  }
+  const hint = parsed.pricing_hint || {};
+  const market = payload?.market || null;
+  const sampleLots = payload?.sample_lots || [];
+  const target = payload?.target || selectedTarget();
+  result.innerHTML = `
+    <article class="item-parser-card">
+      <div class="pin-title">
+        <span class="category-placeholder"></span>
+        <div>
+          <strong>${escapeHtml(parsed.display_name || '-')}</strong>
+          <small>${escapeHtml([parsed.rarity, parsed.item_level ? `ilvl ${parsed.item_level}` : ''].filter(Boolean).join(' / '))}</small>
+        </div>
+      </div>
+      <div class="pin-meta">
+        <span>${t('parserPricingMode')}: ${escapeHtml(hint.mode || '-')}</span>
+        <span>${t('confidence')}: ${confidenceLabel(hint.confidence)}</span>
+        <span>${t('affixes')}: ${formatAmount(parsed.mod_count || 0)}</span>
+      </div>
+      ${(parsed.mods || []).length ? `<div class="item-parser-mods">${parsed.mods.slice(0, 8).map(mod => `<span>${escapeHtml(mod)}</span>`).join('')}</div>` : ''}
+      ${market ? `
+        <div class="item-parser-market">
+          <div>
+            <span class="summary-label">${t('itemMarketEstimate')}</span>
+            <strong>${lotTargetPrice(market.current, target)}</strong>
+          </div>
+          <div>
+            <span class="summary-label">${t('marketRange')}</span>
+            <strong>${lotTargetPrice(market.min, target)} - ${lotTargetPrice(market.p75, target)}</strong>
+          </div>
+          <div>
+            <span class="summary-label">${t('marketLots')}</span>
+            <strong>${formatAmount(market.count || 0)} / ${formatAmount(market.candidate_count || market.total || 0)}</strong>
+          </div>
+          <div>
+            <span class="summary-label">${t('confidence')}</span>
+            <strong>${confidenceLabel(market.confidence)}</strong>
+          </div>
+        </div>
+        <p class="text-secondary">${comparisonLabel(market.comparison?.mode)} · ${t('itemMarketEstimateHint')}</p>
+        ${sampleLots.length ? `<div class="item-parser-samples">${sampleLots.slice(0, 5).map(lot => `
+          <span>${escapeHtml(lot.display_name || lot.type_line || '-')} · ${lotTargetPrice(lot.price_target, target)}</span>
+        `).join('')}</div>` : ''}
+      ` : `<p class="text-secondary">${t('itemParserResultHint')}</p>`}
+    </article>
+  `;
+}
+
+async function parsePastedItem() {
+  const text = byId('item-parser-text')?.value || '';
+  if (!text.trim()) {
+    state.itemParser.error = t('itemParserTextRequired');
+    renderItemParser();
+    return;
+  }
+  state.itemParser.isLoading = true;
+  state.itemParser.error = '';
+  state.itemParser.loadingKey = 'itemParserLoading';
+  renderItemParser();
+  try {
+    const data = await sendJson('/api/trade/item-text/parse', { text });
+    state.itemParser.result = data;
+  } catch (error) {
+    state.itemParser.error = error.message || String(error);
+    state.itemParser.result = null;
+  } finally {
+    state.itemParser.isLoading = false;
+    state.itemParser.loadingKey = '';
+    renderItemParser();
+  }
+}
+
+async function pricePastedItem() {
+  const text = byId('item-parser-text')?.value || '';
+  if (!text.trim()) {
+    state.itemParser.error = t('itemParserTextRequired');
+    renderItemParser();
+    return;
+  }
+  state.itemParser.isLoading = true;
+  state.itemParser.error = '';
+  state.itemParser.loadingKey = 'itemPricingLoading';
+  renderItemParser();
+  try {
+    const data = await sendJson('/api/trade/item-text/price', {
+      text,
+      league: byId('live-league')?.value || '',
+      target: selectedTarget(),
+      status: byId('live-status')?.value || 'any',
+    });
+    state.itemParser.result = data;
+  } catch (error) {
+    state.itemParser.error = error.message || String(error);
+    state.itemParser.result = null;
+  } finally {
+    state.itemParser.isLoading = false;
+    state.itemParser.loadingKey = '';
+    renderItemParser();
+  }
+}
+
 async function fetchSellerLotMarket(lot, params, requestId) {
   if (!lot.id || state.sellerLotsRequestId !== requestId) return;
   const marketParams = new URLSearchParams({
@@ -2864,12 +3115,21 @@ function findAnyEntry(itemId) {
   return null;
 }
 
+function adviceEntryName(itemId, preferredName = '') {
+  const normalizedName = String(preferredName || '');
+  const isMissingName = !normalizedName || normalizedName.toLowerCase() === 'none' || normalizedName === itemId;
+  if (!itemId) return isMissingName ? '' : normalizedName;
+  const entry = findAnyEntry(itemId);
+  if (entry && isMissingName) return entryName(entry);
+  return normalizedName || itemId;
+}
+
 function entryIcon(entry) {
   return entry?.image || '';
 }
 
 function itemTitleMarkup(name, icon) {
-  return `<span class="advice-item-title">${icon ? `<img src="${icon}" alt="">` : ''}<span>${name}</span></span>`;
+  return `<span class="advice-item-title">${icon ? `<img src="${escapeHtml(icon)}" alt="">` : ''}<span>${escapeHtml(name)}</span></span>`;
 }
 
 function ratesCacheKey(target) {
@@ -3615,7 +3875,12 @@ function switchMainView(view) {
   if (state.mainView === 'lots') renderSellerLots();
   if (state.mainView === 'cabinet') renderCabinet();
   if (state.mainView === 'admin') renderAdminPanel();
-  if (state.mainView === 'ai') renderAiPanel();
+  if (state.mainView === 'ai') {
+    renderAiPanel();
+    if (accountCanUseAi() && !state.aiHistory.loaded && !state.aiHistory.isLoading) {
+      loadAiHistory().catch(() => {});
+    }
+  }
   renderCategorySidebar();
   renderMainViewHeader();
   if (window.location.pathname === '/') {
@@ -3831,12 +4096,49 @@ function renderMarketSignals() {
     <p class="text-secondary market-signal-hint">${t('marketSignalsHint')}</p>
     ${renderMarketHealthSection(rows)}
     ${renderDealCandidateSection(dealCandidates(rows))}
+    ${renderRecipeSignalSection()}
     ${renderHistoryTrendSection()}
     <div class="market-signal-board">
       ${renderMarketSignalGroup(t('marketDrops'), drops, 'drop', t('noMarketDrops'))}
       ${renderMarketSignalGroup(t('marketRises'), rises, 'rise', t('noMarketRises'))}
       ${renderMarketSignalGroup(t('marketLowLiquidity'), lowLiquidity, 'risk', t('noMarketLowLiquidity'))}
     </div>
+  `;
+}
+
+function renderRecipeSignalSection() {
+  const recipes = (state.rates[state.selectedCategory] || {}).recipes || {};
+  const opportunities = recipes.opportunities || [];
+  if (!opportunities.length && !recipes.known_recipes) return '';
+  return `
+    <section class="recipe-signal-section">
+      <h3>${t('recipeSignals')}</h3>
+      ${opportunities.length
+        ? `<div class="recipe-signal-list">${opportunities.slice(0, 8).map(renderRecipeSignal).join('')}</div>`
+        : `<p class="text-secondary">${t('noRecipeSignals')}</p>`}
+    </section>
+  `;
+}
+
+function renderRecipeSignal(item) {
+  const severity = item.severity || 'watch';
+  const rawSourceName = state.lang === 'ru' ? item.source_name_ru : item.source_name_en;
+  const rawResultName = state.lang === 'ru' ? item.result_name_ru : item.result_name_en;
+  const sourceName = adviceEntryName(item.source, rawSourceName);
+  const resultName = adviceEntryName(item.result, rawResultName);
+  return `
+    <article class="advice-card ${severity}">
+      <div class="advice-card-layout">
+        <div class="advice-card-content">
+          <div class="advice-title-row"><span class="advice-badge">${t('recipeSignal')}</span><strong>${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)}</strong></div>
+          <p>${item.input_count} × ${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)} · ${t('profit')}: ${formatAmount(item.profit)} ${currencyLabel(item.target)} (${formatChange(Number(item.margin || 0) * 100)})</p>
+          <div class="deal-meta">
+            <span>${t('executionQuality')}: ${escapeHtml(item.execution?.quality || '-')}</span>
+            <span>${t('minVolume')}: ${formatAmount(item.execution?.volume || 0)}</span>
+          </div>
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -3847,11 +4149,21 @@ function renderMarketHealthSection(rows) {
   const medium = rows.filter(item => liquidityKind(item.volume) === 'medium').length;
   const low = rows.filter(item => item.volume > 0 && liquidityKind(item.volume) === 'low').length;
   const strong = rows.filter(item => Math.abs(item.change) >= MARKET_SIGNAL_STRONG_CHANGE).length;
+  const executable = rows.filter(item => item.execution?.executable).length;
+  const risky = rows.filter(item => (item.execution?.risk_flags || []).length).length;
   return `
     <section class="market-health-grid">
       <div>
         <span class="summary-label">${t('marketCoverage')}</span>
         <strong>${formatAmount(priced)} / ${formatAmount(total)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('executableSignals')}</span>
+        <strong>${formatAmount(executable)}</strong>
+      </div>
+      <div>
+        <span class="summary-label">${t('riskyRows')}</span>
+        <strong>${formatAmount(risky)}</strong>
       </div>
       <div>
         <span class="summary-label">${t('liquidityHigh')}</span>
@@ -4081,8 +4393,10 @@ function renderAdviceList(list, advice, emptyText) {
     const severity = item.severity || item.kind || 'watch';
     card.className = `advice-card ${severity}`;
     const title = state.lang === 'ru' ? item.title_ru : item.title_en;
-    const sourceName = state.lang === 'ru' ? item.source_name_ru : item.source_name_en;
-    const resultName = state.lang === 'ru' ? item.result_name_ru : item.result_name_en;
+    const rawSourceName = state.lang === 'ru' ? item.source_name_ru : item.source_name_en;
+    const rawResultName = state.lang === 'ru' ? item.result_name_ru : item.result_name_en;
+    const sourceName = adviceEntryName(item.source, rawSourceName);
+    const resultName = adviceEntryName(item.result, rawResultName);
     const message = adviceMessage(item, sourceName, resultName);
     const titleMarkup = adviceTitleMarkup(item, sourceName, resultName);
     const basis = state.lang === 'ru' ? item.basis_ru : item.basis_en;
@@ -4101,11 +4415,11 @@ function adviceTitleMarkup(item, sourceName, resultName) {
   if (sourceName && resultName) {
     return `
       <span class="advice-path">
-        ${entryIcon(sourceEntry) ? `<img src="${entryIcon(sourceEntry)}" alt="">` : ''}
-        <span>${sourceName}</span>
+        ${entryIcon(sourceEntry) ? `<img src="${escapeHtml(entryIcon(sourceEntry))}" alt="">` : ''}
+        <span>${escapeHtml(sourceName)}</span>
         <span class="advice-arrow">→</span>
-        ${entryIcon(resultEntry) ? `<img src="${entryIcon(resultEntry)}" alt="">` : ''}
-        <span>${resultName}</span>
+        ${entryIcon(resultEntry) ? `<img src="${escapeHtml(entryIcon(resultEntry))}" alt="">` : ''}
+        <span>${escapeHtml(resultName)}</span>
       </span>
     `;
   }
@@ -4113,6 +4427,10 @@ function adviceTitleMarkup(item, sourceName, resultName) {
 }
 
 function emotionRiskText(item) {
+  if (item.execution?.risk_flags?.length) {
+    const flags = item.execution.risk_flags.slice(0, 3).join(', ');
+    return state.lang === 'ru' ? `Исполнимость: ${item.execution.quality}; риски: ${flags}.` : `Execution: ${item.execution.quality}; risks: ${flags}.`;
+  }
   if (state.lang !== 'ru') {
     if (item.severity === 'signal') return 'Volume is acceptable and margin is meaningful.';
     if (item.low_volume) return 'Low volume: check the order book manually before trading.';
@@ -4160,23 +4478,44 @@ function renderCrossDeals() {
     return;
   }
   if (!state.crossDeals.length) {
-    list.innerHTML = `<p class="text-secondary">${t('noCrossDeals')}</p>`;
+    const meta = state.crossDealsMeta || {};
+    const errors = Array.isArray(meta.errors) && meta.errors.length
+      ? `<p class="text-secondary">${t('cycleErrors')}: ${formatAmount(meta.errors.length)}</p>`
+      : '';
+    list.innerHTML = `<p class="text-secondary">${t('noCrossDeals')}</p>${errors}`;
     return;
   }
-  if (!state.crossDeals.some(deal => deal.profitable)) {
-    list.innerHTML = `<p class="text-secondary">${t('crossWatchHint')}</p>`;
+  if (state.crossDealsMeta) {
+    const meta = state.crossDealsMeta;
+    list.innerHTML = `
+      <p class="text-secondary">
+        ${t('currencyCycleBasis')}: ${formatAmount(meta.edge_count || 0)} / ${formatAmount(meta.pair_count || 0)} ${t('scannedPairs')},
+        ${t('afterBuffer')}: ${formatAmount((meta.fee_pct || 0) * 100)}%
+      </p>
+    `;
   }
-  state.crossDeals.forEach(deal => {
+  state.crossDeals.forEach(cycle => {
     const card = document.createElement('article');
-    card.className = `advice-card ${deal.severity}`;
-    const badge = deal.severity === 'signal' ? t('signalLabel') : deal.severity === 'weak' ? t('weakSignalLabel') : t('watchLabel');
-    const entry = findAnyEntry(deal.id);
-    const name = entry ? entryName(entry) : deal.name;
+    card.className = `advice-card ${cycle.severity || 'weak'}`;
+    const badge = cycle.severity === 'signal' ? t('signalLabel') : t('weakSignalLabel');
+    const route = (cycle.route || []).map(currencyMarkup).join('<span class="advice-arrow">→</span>');
+    const stepRows = (cycle.steps || []).map((step, index) => `
+      <div class="chain-step">
+        <strong>${t('step')} ${index + 1}</strong>
+        <span>${currencyMarkup(step.from)} → ${currencyMarkup(step.to)} · ${t('exchangeRate')}: ${formatAmount(step.effective_rate || step.rate)}</span>
+        <small>${t('volume')}: ${formatAmount(step.available_from || 0)} ${currencyLabel(step.from)} · ${t('offers')}: ${formatAmount(step.offer_count || 0)}</small>
+      </div>
+    `).join('');
     renderAdviceCard(card, `
-      <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(name, entryIcon(entry))}</strong></div>
-      <p>${t('buyFor')} ${formatAmount(deal.buyValue)} ${currencyLabel(deal.buyTarget)} ${state.lang === 'ru' ? '→' : '->'} ${t('sellFor')} ${formatAmount(deal.sellValue)} ${currencyLabel(deal.sellTarget)}</p>
-      <div class="deal-meta"><span>${t('spread')}: ${formatAmount(deal.profit)} ${currencyLabel(deal.baseTarget)} (${formatChange(deal.margin * 100)})</span><span>${t('demandVolume')}: ${formatAmount(deal.volume)}</span></div>
-    `, miniSignalChart(deal.sparkline || [], t('priceChartBasis'), deal.sellValue));
+      <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong class="advice-path">${route}</strong></div>
+      <div class="deal-meta">
+        <span>${t('start')}: ${formatAmount(cycle.start_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
+        <span>${t('finish')}: ${formatAmount(cycle.finish_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
+        <span>${t('profit')}: ${formatAmount(cycle.profit)} ${currencyLabel(cycle.route?.[0] || selectedTarget())} (${formatChange(cycle.margin * 100)})</span>
+        <span>${t('minVolume')}: ${formatAmount(cycle.min_volume || 0)}</span>
+      </div>
+      <div class="chain-steps">${stepRows}</div>
+    `);
     list.appendChild(card);
   });
 }
@@ -4210,11 +4549,14 @@ function inferConversionFactor(baseData, otherData) {
 function crossDealsKey() {
   const league = byId('live-league')?.value || '';
   const status = byId('live-status')?.value || '';
-  return `${league}|${state.selectedCategory}|${selectedTarget()}|${status}`;
+  const maxSteps = Math.max(2, Number(byId('chain-max-steps')?.value || 5));
+  return `${league}|currency-cycles|${selectedTarget()}|${status}|${maxSteps}|${availableTargetIds().join(',')}`;
 }
 
 function multiTargetDealsKey() {
-  return `${crossDealsKey()}|${availableTargetIds().join(',')}`;
+  const league = byId('live-league')?.value || '';
+  const status = byId('live-status')?.value || '';
+  return `${league}|${state.selectedCategory}|${selectedTarget()}|${status}|${availableTargetIds().join(',')}`;
 }
 
 function datasetFactors(datasets, baseTarget) {
@@ -4494,6 +4836,7 @@ async function loadCrossCurrencyDeals() {
   const targets = availableTargetIds();
   if (targets.length < 2) {
     state.crossDeals = [];
+    state.crossDealsMeta = null;
     state.crossDealsKey = key;
     renderCrossDeals();
     return;
@@ -4501,14 +4844,26 @@ async function loadCrossCurrencyDeals() {
   state.isLoadingCrossDeals = true;
   renderCrossDeals();
   try {
-    const datasets = new Map();
-    for (const target of targets) {
-      datasets.set(target, await ensureRatesForTarget(target));
-    }
-    state.crossDeals = buildCrossCurrencyDeals(datasets, selectedTarget());
+    const params = new URLSearchParams({
+      league: byId('live-league')?.value || '',
+      base: selectedTarget(),
+      targets: targets.join(','),
+      status: 'online',
+      max_steps: String(Math.max(2, Number(byId('chain-max-steps')?.value || 5))),
+      min_margin: '0.001',
+      fee_pct: '0.003',
+      min_volume: '1',
+      limit: '30',
+    });
+    const response = await fetch(`/api/trade/currency-cycles?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    state.crossDeals = data.cycles || [];
+    state.crossDealsMeta = data;
     state.crossDealsKey = key;
   } catch {
     state.crossDeals = [];
+    state.crossDealsMeta = null;
     state.crossDealsKey = key;
   } finally {
     state.isLoadingCrossDeals = false;
@@ -4712,7 +5067,10 @@ async function initLiveTrade() {
     });
     byId('market-search').addEventListener('input', renderMarket);
     byId('search-lots')?.addEventListener('click', searchSellerLots);
+    byId('parse-item-text')?.addEventListener('click', parsePastedItem);
+    byId('price-item-text')?.addEventListener('click', pricePastedItem);
     byId('run-ai-analysis')?.addEventListener('click', runAiAnalysis);
+    byId('load-ai-history')?.addEventListener('click', loadAiHistory);
     byId('run-currency-analysis')?.addEventListener('click', runCurrencyAnalysis);
     byId('run-ai-currency-analysis')?.addEventListener('click', runAiCurrencyAnalysis);
     byId('currency-analysis-id')?.addEventListener('change', () => {
@@ -4755,7 +5113,10 @@ async function initLiveTrade() {
     });
     byId('chain-max-steps')?.addEventListener('change', () => {
       renderOperationSignals();
-      if (state.activeAdviceTab === 'active') {
+      if (state.activeAdviceTab === 'cross') {
+        state.crossDealsKey = '';
+        loadCrossCurrencyDeals();
+      } else if (state.activeAdviceTab === 'active') {
         state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), Number(byId('chain-max-steps')?.value || 5));
         renderActiveTrades();
       } else {
@@ -4772,6 +5133,7 @@ async function initLiveTrade() {
         state.rates = {};
         state.detailRates = {};
         state.crossDeals = [];
+        state.crossDealsMeta = null;
         state.crossDealsKey = '';
         state.activeTrades = [];
         state.marketChains = [];

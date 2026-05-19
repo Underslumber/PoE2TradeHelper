@@ -119,10 +119,15 @@ class TradeJournalEntry(Base):
     entry_at = Column(String, nullable=False)
     benchmark_currency = Column(String, default="divine")
     entry_benchmark_price = Column(Float)
+    fee_amount = Column(Float)
+    fee_currency = Column(String)
+    strategy_tag = Column(String)
+    entry_reason = Column(Text)
     exit_price = Column(Float)
     exit_currency = Column(String)
     exit_at = Column(String)
     exit_benchmark_price = Column(Float)
+    exit_reason = Column(Text)
     status = Column(String, nullable=False, default="open")
     notes = Column(Text)
     created_at = Column(String, nullable=False)
@@ -167,6 +172,8 @@ class MarketHistory(Base):
     errors_json = Column(Text)
     timestamp = Column(Float, nullable=False, index=True)
     created_at = Column(String, nullable=False)
+    granularity = Column(String, nullable=False, default="raw", index=True)
+    samples = Column(Integer, nullable=False, default=1)
 
 
 class FunpayRubSnapshot(Base):

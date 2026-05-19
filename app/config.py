@@ -38,6 +38,19 @@ FUNPAY_RUB_SNAPSHOT_ENABLED: Final = os.environ.get("FUNPAY_RUB_SNAPSHOT_ENABLED
     "off",
 }
 FUNPAY_RUB_SNAPSHOT_TARGET: Final = os.environ.get("FUNPAY_RUB_SNAPSHOT_TARGET", "divine")
+NOTIFICATION_WORKER_ENABLED: Final = os.environ.get("NOTIFICATION_WORKER_ENABLED", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+MARKET_HISTORY_COMPACTION_ENABLED: Final = os.environ.get("MARKET_HISTORY_COMPACTION_ENABLED", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+MARKET_HISTORY_COMPACTION_INTERVAL_MINUTES: Final = float(os.environ.get("MARKET_HISTORY_COMPACTION_INTERVAL_MINUTES", "360"))
 
 for path in [DATA_DIR, STORAGE_DIR, RAW_DIR / "xhr", RAW_DIR / "html", RAW_DIR / "dom", ICONS_DIR]:
     path.mkdir(parents=True, exist_ok=True)

@@ -368,6 +368,50 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
     assert [lot["price_target"] for lot in relaxed] == [1.0, 2.0]
 
 
+def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():
+    parsed = {
+        "display_name": "Vengeance Veil Waxed Jacket",
+        "name": "Vengeance Veil",
+        "type_line": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 72,
+        "mods": ["+55 to maximum Life", "+20% to Fire Resistance"],
+    }
+    target = trade2._parsed_item_lot(parsed)
+    lots = [
+        {
+            "seller": "Other#1",
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 74,
+            "explicit_mods": ["+60 to maximum Life", "+22% to Fire Resistance"],
+            "stat_mods": [
+                {"id": "explicit.stat_life", "type": "explicit"},
+                {"id": "explicit.stat_fire_res", "type": "explicit"},
+            ],
+            "price_target": 10.0,
+        },
+        {
+            "seller": "Other#2",
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 74,
+            "explicit_mods": ["+20 to Dexterity", "+22% to Fire Resistance"],
+            "stat_mods": [
+                {"id": "explicit.stat_dex", "type": "explicit"},
+                {"id": "explicit.stat_fire_res", "type": "explicit"},
+            ],
+            "price_target": 15.0,
+        },
+    ]
+
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0)
+    relaxed = trade2._filter_comparable_lots(target, lots, looseness=1)
+
+    assert [lot["price_target"] for lot in strict] == [10.0]
+    assert [lot["price_target"] for lot in relaxed] == [10.0, 15.0]
+
+
 def test_seller_lots_snapshot_uses_cache(monkeypatch):
     calls = {"search": 0, "fetch": 0}
 
@@ -545,6 +589,29 @@ def test_build_trade_advice_finds_best_full_emotion_path():
     assert advice[0]["profit"] == 11
     assert advice[0]["result_sparkline"] == [10, 15, 20]
     assert "9 x" in advice[0]["message_ru"]
+
+
+def test_build_trade_advice_uses_ids_when_emotion_names_are_missing():
+    rows = [
+        {
+            "id": "diluted-liquid-ire",
+            "median": 1,
+            "volume": 30,
+        },
+        {
+            "id": "diluted-liquid-guilt",
+            "median": 4,
+            "volume": 30,
+        },
+    ]
+
+    advice = build_trade_advice("Delirium", rows, "divine")
+
+    assert advice[0]["source_name_ru"] == "diluted-liquid-ire"
+    assert advice[0]["result_name_ru"] == "diluted-liquid-guilt"
+    assert "None" not in advice[0]["message_ru"]
+    assert "None" not in advice[0]["message_en"]
+    assert "diluted-liquid-ire -> diluted-liquid-guilt" in advice[0]["message_ru"]
 
 
 def test_read_latest_rates_returns_newest_matching_snapshot(tmp_path, monkeypatch):

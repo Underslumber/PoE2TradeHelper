@@ -238,6 +238,8 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
                 errors_json=errors_json,
                 timestamp=float(created_ts),
                 created_at=created_at,
+                granularity="raw",
+                samples=1,
             )
         )
     if not records:

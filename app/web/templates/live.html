@@ -97,6 +97,21 @@
       <div id="lot-results" class="lot-results">
         <p class="text-secondary" data-i18n="sellerLotsEmpty">Введите имя продавца и запустите поиск.</p>
       </div>
+      <section class="item-parser-panel">
+        <div class="cabinet-section-head">
+          <div>
+            <h3 data-i18n="itemParserTitle">Оценка текста предмета</h3>
+            <p class="panel-hint" data-i18n="itemParserHint">Вставьте скопированный из игры текст предмета: парсер выделит базу, редкость, уровень и аффиксы для будущей оценки похожими лотами.</p>
+          </div>
+        </div>
+        <textarea id="item-parser-text" class="form-control item-parser-text" rows="8" data-i18n-placeholder="itemParserPlaceholder" placeholder="Rarity: Rare&#10;..."></textarea>
+        <div class="action-row">
+          <button id="parse-item-text" class="btn btn-outline-light" type="button" data-i18n="itemParserAction">Разобрать предмет</button>
+          <button id="price-item-text" class="btn btn-primary" type="button" data-i18n="itemPriceAction">Оценить рынок</button>
+          <span id="item-parser-status" class="muted-status"></span>
+        </div>
+        <div id="item-parser-result" class="item-parser-result"></div>
+      </section>
     </section>
 
     <section id="cabinet-panel" class="cabinet-panel view-hidden" data-main-view="cabinet">
@@ -264,8 +279,13 @@
           </section>
         </div>
         <section class="cabinet-list-panel closed-trades-panel">
-          <h3 data-i18n="closedTradesTitle">Закрытые сделки</h3>
-          <p class="panel-hint" data-i18n="closedTradesHint">После выхода сохраняется итоговая и реальная маржа.</p>
+          <div class="cabinet-section-head">
+            <div>
+              <h3 data-i18n="closedTradesTitle">Закрытые сделки</h3>
+              <p class="panel-hint" data-i18n="closedTradesHint">После выхода сохраняется итоговая и реальная маржа.</p>
+            </div>
+            <a class="btn btn-outline-light btn-sm" href="/api/account/trades/export.csv" data-i18n="exportTradesCsv">Экспорт CSV</a>
+          </div>
           <div id="closed-trades-list" class="cabinet-list trade-board"></div>
         </section>
         <section class="notification-panel">
@@ -379,6 +399,16 @@
       <div id="ai-analysis-result" class="ai-analysis-result">
         <p class="text-secondary" data-i18n="aiAnalysisEmpty">Выберите категорию и запустите анализ. Codex не покупает предметы автоматически и не должен выдумывать отсутствующие данные.</p>
       </div>
+      <section class="ai-history-panel">
+        <div class="cabinet-section-head">
+          <div>
+            <h3 data-i18n="aiHistoryTitle">История ИИ-анализов</h3>
+            <p class="panel-hint" data-i18n="aiHistoryHint">Последние сохраненные аудиты можно открыть без повторного запуска Codex.</p>
+          </div>
+          <button id="load-ai-history" class="btn btn-outline-light btn-sm" type="button" data-i18n="aiHistoryRefresh">Обновить историю</button>
+        </div>
+        <div id="ai-history-list" class="ai-history-list"></div>
+      </section>
       <section class="currency-analysis-panel">
         <div class="cabinet-section-head">
           <div>

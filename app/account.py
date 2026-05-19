@@ -111,6 +111,8 @@ def calculate_trade_pnl(
     entry_currency: str | None,
     exit_price: float | None,
     exit_currency: str | None,
+    fee_amount: float | None = None,
+    fee_currency: str | None = None,
 ) -> dict:
     if (
         quantity is None
@@ -126,13 +128,18 @@ def calculate_trade_pnl(
             "pnl_percent": None,
             "pnl_currency": exit_currency or entry_currency,
         }
-    amount = (exit_price - entry_price) * quantity
+    gross_amount = (exit_price - entry_price) * quantity
+    fee = fee_amount if fee_currency == exit_currency and fee_amount is not None else 0
+    amount = gross_amount - fee
     percent = ((exit_price - entry_price) / entry_price * 100) if entry_price else None
+    net_percent = (amount / (entry_price * quantity) * 100) if entry_price and quantity else percent
     return {
         "pnl_available": True,
         "pnl_amount": amount,
-        "pnl_percent": percent,
+        "pnl_percent": net_percent,
         "pnl_currency": exit_currency,
+        "gross_pnl_amount": gross_amount,
+        "fee_applied": fee,
     }
 
 

@@ -21,14 +21,19 @@ from app.config import (
     MARKET_SNAPSHOT_TARGET,
     FUNPAY_RUB_SNAPSHOT_ENABLED,
     FUNPAY_RUB_SNAPSHOT_TARGET,
+    MARKET_HISTORY_COMPACTION_ENABLED,
+    MARKET_HISTORY_COMPACTION_INTERVAL_MINUTES,
+    NOTIFICATION_WORKER_ENABLED,
 )
 from app.funpay_market import collect_funpay_rub_market_snapshot
+from app.history_compaction import compact_market_history
 from app.market_snapshots import (
     collect_market_snapshots,
     market_snapshot_interval_seconds,
     parse_league_start,
     split_csv,
 )
+from app.notification_worker import process_due_telegram_notifications
 from app.trade2 import get_trade_leagues
 
 KNOWN_LEAGUE_STARTS = {
@@ -60,6 +65,9 @@ class MarketSnapshotServiceSettings:
     pause_seconds: float = MARKET_SNAPSHOT_PAUSE_SECONDS
     funpay_rub_enabled: bool = FUNPAY_RUB_SNAPSHOT_ENABLED
     funpay_rub_target: str = FUNPAY_RUB_SNAPSHOT_TARGET
+    notification_worker_enabled: bool = NOTIFICATION_WORKER_ENABLED
+    history_compaction_enabled: bool = MARKET_HISTORY_COMPACTION_ENABLED
+    history_compaction_interval_minutes: float = MARKET_HISTORY_COMPACTION_INTERVAL_MINUTES
 
 
 def _league_name(league: dict[str, Any]) -> str:
@@ -118,6 +126,12 @@ class MarketSnapshotService:
         self.last_funpay_rub_collection_ts: float | None = None
         self.last_funpay_rub_summary: dict[str, Any] | None = None
         self.last_funpay_rub_error: str = ""
+        self.last_notification_check_ts: float | None = None
+        self.last_notification_summary: dict[str, Any] | None = None
+        self.last_notification_error: str = ""
+        self.last_compaction_ts: float | None = None
+        self.last_compaction_summary: dict[str, Any] | None = None
+        self.last_compaction_error: str = ""
         self.running = False
 
     async def start(self) -> None:
@@ -162,6 +176,18 @@ class MarketSnapshotService:
                 "last_summary": self.last_funpay_rub_summary,
                 "last_error": self.last_funpay_rub_error,
             },
+            "notifications": {
+                "enabled": self.settings.notification_worker_enabled,
+                "last_check_ts": self.last_notification_check_ts,
+                "last_summary": self.last_notification_summary,
+                "last_error": self.last_notification_error,
+            },
+            "history_compaction": {
+                "enabled": self.settings.history_compaction_enabled,
+                "last_compaction_ts": self.last_compaction_ts,
+                "last_summary": self.last_compaction_summary,
+                "last_error": self.last_compaction_error,
+            },
         }
 
     async def _run(self) -> None:
@@ -199,6 +225,13 @@ class MarketSnapshotService:
 
                 if summary is not None and rub_summary is not None:
                     summary["funpay_rub"] = rub_summary
+                if summary is not None:
+                    notifications_summary = await self._process_notifications()
+                    if notifications_summary is not None:
+                        summary["notifications"] = notifications_summary
+                    compaction_summary = self._compact_history_if_due()
+                    if compaction_summary is not None:
+                        summary["history_compaction"] = compaction_summary
 
                 interval_seconds = market_snapshot_interval_seconds(
                     now_ts=time.time(),
@@ -287,6 +320,38 @@ class MarketSnapshotService:
             raise
         except Exception as exc:
             self.last_funpay_rub_error = str(exc)
+            return None
+
+    async def _process_notifications(self) -> dict[str, Any] | None:
+        if not self.settings.notification_worker_enabled:
+            return None
+        try:
+            summary = await process_due_telegram_notifications(league=self.current_league)
+            self.last_notification_summary = summary
+            self.last_notification_check_ts = time.time()
+            self.last_notification_error = ""
+            return summary
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_notification_error = str(exc)
+            return None
+
+    def _compact_history_if_due(self) -> dict[str, Any] | None:
+        if not self.settings.history_compaction_enabled:
+            return None
+        now = time.time()
+        interval = max(60.0, self.settings.history_compaction_interval_minutes * 60)
+        if self.last_compaction_ts is not None and now - self.last_compaction_ts < interval:
+            return None
+        try:
+            summary = compact_market_history(now_ts=now)
+            self.last_compaction_summary = summary
+            self.last_compaction_ts = now
+            self.last_compaction_error = ""
+            return summary
+        except Exception as exc:
+            self.last_compaction_error = str(exc)
             return None
 
 

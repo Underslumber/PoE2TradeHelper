@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.benchmark import DEFAULT_BASKET_ID, DEFAULT_BASKET_LABEL_RU
+from app.profitability import execution_quality
 from app.trade2 import build_trade_advice, get_category_rates, read_latest_rates
 
 CONTEXT_SCHEMA_VERSION = "poe2-market-ai-context/v1"
@@ -84,6 +86,7 @@ def market_row_payload(row: dict[str, Any], snapshot: dict[str, Any], snapshot_i
         "snapshot_ts": snapshot_iso,
         "listing_count": row.get("offers"),
         "risk_flags": risk_flags_for_row(row),
+        "execution": execution_quality(row, snapshot_ts=snapshot.get("created_ts")),
     }
 
 
@@ -196,8 +199,11 @@ def build_ai_market_context(
             "target_currency": snapshot.get("target") or target,
             "available": ["chaos", "exalted", "divine"],
             "basket": {
-                "enabled": False,
-                "notes": "Composite benchmark is not implemented yet.",
+                "enabled": True,
+                "id": DEFAULT_BASKET_ID,
+                "label_ru": DEFAULT_BASKET_LABEL_RU,
+                "components": ["exalted", "divine", "chaos"],
+                "notes": "Composite benchmark is a local liquidity basket built from saved Currency snapshots.",
             },
         },
         "market_rows": [market_row_payload(row, snapshot, snapshot_iso) for row in rows],

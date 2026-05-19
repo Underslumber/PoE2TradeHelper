@@ -27,6 +27,11 @@ TRADE_JOURNAL_COLUMNS = {
     "benchmark_currency": "VARCHAR",
     "entry_benchmark_price": "FLOAT",
     "exit_benchmark_price": "FLOAT",
+    "fee_amount": "FLOAT",
+    "fee_currency": "VARCHAR",
+    "strategy_tag": "VARCHAR",
+    "entry_reason": "TEXT",
+    "exit_reason": "TEXT",
 }
 
 MARKET_HISTORY_COLUMNS = {
@@ -39,6 +44,8 @@ MARKET_HISTORY_COLUMNS = {
     "max_volume_rate": "FLOAT",
     "query_ids_json": "TEXT",
     "errors_json": "TEXT",
+    "granularity": "VARCHAR DEFAULT 'raw'",
+    "samples": "INTEGER DEFAULT 1",
 }
 
 
@@ -90,6 +97,8 @@ def _migrate_market_history_table() -> None:
         return
     with engine.begin() as conn:
         conn.exec_driver_sql("UPDATE market_history SET status = 'any' WHERE status IS NULL OR status = ''")
+        conn.exec_driver_sql("UPDATE market_history SET granularity = 'raw' WHERE granularity IS NULL OR granularity = ''")
+        conn.exec_driver_sql("UPDATE market_history SET samples = 1 WHERE samples IS NULL OR samples < 1")
 
 
 def _ensure_bootstrap_admin() -> None:

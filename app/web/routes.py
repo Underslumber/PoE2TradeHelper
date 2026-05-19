@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import os
 import uuid
+from io import StringIO
 from time import perf_counter
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
@@ -33,7 +35,10 @@ from app.account import (
     verify_password,
 )
 from app.ai_context import load_ai_market_context
+from app.ai_history import list_ai_analyses
+from app.benchmark import DEFAULT_BASKET_ID, benchmark_price_at, is_basket_benchmark, latest_benchmark_price, basket_price_from_snapshot
 from app.codex_market_analyzer import run_codex_market_analysis
+from app.currency_cycles import load_currency_cycles
 from app.currency_analyzer import load_currency_trend_context
 from app.db.models import (
     AIUsageEvent,
@@ -49,6 +54,8 @@ from app.db.session import get_session
 from app.export.export_csv import export_rows_csv
 from app.export.export_jsonl import export_rows_jsonl
 from app.funpay_market import load_funpay_rub_context
+from app.history_compaction import compact_market_history
+from app.item_parser import parse_item_text
 from app.market_service import market_snapshot_service
 from app.notifications import (
     normalize_event_type,
@@ -57,10 +64,13 @@ from app.notifications import (
     send_test_notification,
     telegram_is_configured,
 )
+from app.profitability import build_profitability_snapshot
+from app.recipes import analyze_recipes
 from app.trade2 import (
     build_category_meta,
     get_category_rates,
     get_exchange_offers,
+    get_pasted_item_market,
     get_seller_lot_market,
     get_seller_lots_analysis,
     get_trade_leagues,
@@ -616,6 +626,8 @@ def _benchmark_price(
         return None
     if target_currency == benchmark_currency:
         return 1.0
+    if is_basket_benchmark(benchmark_currency):
+        return latest_benchmark_price(league, target_currency, benchmark_currency, cache)
     snapshot = _latest_rates_snapshot(league, "Currency", target_currency, cache)
     if not snapshot:
         return None
@@ -646,6 +658,8 @@ def _benchmark_price_at(
         return None
     if target_currency == benchmark_currency:
         return 1.0
+    if is_basket_benchmark(benchmark_currency):
+        return benchmark_price_at(league, target_currency, benchmark_currency, timestamp, cache)
     history_key = ("benchmark_history", league, target_currency)
     if cache is not None and history_key in cache:
         snapshots = cache[history_key]
@@ -714,6 +728,8 @@ def _trade_payload(trade: TradeJournalEntry, cache: dict | None = None) -> dict:
         entry_currency=trade.entry_currency,
         exit_price=trade.exit_price,
         exit_currency=trade.exit_currency,
+        fee_amount=trade.fee_amount,
+        fee_currency=trade.fee_currency,
     )
     benchmark_currency = trade.benchmark_currency or "divine"
     market = _latest_item_market(trade.league, trade.category, trade.entry_currency, trade.item_id, cache)
@@ -738,6 +754,8 @@ def _trade_payload(trade: TradeJournalEntry, cache: dict | None = None) -> dict:
         entry_currency=trade.entry_currency,
         exit_price=current_price,
         exit_currency=trade.entry_currency if current_price is not None else None,
+        fee_amount=trade.fee_amount,
+        fee_currency=trade.fee_currency,
     )
     current_real_pnl = calculate_benchmark_adjusted_pnl(
         quantity=trade.quantity,
@@ -774,10 +792,15 @@ def _trade_payload(trade: TradeJournalEntry, cache: dict | None = None) -> dict:
         "entry_at": trade.entry_at,
         "benchmark_currency": benchmark_currency,
         "entry_benchmark_price": entry_benchmark_price,
+        "fee_amount": trade.fee_amount,
+        "fee_currency": trade.fee_currency,
+        "strategy_tag": trade.strategy_tag,
+        "entry_reason": trade.entry_reason,
         "exit_price": trade.exit_price,
         "exit_currency": trade.exit_currency,
         "exit_at": trade.exit_at,
         "exit_benchmark_price": exit_benchmark_price,
+        "exit_reason": trade.exit_reason,
         "status": trade.status,
         "notes": trade.notes,
         "market": market,
@@ -1092,6 +1115,57 @@ def api_account_trades(request: Request, db: Session = Depends(get_db)):
     return {"trades": [_trade_payload(trade, market_cache) for trade in trades]}
 
 
+@router.get("/api/account/trades/export.csv")
+def api_account_trades_export(request: Request, db: Session = Depends(get_db)):
+    user = require_user(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    trades = db.scalars(
+        select(TradeJournalEntry)
+        .where(TradeJournalEntry.user_id == user.id)
+        .order_by(TradeJournalEntry.updated_at.desc())
+    ).all()
+    market_cache: dict = {}
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "id",
+            "status",
+            "league",
+            "category",
+            "item_id",
+            "item_name",
+            "quantity",
+            "entry_price",
+            "entry_currency",
+            "exit_price",
+            "exit_currency",
+            "fee_amount",
+            "fee_currency",
+            "pnl_amount",
+            "pnl_percent",
+            "real_pnl_percent",
+            "benchmark_currency",
+            "strategy_tag",
+            "entry_reason",
+            "exit_reason",
+            "notes",
+            "entry_at",
+            "exit_at",
+        ],
+    )
+    writer.writeheader()
+    for trade in trades:
+        payload = _trade_payload(trade, market_cache)
+        writer.writerow({key: payload.get(key) for key in writer.fieldnames})
+    return PlainTextResponse(
+        output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=poe2-trades.csv"},
+    )
+
+
 @router.post("/api/account/trades")
 def api_account_trade_create(
     request: Request,
@@ -1143,6 +1217,10 @@ def api_account_trade_create(
         entry_at=_text(payload, "entry_at") or now,
         benchmark_currency=benchmark_currency,
         entry_benchmark_price=entry_benchmark_price,
+        fee_amount=_float_value(payload, "fee_amount"),
+        fee_currency=_text(payload, "fee_currency") or entry_currency,
+        strategy_tag=_text(payload, "strategy_tag") or None,
+        entry_reason=_text(payload, "entry_reason") or None,
         status="open",
         notes=_text(payload, "notes") or None,
         created_at=now,
@@ -1183,6 +1261,14 @@ def api_account_trade_update(
         trade.benchmark_currency = _text(payload, "benchmark_currency") or trade.benchmark_currency or "divine"
     if "entry_benchmark_price" in payload:
         trade.entry_benchmark_price = 1.0 if trade.item_id == (trade.benchmark_currency or "divine") else _float_value(payload, "entry_benchmark_price")
+    if "fee_amount" in payload:
+        trade.fee_amount = _float_value(payload, "fee_amount")
+    if "fee_currency" in payload:
+        trade.fee_currency = _text(payload, "fee_currency") or trade.entry_currency
+    if "strategy_tag" in payload:
+        trade.strategy_tag = _text(payload, "strategy_tag") or None
+    if "entry_reason" in payload:
+        trade.entry_reason = _text(payload, "entry_reason") or None
     if "exit_price" in payload:
         exit_price = _float_value(payload, "exit_price")
         if exit_price is None or exit_price <= 0:
@@ -1199,6 +1285,7 @@ def api_account_trade_update(
                 trade.exit_currency,
                 trade.benchmark_currency or "divine",
             )
+        trade.exit_reason = _text(payload, "exit_reason") or trade.exit_reason
         trade.status = "closed"
     if "notes" in payload:
         trade.notes = _text(payload, "notes") or None
@@ -1466,6 +1553,113 @@ def api_trade_market_snapshot_service():
     return market_snapshot_service.status()
 
 
+@router.get("/api/trade/profitability")
+def api_trade_profitability(
+    league: str = Query(...),
+    category: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+):
+    snapshot = read_latest_rates(league=league, category=category, target=target, status=status)
+    if not snapshot:
+        return {"schema_version": "poe2-profitability/v1", "stored": False, "summary": {}, "executable_candidates": [], "risky_candidates": []}
+    payload = build_profitability_snapshot(snapshot)
+    payload["stored"] = True
+    return payload
+
+
+@router.get("/api/trade/recipes")
+def api_trade_recipes(
+    league: str = Query(...),
+    category: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+):
+    snapshot = read_latest_rates(league=league, category=category, target=target, status=status)
+    if not snapshot:
+        return {"schema_version": "poe2-recipe-analysis/v1", "stored": False, "opportunities": [], "missing": []}
+    payload = analyze_recipes(category, snapshot.get("rows") or [], snapshot.get("target") or target, snapshot_ts=snapshot.get("created_ts"))
+    payload["stored"] = True
+    payload["league"] = snapshot.get("league") or league
+    payload["created_ts"] = snapshot.get("created_ts")
+    return payload
+
+
+@router.get("/api/trade/benchmark")
+def api_trade_benchmark(
+    league: str = Query(...),
+    target: str = Query("exalted"),
+    benchmark: str = Query(DEFAULT_BASKET_ID),
+    status: str = Query("any", pattern="^(online|any)$"),
+):
+    if not is_basket_benchmark(benchmark):
+        return {"id": benchmark, "target": target, "value": 1.0 if benchmark == target else _benchmark_price(league, target, benchmark)}
+    snapshot = read_latest_rates(league=league, category="Currency", target=target, status=status)
+    return basket_price_from_snapshot(snapshot, target, benchmark)
+
+
+@router.get("/api/trade/currency-cycles")
+async def api_trade_currency_cycles(
+    league: str = Query(...),
+    base: str = Query("exalted"),
+    targets: str = Query("exalted,divine,chaos"),
+    status: str = Query("online", pattern="^(online|any)$"),
+    max_steps: Annotated[int, Query(ge=1, le=5)] = 4,
+    min_margin: Annotated[float, Query(ge=0, le=1)] = 0.001,
+    fee_pct: Annotated[float, Query(ge=0, le=0.2)] = 0.003,
+    min_volume: Annotated[float, Query(ge=0)] = 1.0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+):
+    target_ids = [item.strip() for item in targets.split(",") if item.strip()]
+    try:
+        return await load_currency_cycles(
+            league=league,
+            base=base,
+            targets=target_ids,
+            status=status,
+            max_steps=max_steps,
+            min_margin=min_margin,
+            fee_pct=fee_pct,
+            min_volume=min_volume,
+            limit=limit,
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
+
+
+@router.post("/api/trade/item-text/parse")
+def api_trade_item_text_parse(payload: dict = Body(...)):
+    return parse_item_text(_text(payload, "text"))
+
+
+@router.post("/api/trade/item-text/price")
+async def api_trade_item_text_price(payload: dict = Body(...)):
+    league = _text(payload, "league")
+    text = _text(payload, "text")
+    target = _text(payload, "target", "exalted") or "exalted"
+    status = _text(payload, "status", "any") or "any"
+    if status not in {"online", "any"}:
+        status = "any"
+    if not league:
+        return JSONResponse({"error": "league is required"}, status_code=400)
+    if not text:
+        return JSONResponse({"error": "item text is required"}, status_code=400)
+    try:
+        return await get_pasted_item_market(league=league, text=text, target=target, status=status)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "item market pricing timeout"}, status_code=504)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+@router.post("/api/trade/history/compact")
+def api_trade_history_compact(request: Request, db: Session = Depends(get_db)):
+    user = require_admin(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    return compact_market_history()
+
+
 @router.get("/api/trade/seller-lots")
 async def api_trade_seller_lots(
     league: str = Query(...),
@@ -1641,6 +1835,18 @@ async def api_ai_market_context(
         usage_event.duration_ms = int((perf_counter() - started) * 1000)
         db.commit()
         return trade_api_error(exc)
+
+
+@router.get("/api/ai/history")
+def api_ai_history(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    user = require_ai_access(request, db)
+    if isinstance(user, JSONResponse):
+        return user
+    return {"analyses": list_ai_analyses(limit=limit), "ai_quota": _ai_quota_payload(db)}
 
 
 @router.post("/api/ai/market-analysis")
