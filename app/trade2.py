@@ -21,7 +21,7 @@ import httpx
 from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, USER_AGENT
 from app.item_parser import parse_item_text
 from app.profitability import enrich_trade_advice, execution_quality
-from app.recipes import analyze_recipes
+from app.recipes import analyze_recipes, filter_dominated_emotion_paths
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
@@ -1594,8 +1594,9 @@ def build_trade_advice(
             if path_advice:
                 advice.append(path_advice)
     severity_rank = {"signal": 0, "weak": 1, "watch": 2}
-    sorted_advice = sorted(advice, key=lambda item: (severity_rank.get(item.get("severity"), 9), -item.get("profit", 0)))
-    return enrich_trade_advice(sorted_advice, rows, snapshot_ts=snapshot_ts)
+    enriched_advice = enrich_trade_advice(advice, rows, snapshot_ts=snapshot_ts)
+    filtered_advice = filter_dominated_emotion_paths(enriched_advice)
+    return sorted(filtered_advice, key=lambda item: (severity_rank.get(item.get("severity"), 9), -item.get("profit", 0)))
 
 
 def _build_emotion_path_advice(

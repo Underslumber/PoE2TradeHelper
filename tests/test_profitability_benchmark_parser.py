@@ -119,3 +119,24 @@ def test_recipe_analysis_finds_best_full_emotion_path():
     assert best["path_steps"] == 2
     assert best["input_count"] == 9
     assert best["profit"] == 11
+
+
+def test_recipe_analysis_hides_dominated_emotion_extension():
+    payload = analyze_recipes(
+        "Delirium",
+        [
+            {"id": "concentrated-liquid-fear", "text_ru": "Концентрированный жидкий страх", "median": 100, "volume": 200},
+            {"id": "concentrated-liquid-suffering", "text_ru": "Концентрированное жидкое страдание", "median": 950, "volume": 200},
+            {"id": "concentrated-liquid-isolation", "text_ru": "Концентрированное жидкое отчуждение", "median": 1200, "volume": 200},
+        ],
+        "exalted",
+        snapshot_ts=1,
+    )
+
+    source_results = [
+        item["result"]
+        for item in payload["opportunities"]
+        if item["source"] == "concentrated-liquid-fear"
+    ]
+
+    assert source_results == ["concentrated-liquid-suffering"]

@@ -545,7 +545,7 @@ def test_build_trade_advice_classifies_signal_and_watch():
 
     advice = build_trade_advice("Delirium", rows, "divine")
 
-    assert [item["severity"] for item in advice] == ["signal", "watch", "watch"]
+    assert [item["severity"] for item in advice] == ["signal", "watch"]
     assert advice[0]["source"] == "diluted-liquid-ire"
     assert advice[0]["result"] == "diluted-liquid-guilt"
     assert advice[0]["path_steps"] == 1
@@ -589,6 +589,37 @@ def test_build_trade_advice_finds_best_full_emotion_path():
     assert advice[0]["profit"] == 11
     assert advice[0]["result_sparkline"] == [10, 15, 20]
     assert "9 x" in advice[0]["message_ru"]
+
+
+def test_build_trade_advice_hides_dominated_emotion_extension():
+    rows = [
+        {
+            "id": "concentrated-liquid-fear",
+            "text": "Concentrated Liquid Fear",
+            "text_ru": "Концентрированный жидкий страх",
+            "median": 100,
+            "volume": 200,
+        },
+        {
+            "id": "concentrated-liquid-suffering",
+            "text": "Concentrated Liquid Suffering",
+            "text_ru": "Концентрированное жидкое страдание",
+            "median": 950,
+            "volume": 200,
+        },
+        {
+            "id": "concentrated-liquid-isolation",
+            "text": "Concentrated Liquid Isolation",
+            "text_ru": "Концентрированное жидкое отчуждение",
+            "median": 1200,
+            "volume": 200,
+        },
+    ]
+
+    advice = build_trade_advice("Delirium", rows, "divine")
+    source_results = [item["result"] for item in advice if item["source"] == "concentrated-liquid-fear"]
+
+    assert source_results == ["concentrated-liquid-suffering"]
 
 
 def test_build_trade_advice_uses_ids_when_emotion_names_are_missing():

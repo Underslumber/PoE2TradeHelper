@@ -25,6 +25,9 @@ SIMULACRUM_RECIPE = {
     "label_ru": "Осколки Симулякра -> Симулякр",
 }
 
+SEVERITY_RANK = {"signal": 0, "weak": 1, "watch": 2}
+EXECUTION_QUALITY_RANK = {"good": 0, "partial": 1, "poor": 2}
+
 
 def _emotion_path_recipes() -> list[dict[str, Any]]:
     recipes: list[dict[str, Any]] = []
@@ -48,6 +51,52 @@ KNOWN_STACK_RECIPES = {
     "Fragments": [SIMULACRUM_RECIPE],
     "Delirium": [SIMULACRUM_RECIPE, *_emotion_path_recipes()],
 }
+
+
+def _numeric_value(value: Any, default: float = 0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _signal_rank(item: dict[str, Any]) -> int:
+    return SEVERITY_RANK.get(str(item.get("severity") or "watch"), SEVERITY_RANK["watch"])
+
+
+def _execution_rank(item: dict[str, Any]) -> int:
+    execution = item.get("execution") or {}
+    return EXECUTION_QUALITY_RANK.get(str(execution.get("quality") or "partial"), EXECUTION_QUALITY_RANK["partial"])
+
+
+def _dominates_emotion_path(shorter: dict[str, Any], longer: dict[str, Any]) -> bool:
+    if shorter is longer:
+        return False
+    if shorter.get("kind") != "emotion_path" or longer.get("kind") != "emotion_path":
+        return False
+    if shorter.get("source") != longer.get("source"):
+        return False
+    shorter_steps = int(shorter.get("path_steps") or 0)
+    longer_steps = int(longer.get("path_steps") or 0)
+    if shorter_steps <= 0 or longer_steps <= 0 or shorter_steps >= longer_steps:
+        return False
+    if (number(shorter.get("profit")) or 0) <= 0:
+        return False
+    if _signal_rank(shorter) > _signal_rank(longer):
+        return False
+    if _execution_rank(shorter) > _execution_rank(longer):
+        return False
+    shorter_margin = _numeric_value(shorter.get("margin"))
+    longer_margin = _numeric_value(longer.get("margin"))
+    return shorter_margin >= longer_margin
+
+
+def filter_dominated_emotion_paths(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in items
+        if not any(_dominates_emotion_path(other, item) for other in items)
+    ]
 
 
 def _row_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -128,12 +177,13 @@ def analyze_recipes(category: str, rows: list[dict[str, Any]], target: str, snap
         if recipe.get("source") not in by_id or recipe.get("result") not in by_id
     ]
     priced_rows = [row for row in rows if number(row.get("median")) or number(row.get("best"))]
+    filtered_opportunities = filter_dominated_emotion_paths(opportunities)
     return {
         "schema_version": "poe2-recipe-analysis/v1",
         "category": category,
         "target": target,
         "known_recipes": len(recipes),
-        "opportunities": sorted(opportunities, key=lambda item: item.get("margin") or 0, reverse=True),
+        "opportunities": sorted(filtered_opportunities, key=lambda item: item.get("margin") or 0, reverse=True),
         "missing": missing,
         "coverage": {
             "rows": len(rows),
