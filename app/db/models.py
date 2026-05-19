@@ -55,6 +55,7 @@ class User(Base):
     can_use_ai = Column(Integer, nullable=False, default=0)
     fiat_rub_enabled = Column(Integer, nullable=False, default=0)
     account_target_currency = Column(String, nullable=False, default="exalted")
+    default_seller_account = Column(String)
     created_at = Column(String, nullable=False)
 
 

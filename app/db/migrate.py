@@ -16,6 +16,7 @@ USER_COLUMNS = {
     "can_use_ai": "INTEGER DEFAULT 0",
     "fiat_rub_enabled": "INTEGER DEFAULT 0",
     "account_target_currency": "VARCHAR DEFAULT 'exalted'",
+    "default_seller_account": "VARCHAR",
 }
 
 USER_INDEXES = [

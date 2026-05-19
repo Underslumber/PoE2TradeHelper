@@ -7,7 +7,14 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.config import DEFAULT_RATE_LIMIT_DELAY
-from app.trade2 import POE_NINJA_CATEGORY_TYPES, get_category_rates, get_trade_static
+from app.trade2 import (
+    ITEM_BASE_MARKET_CATEGORY,
+    ITEM_BASE_MARKET_MAX_BASES,
+    POE_NINJA_CATEGORY_TYPES,
+    get_category_rates,
+    get_item_base_market,
+    get_trade_static,
+)
 
 DEFAULT_MARKET_TARGET = "exalted"
 DEFAULT_MARKET_STATUS = "any"
@@ -15,6 +22,7 @@ DEFAULT_INTERVAL_MINUTES = 15.0
 DEFAULT_EARLY_INTERVAL_MINUTES = 5.0
 DEFAULT_EARLY_DAYS = 2.0
 SKIPPED_STATIC_CATEGORIES = {"Misc"}
+DEFAULT_EXTRA_MARKET_CATEGORIES = (ITEM_BASE_MARKET_CATEGORY,)
 
 
 @dataclass(frozen=True)
@@ -65,17 +73,29 @@ async def build_market_snapshot_jobs(
     include_unsupported: bool = True,
     currency_targets: list[str] | None = None,
 ) -> list[SnapshotJob]:
-    static = await get_trade_static()
+    try:
+        static = await get_trade_static()
+    except Exception:
+        static = {}
     if categories:
-        selected_categories = [category for category in categories if static.get(category)]
+        selected_categories = [
+            category
+            for category in categories
+            if static.get(category) or category in DEFAULT_EXTRA_MARKET_CATEGORIES
+        ]
     else:
         selected_categories = [
             category
             for category, entries in static.items()
             if entries and category not in SKIPPED_STATIC_CATEGORIES
         ]
+        selected_categories.extend(category for category in DEFAULT_EXTRA_MARKET_CATEGORIES if category not in selected_categories)
     if not include_unsupported:
-        selected_categories = [category for category in selected_categories if category in POE_NINJA_CATEGORY_TYPES]
+        selected_categories = [
+            category
+            for category in selected_categories
+            if category in POE_NINJA_CATEGORY_TYPES or category in DEFAULT_EXTRA_MARKET_CATEGORIES
+        ]
 
     jobs: list[SnapshotJob] = []
     seen: set[tuple[str, str]] = set()
@@ -120,13 +140,22 @@ async def collect_market_snapshots(
     results: list[dict[str, Any]] = []
     for index, job in enumerate(jobs):
         try:
-            snapshot = await get_category_rates(
-                league=job.league,
-                category=job.category,
-                target=job.target,
-                status=job.status,
-                force_refresh=force_refresh,
-            )
+            if job.category == ITEM_BASE_MARKET_CATEGORY:
+                snapshot = await get_item_base_market(
+                    league=job.league,
+                    target=job.target,
+                    status=job.status,
+                    limit=ITEM_BASE_MARKET_MAX_BASES,
+                    force_refresh=force_refresh,
+                )
+            else:
+                snapshot = await get_category_rates(
+                    league=job.league,
+                    category=job.category,
+                    target=job.target,
+                    status=job.status,
+                    force_refresh=force_refresh,
+                )
             rows = snapshot.get("rows") or []
             results.append(
                 {

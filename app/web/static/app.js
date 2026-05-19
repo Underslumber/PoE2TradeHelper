@@ -73,6 +73,15 @@ const HISTORY_SERIES_LIMIT = 1500;
 const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
 const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
 
+function loadJsonState(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '');
+    return value && typeof value === 'object' ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const state = {
   lang: localStorage.getItem('poe2-lang') || 'ru',
   leagues: [],
@@ -137,11 +146,25 @@ const state = {
   },
   accountActiveTab: localStorage.getItem('poe2-account-tab') || 'tracking',
   sellerLots: null,
+  sellerLotsParams: null,
   sellerLotsCache: {},
   sellerLotMarketCache: {},
+  sellerLotProfiles: loadJsonState('poe2-seller-lot-profiles', {}),
+  focusedSellerLotId: '',
   isLoadingSellerLots: false,
   sellerLotsAbortController: null,
   sellerLotsRequestId: 0,
+  lotSubtab: localStorage.getItem('poe2-lot-subtab') || 'seller',
+  baseMarket: null,
+  baseMarketParams: null,
+  baseMarketCache: {},
+  baseMarketHistoryCache: {},
+  baseMarketHistoryLoading: {},
+  baseMarketError: '',
+  focusedBaseMarketId: '',
+  isLoadingBaseMarket: false,
+  baseMarketAbortController: null,
+  baseMarketFilterTimer: null,
   account: {
     authenticated: false,
     user: null,
@@ -154,6 +177,7 @@ const state = {
     targetCurrency: localStorage.getItem('poe2-account-target') || 'exalted',
     benchmarkCurrency: localStorage.getItem('poe2-account-benchmark') || 'divine',
     benchmarkRates: {},
+    defaultSeller: '',
   },
   isAccountLoading: false,
   autoRefreshMs: Number(localStorage.getItem('poe2-auto-refresh-ms') ?? 30000),
@@ -165,11 +189,40 @@ const state = {
 
 const preferredTargets = ['exalted', 'divine', 'chaos'];
 const CROSS_MIN_VOLUME = 10;
+const SELLER_LOT_AUTO_MARKET_LIMIT = 20;
 const MARKET_SIGNAL_MIN_VOLUME = 10;
 const MARKET_SIGNAL_MEDIUM_VOLUME = 50;
 const MARKET_SIGNAL_NOTABLE_CHANGE = 8;
 const MARKET_SIGNAL_STRONG_CHANGE = 25;
 const MARKET_SIGNAL_TOP_CANDIDATES = 8;
+const LEAGUES_REFERENCE_TIMEOUT_MS = 5000;
+const STATIC_REFERENCE_TIMEOUT_MS = 5000;
+
+function fallbackTradeLeagues() {
+  return [
+    { id: 'Fate of the Vaal', text: 'Fate of the Vaal', realm: 'poe2' },
+  ];
+}
+
+function fallbackStaticCategories() {
+  return {
+    Currency: [
+      { id: 'exalted', text: 'Exalted Orb', text_ru: 'Сфера возвышения', image: null },
+      { id: 'divine', text: 'Divine Orb', text_ru: 'Божественная сфера', image: null },
+      { id: 'chaos', text: 'Chaos Orb', text_ru: 'Сфера хаоса', image: null },
+    ],
+  };
+}
+
+function fallbackStaticCategoryMeta(categories) {
+  return [{
+    id: 'Currency',
+    label: 'Currency',
+    label_ru: 'Валюта',
+    count: categories.Currency?.length || 0,
+    icon: null,
+  }];
+}
 
 // DOM helpers
 
@@ -219,6 +272,8 @@ function applyLanguage() {
   renderAiHistory();
   renderItemParser();
   renderRubMarketPanel();
+  renderLotSubtabs();
+  renderBaseMarket();
   renderDetailAccountStatus();
   switchMainView(state.mainView);
   renderCategorySidebar();
@@ -444,11 +499,26 @@ function accountFiatRubEnabled() {
   return Boolean(state.account.authenticated && state.account.user?.fiat_rub_enabled);
 }
 
+function accountDefaultSeller() {
+  return state.account.user?.default_seller_account || state.account.defaultSeller || '';
+}
+
+function applyDefaultSellerToSearch({ force = false } = {}) {
+  const input = byId('lot-seller');
+  const seller = accountDefaultSeller();
+  if (!input || !seller) return;
+  if (force || !input.value.trim()) {
+    input.value = seller;
+  }
+}
+
 function applyAccountUserPreferences(user) {
   if (user?.account_target_currency) {
     state.account.targetCurrency = user.account_target_currency;
     localStorage.setItem('poe2-account-target', state.account.targetCurrency);
   }
+  state.account.defaultSeller = user?.default_seller_account || '';
+  applyDefaultSellerToSearch();
 }
 
 async function fetchAccountJson(url, options = {}) {
@@ -1010,8 +1080,10 @@ async function saveAccountPreferences(payload) {
       state.rubMarket.context = null;
       state.rubMarket.error = '';
       state.rubMarket.loadedKey = '';
-      state.accountActiveTab = 'tracking';
-      localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+      if (state.accountActiveTab === 'rub') {
+        state.accountActiveTab = 'tracking';
+        localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+      }
     }
     renderCabinet();
     setAccountStatus(t('accountPreferencesSaved'));
@@ -1019,6 +1091,24 @@ async function saveAccountPreferences(payload) {
     setAccountStatus(error.message || String(error));
     renderCabinet();
   }
+}
+
+async function saveDefaultSellerFromProfile() {
+  await saveAccountPreferences({ default_seller_account: byId('default-seller-account')?.value || '' });
+  applyDefaultSellerToSearch({ force: true });
+}
+
+async function saveDefaultSellerFromSearch() {
+  if (!state.account.authenticated) {
+    const status = byId('lot-search-status');
+    if (status) status.textContent = t('loginRequiredForSellerProfile');
+    return;
+  }
+  const seller = byId('lot-seller')?.value || '';
+  await saveAccountPreferences({ default_seller_account: seller });
+  applyDefaultSellerToSearch({ force: true });
+  const status = byId('lot-search-status');
+  if (status) status.textContent = t('defaultSellerSaved');
 }
 
 function bindAccountEvents() {
@@ -1041,6 +1131,8 @@ function bindAccountEvents() {
   byId('fiat-rub-enabled')?.addEventListener('change', event => {
     saveAccountPreferences({ fiat_rub_enabled: Boolean(event.target.checked) });
   });
+  byId('save-default-seller')?.addEventListener('click', saveDefaultSellerFromProfile);
+  byId('save-lot-default-seller')?.addEventListener('click', saveDefaultSellerFromSearch);
   byId('refresh-rub-market')?.addEventListener('click', () => loadRubMarket({ refresh: true }));
   byId('cabinet-panel')?.addEventListener('click', event => {
     const tab = event.target.closest('[data-account-tab]');
@@ -1073,14 +1165,14 @@ function normalizeAccountTab() {
   if (!state.account.authenticated || (state.accountActiveTab === 'rub' && !accountFiatRubEnabled())) {
     state.accountActiveTab = 'tracking';
   }
-  if (!['tracking', 'rub'].includes(state.accountActiveTab)) {
+  if (!['tracking', 'bases', 'rub'].includes(state.accountActiveTab)) {
     state.accountActiveTab = 'tracking';
   }
 }
 
 function setAccountTab(tab) {
   if (tab === 'rub' && !accountFiatRubEnabled()) return;
-  state.accountActiveTab = tab === 'rub' ? 'rub' : 'tracking';
+  state.accountActiveTab = ['tracking', 'bases', 'rub'].includes(tab) ? tab : 'tracking';
   localStorage.setItem('poe2-account-tab', state.accountActiveTab);
   renderCabinet();
   if (state.accountActiveTab === 'rub') {
@@ -2465,16 +2557,28 @@ function renderCabinet() {
   renderAccountTabs();
   renderRubMarketPanel();
   setText('account-user-label', state.account.user?.display_name || state.account.user?.username || '');
+  const defaultSellerInput = byId('default-seller-account');
+  if (defaultSellerInput && document.activeElement !== defaultSellerInput) {
+    defaultSellerInput.value = accountDefaultSeller();
+  }
   const openTrades = state.account.trades.filter(trade => trade.status !== 'closed');
   const closedTrades = state.account.trades.filter(trade => trade.status === 'closed');
+  const basePins = state.account.pins.filter(isBaseMarketPin);
+  const regularPins = state.account.pins.filter(pin => !isBaseMarketPin(pin));
   setText('pinned-count', state.account.pins.length);
   setText('open-trades-count', openTrades.length);
   setText('closed-trades-count', closedTrades.length);
   const pinsList = byId('pins-list');
   if (pinsList) {
-    pinsList.innerHTML = state.account.pins.length
-      ? state.account.pins.map(renderPinCard).join('')
+    pinsList.innerHTML = regularPins.length
+      ? regularPins.map(renderPinCard).join('')
       : `<p class="text-secondary">${t('noPinnedPositions')}</p>`;
+  }
+  const basePinsList = byId('base-pins-list');
+  if (basePinsList) {
+    basePinsList.innerHTML = basePins.length
+      ? basePins.map(renderPinCard).join('')
+      : `<p class="text-secondary">${t('noTrackedBases')}</p>`;
   }
   const openTradesList = byId('open-trades-list');
   if (openTradesList) {
@@ -2794,10 +2898,771 @@ function confidenceLabel(value) {
 
 function comparisonLabel(mode) {
   if (mode === 'poe-ninja-aggregate') return t('comparisonPoeNinja');
+  if (mode === 'base-only') return t('comparisonBaseOnly');
   if (mode === 'type-level-stat-ids') return t('comparisonExactStats');
   if (mode === 'type-level-stat-ids-minus-one') return t('comparisonStatsMinusOne');
   if (mode === 'type-level-loose-stats') return t('comparisonLooseStats');
   return t('comparisonTypeOnly');
+}
+
+function sellerLotProfileKey(lot) {
+  return lot?.id || [lot?.seller, lot?.base_type, lot?.item_level, lot?.price_amount, lot?.price_currency].filter(Boolean).join(':');
+}
+
+function sellerLotProfile(lot) {
+  const key = sellerLotProfileKey(lot);
+  const profile = key ? state.sellerLotProfiles[key] : null;
+  const ranges = profile?.ranges && typeof profile.ranges === 'object' ? profile.ranges : {};
+  return {
+    important: Array.isArray(profile?.important) ? profile.important : [],
+    ignored: Array.isArray(profile?.ignored) ? profile.ignored : [],
+    tier: Array.isArray(profile?.tier) ? profile.tier : [],
+    ranges,
+    baseOnly: Boolean(profile?.baseOnly),
+    baseMode: ['required', 'ignored'].includes(profile?.baseMode) ? profile.baseMode : 'default',
+  };
+}
+
+function persistSellerLotProfiles() {
+  localStorage.setItem('poe2-seller-lot-profiles', JSON.stringify(state.sellerLotProfiles));
+}
+
+function sellerLotProfileParams(lot) {
+  const profile = sellerLotProfile(lot);
+  const params = {
+    important_stats: profile.important.join(','),
+    ignored_stats: profile.ignored.join(','),
+    base_mode: profile.baseMode,
+  };
+  if (profile.baseOnly) {
+    params.base_only = 'true';
+  }
+  if (profile.tier.length) {
+    params.tier_stats = profile.tier.join(',');
+  }
+  const numericRanges = {};
+  Object.entries(profile.ranges || {}).forEach(([statId, range]) => {
+    const min = String(range?.min ?? '').trim();
+    const max = String(range?.max ?? '').trim();
+    const payload = {};
+    if (min !== '' && Number.isFinite(Number(min))) payload.min = Number(min);
+    if (max !== '' && Number.isFinite(Number(max))) payload.max = Number(max);
+    if (Object.keys(payload).length) numericRanges[statId] = payload;
+  });
+  if (Object.keys(numericRanges).length) {
+    params.stat_ranges = JSON.stringify(numericRanges);
+  }
+  return params;
+}
+
+function focusedSellerLot() {
+  const lots = filteredSellerLots();
+  return lots.find(item => item.id === state.focusedSellerLotId) || lots[0] || null;
+}
+
+function sellerLotFilterText() {
+  return (byId('lot-query')?.value || '').trim().toLowerCase();
+}
+
+function sellerLotDisplayLimit() {
+  const value = Number(byId('lot-limit')?.value || 200);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, 200) : 200;
+}
+
+function sellerLotMatchesFilter(lot, filterText) {
+  if (!filterText) return true;
+  const text = [
+    lot.display_name,
+    lot.name,
+    lot.type_line,
+    lot.base_type,
+    lot.rarity,
+    lot.stash,
+    ...(lot.explicit_mods || []),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes(filterText);
+}
+
+function filteredSellerLots() {
+  const lots = state.sellerLots?.lots || [];
+  const filterText = sellerLotFilterText();
+  return filterText ? lots.filter(lot => sellerLotMatchesFilter(lot, filterText)) : lots;
+}
+
+function renderLotSubtabs() {
+  const activeTab = state.lotSubtab === 'bases' ? 'bases' : 'seller';
+  document.querySelectorAll('[data-lot-tab]').forEach(button => {
+    const active = button.dataset.lotTab === activeTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-lot-panel]').forEach(panel => {
+    panel.classList.toggle('d-none', panel.dataset.lotPanel !== activeTab);
+  });
+}
+
+function switchLotSubtab(tab) {
+  state.lotSubtab = tab === 'bases' ? 'bases' : 'seller';
+  localStorage.setItem('poe2-lot-subtab', state.lotSubtab);
+  renderLotSubtabs();
+  if (state.lotSubtab === 'bases') {
+    renderBaseMarket();
+    if (!state.baseMarket && !state.isLoadingBaseMarket) {
+      refreshBaseMarket(false);
+    }
+  } else {
+    renderSellerLots();
+  }
+}
+
+function baseMarketRequestParams(forceRefresh = false) {
+  const minIlvl = Number(byId('base-market-min-ilvl')?.value || 0);
+  const params = {
+    league: byId('live-league')?.value || '',
+    target: selectedTarget(),
+    status: byId('live-status')?.value || 'any',
+    q: (byId('base-market-query')?.value || '').trim(),
+    limit: byId('base-market-limit')?.value || '40',
+  };
+  if (Number.isFinite(minIlvl) && minIlvl > 0) params.min_ilvl = String(Math.round(minIlvl));
+  if (forceRefresh) params.refresh = 'true';
+  return params;
+}
+
+function baseMarketLowPrice(row) {
+  const value = Number(row?.low ?? row?.best ?? row?.median);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function baseMarketMedianPrice(row) {
+  const value = Number(row?.market_median ?? row?.p25 ?? row?.median);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function baseMarketWarning() {
+  const errors = state.baseMarket?.errors || [];
+  if (errors.some(error => String(error?.error || '').toLowerCase().includes('rate limited'))) {
+    return t('baseMarketRateLimited');
+  }
+  return errors.length ? t('baseMarketPartialError') : '';
+}
+
+function baseMarketRowName(row) {
+  return state.lang === 'ru' ? (row?.text_ru || row?.text || row?.query_type || '-') : (row?.text || row?.text_ru || row?.query_type || '-');
+}
+
+function baseMarketGroupLabel(row) {
+  return state.lang === 'ru'
+    ? (row?.category_label_ru || t('baseMarketUnknownGroup'))
+    : (row?.category_label || row?.category_label_ru || t('baseMarketUnknownGroup'));
+}
+
+function baseMarketIconMarkup(row, extraClass = '') {
+  const image = row?.image || row?.icon_url || '';
+  if (image) {
+    return `<span class="base-market-icon ${extraClass}"><img src="${escapeHtml(image)}" alt=""></span>`;
+  }
+  const key = String(row?.icon_key || 'base').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'base';
+  return `<span class="base-market-icon base-market-icon-fallback base-market-icon-${escapeHtml(key)} ${extraClass}" aria-hidden="true"></span>`;
+}
+
+function baseMarketPriceText(value, target) {
+  return value ? lotTargetPrice(value, target) : t('baseMarketNoPrice');
+}
+
+function baseMarketRangeText(row, target) {
+  const low = Number(row?.p25);
+  const high = Number(row?.p75);
+  if (Number.isFinite(low) && low > 0 && Number.isFinite(high) && high > 0) {
+    return `${lotTargetPrice(low, target)} - ${lotTargetPrice(high, target)}`;
+  }
+  if (Number.isFinite(low) && low > 0) return lotTargetPrice(low, target);
+  if (Number.isFinite(high) && high > 0) return lotTargetPrice(high, target);
+  return t('baseMarketNoPrice');
+}
+
+function baseMarketErrorLabel(errorText) {
+  const text = String(errorText || '').toLowerCase();
+  if (!text) return '';
+  if (text.includes('rate limited')) return t('baseMarketPricesPending');
+  return t('baseMarketPartialError');
+}
+
+function baseMarketRowState(row) {
+  if (baseMarketLowPrice(row)) return t('baseMarketHasPriceData');
+  return baseMarketErrorLabel(row?.error) || t('baseMarketPricesPending');
+}
+
+function baseMarketHistoryKey(row) {
+  const data = state.baseMarket || {};
+  return `${data.league || ''}|${data.target || ''}|${data.status || ''}|${row?.id || ''}`;
+}
+
+async function loadBaseMarketHistory(row) {
+  const key = baseMarketHistoryKey(row);
+  if (!row?.id || state.baseMarketHistoryCache[key] || state.baseMarketHistoryLoading[key]) return;
+  state.baseMarketHistoryLoading[key] = true;
+  try {
+    const params = new URLSearchParams({
+      limit: String(HISTORY_SERIES_LIMIT),
+      league: state.baseMarket?.league || byId('live-league')?.value || '',
+      category: 'ItemBases',
+      item_id: row.id,
+      target: state.baseMarket?.target || selectedTarget(),
+      status: state.baseMarket?.status || byId('live-status')?.value || 'any',
+      metric: 'price',
+    });
+    const response = await fetch(`/api/trade/history/item?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+    const seen = new Set();
+    const series = (data.series || [])
+      .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0))
+      .map(point => {
+        const ts = Number(point.created_ts || 0);
+        const value = Number(point.value);
+        if (!ts || seen.has(ts) || !Number.isFinite(value) || value <= 0) return null;
+        seen.add(ts);
+        return { ts, value };
+      })
+      .filter(Boolean);
+    const current = baseMarketLowPrice(row);
+    const currentTs = Number(state.baseMarket?.created_ts || 0);
+    if (current && currentTs && !seen.has(currentTs)) {
+      series.push({ ts: currentTs, value: current });
+    }
+    state.baseMarketHistoryCache[key] = series;
+  } catch {
+    state.baseMarketHistoryCache[key] = [];
+  } finally {
+    delete state.baseMarketHistoryLoading[key];
+    renderBaseMarketDetail();
+  }
+}
+
+function renderBaseMarketSamples(row) {
+  const target = state.baseMarket?.target || selectedTarget();
+  const lots = row?.sample_lots || [];
+  if (!lots.length) return `<p class="text-secondary">${t('baseMarketNoSamples')}</p>`;
+  return `
+    <div class="base-market-samples">
+      ${lots.map(lot => `
+        <div class="base-market-sample">
+          <strong>${lotTargetPrice(lot.price_target, target)}</strong>
+          <small>${escapeHtml([lot.seller, lot.item_level ? `ilvl ${lot.item_level}` : '', lot.stash].filter(Boolean).join(' · '))}</small>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function isBaseMarketPin(pin) {
+  return pin?.category === 'ItemBases';
+}
+
+function renderBaseMarketDetail() {
+  const panel = byId('base-market-detail');
+  if (!panel) return;
+  const rows = state.baseMarket?.rows || [];
+  const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
+  if (!state.baseMarket || !row) {
+    panel.innerHTML = '';
+    return;
+  }
+  state.focusedBaseMarketId = row.id || state.focusedBaseMarketId;
+  const target = state.baseMarket.target || selectedTarget();
+  const key = baseMarketHistoryKey(row);
+  const history = state.baseMarketHistoryCache[key] || [];
+  if (!state.baseMarketHistoryCache[key] && !state.baseMarketHistoryLoading[key]) {
+    loadBaseMarketHistory(row);
+  }
+  const chart = history.length >= 2
+    ? miniSignalChart(history.map(point => point.value), t('baseMarketLowChartBasis'), baseMarketLowPrice(row), null, { series: history, changeLabel: t('baseMarketLowChange') })
+    : miniSignalChart(row.sparkline || [], t('baseMarketLowChartBasis'), baseMarketLowPrice(row));
+  const rowState = baseMarketRowState(row);
+  panel.innerHTML = `
+    <article class="base-market-detail-card">
+      <div class="base-market-detail-head">
+        <div class="base-market-detail-title">
+          ${baseMarketIconMarkup(row, 'base-market-icon-lg')}
+          <div>
+            <strong>${escapeHtml(baseMarketRowName(row))}</strong>
+            <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : ''].filter(Boolean).join(' / '))}</small>
+            <small>${escapeHtml(rowState)}</small>
+          </div>
+        </div>
+        <span class="advice-badge">${t('baseMarketPureBasis')}</span>
+      </div>
+      <div class="base-market-summary">
+        <div><span>${t('baseMarketLowPrice')}</span><strong>${baseMarketPriceText(baseMarketLowPrice(row), target)}</strong></div>
+        <div><span>${t('baseMarketMedianPrice')}</span><strong>${baseMarketPriceText(baseMarketMedianPrice(row), target)}</strong></div>
+        <div><span>${t('marketRange')}</span><strong>${baseMarketRangeText(row, target)}</strong></div>
+        <div><span>${t('marketLots')}</span><strong>${formatAmount(row.count || 0)} / ${formatAmount(row.raw_count || row.total || 0)}</strong></div>
+      </div>
+      ${chart}
+      <div class="lot-profile-similar">
+        <strong>${t('nearestPrices')}</strong>
+        ${renderBaseMarketSamples(row)}
+      </div>
+      <div class="pin-trade-row">
+        <button class="btn btn-outline-light btn-sm" type="button" data-base-track="${escapeHtml(row.id || '')}">${t('trackBaseMarket')}</button>
+      </div>
+    </article>
+  `;
+}
+
+async function trackFocusedBaseMarket() {
+  const status = byId('base-market-status');
+  if (!state.account.authenticated) {
+    switchMainView('cabinet');
+    setAccountStatus(t('loginRequiredForPin'));
+    if (status) status.textContent = t('loginRequiredForPin');
+    return;
+  }
+  const rows = state.baseMarket?.rows || [];
+  const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
+  if (!row) return;
+  const target = state.baseMarket?.target || selectedTarget();
+  try {
+    await sendAccountJson('/api/account/pins', {
+      league: state.baseMarket?.league || byId('live-league')?.value || '',
+      category: 'ItemBases',
+      item_id: row.id,
+      item_name: row.text || baseMarketRowName(row),
+      item_name_ru: row.text_ru || row.text || baseMarketRowName(row),
+      icon_url: row.image || '',
+      target_currency: target,
+      last_price: baseMarketLowPrice(row),
+      last_source: state.baseMarket?.source || '',
+      note: t('baseMarketPureBasis'),
+    });
+    state.accountActiveTab = 'bases';
+    localStorage.setItem('poe2-account-tab', state.accountActiveTab);
+    await refreshAccountData(t('baseTrackSaved'));
+    if (status) status.textContent = t('baseTrackSaved');
+  } catch (error) {
+    if (status) status.textContent = error.message || String(error);
+  }
+}
+
+function renderBaseMarketRow(row) {
+  const target = state.baseMarket?.target || selectedTarget();
+  const active = row.id && row.id === state.focusedBaseMarketId;
+  const low = baseMarketLowPrice(row);
+  const median = baseMarketMedianPrice(row);
+  return `
+    <button class="base-market-row ${active ? 'active' : ''}" type="button" data-base-market-focus="${escapeHtml(row.id || '')}">
+      <div class="base-market-main">
+        <div class="base-market-title-line">
+          ${baseMarketIconMarkup(row)}
+          <strong>${escapeHtml(baseMarketRowName(row))}</strong>
+        </div>
+        <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : '', t('baseMarketPureBasis')].filter(Boolean).join(' · '))}</small>
+        <small>${escapeHtml(baseMarketRowState(row))}</small>
+      </div>
+      <div><small class="base-market-label">${t('baseMarketLowPrice')}</small><span>${baseMarketPriceText(low, target)}</span></div>
+      <div><small class="base-market-label">${t('baseMarketMedianPrice')}</small><span>${baseMarketPriceText(median, target)}</span></div>
+      <div><small class="base-market-label">${t('marketLots')}</small><span>${formatAmount(row.count || 0)}</span></div>
+      <div><small class="base-market-label">${t('confidence')}</small><span>${confidenceLabel(row.confidence)}</span></div>
+    </button>
+  `;
+}
+
+function renderBaseMarket() {
+  const list = byId('base-market-results');
+  const status = byId('base-market-status');
+  if (!list) return;
+  renderLotSubtabs();
+  if (state.isLoadingBaseMarket) {
+    list.innerHTML = '';
+    renderBaseMarketDetail();
+    if (status) status.innerHTML = loadingMarkup(t('baseMarketLoading'), 'inline');
+    return;
+  }
+  if (!state.baseMarket) {
+    list.innerHTML = `<p class="text-secondary">${t('baseMarketEmpty')}</p>`;
+    renderBaseMarketDetail();
+    if (status) status.textContent = state.baseMarketError || '';
+    return;
+  }
+  const rows = state.baseMarket.rows || [];
+  if (status) {
+    const cached = state.baseMarket.cached || state.baseMarket.stored ? ` · ${t('cacheLabel')}` : '';
+    const priced = state.baseMarket.priced_total ?? rows.filter(row => baseMarketLowPrice(row)).length;
+    const warning = baseMarketWarning();
+    const pending = !priced && warning ? ` · ${t('baseMarketPricesPending')}` : '';
+    status.textContent = state.baseMarketError || `${t('baseMarketShown')}: ${formatAmount(rows.length)} / ${formatAmount(state.baseMarket.matched_total || rows.length)} · ${t('baseMarketPriced')}: ${formatAmount(priced)}${cached}${warning ? ` · ${warning}` : ''}${pending}`;
+  }
+  if (!rows.length) {
+    const emptyKey = state.baseMarket.stored === false ? 'baseMarketEmpty' : 'baseMarketNoResults';
+    list.innerHTML = `<p class="text-secondary">${t(emptyKey)}</p>`;
+    renderBaseMarketDetail();
+    return;
+  }
+  if (!state.focusedBaseMarketId || !rows.some(row => row.id === state.focusedBaseMarketId)) {
+    state.focusedBaseMarketId = rows[0]?.id || '';
+  }
+  list.innerHTML = rows.map(renderBaseMarketRow).join('');
+  renderBaseMarketDetail();
+}
+
+async function refreshBaseMarket(forceRefresh = true) {
+  const status = byId('base-market-status');
+  const button = byId('refresh-base-market');
+  const params = baseMarketRequestParams(forceRefresh);
+  if (!params.league) {
+    if (status) status.textContent = t('leaguesLoadError');
+    return;
+  }
+  const searchParams = new URLSearchParams(params);
+  const cacheKey = searchParams.toString();
+  if (!forceRefresh && state.baseMarketCache[cacheKey] && state.baseMarketCache[cacheKey].stored !== false) {
+    state.baseMarket = state.baseMarketCache[cacheKey];
+    renderBaseMarket();
+    return;
+  }
+  if (state.baseMarketAbortController) {
+    state.baseMarketAbortController.abort();
+  }
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 120000);
+  state.baseMarketAbortController = controller;
+  state.baseMarketParams = params;
+  state.isLoadingBaseMarket = true;
+  state.baseMarketError = '';
+  if (button) button.disabled = true;
+  renderBaseMarket();
+  try {
+    const response = await fetch(`/api/trade/item-base-market?${searchParams.toString()}`, { signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    state.baseMarket = data;
+    state.focusedBaseMarketId = data.rows?.[0]?.id || '';
+    if (forceRefresh || data.stored !== false || (data.rows || []).length) {
+      state.baseMarketCache[cacheKey] = data;
+    }
+  } catch (error) {
+    const isAbort = error?.name === 'AbortError';
+    state.baseMarketError = isAbort ? t('baseMarketTimeout') : (error.message || String(error));
+    if (status) status.textContent = state.baseMarketError;
+    state.baseMarket = state.baseMarket || { rows: [] };
+  } finally {
+    window.clearTimeout(timeoutId);
+    state.isLoadingBaseMarket = false;
+    state.baseMarketAbortController = null;
+    if (button) button.disabled = false;
+    renderBaseMarket();
+  }
+}
+
+function focusBaseMarketRow(baseId) {
+  if (!baseId) return;
+  state.focusedBaseMarketId = baseId;
+  renderBaseMarket();
+}
+
+function statModValueText(mod) {
+  const min = Number(mod?.min);
+  const max = Number(mod?.max);
+  const hasMin = Number.isFinite(min);
+  const hasMax = Number.isFinite(max);
+  if (hasMin && hasMax && min !== max) return `${formatAmount(min)} - ${formatAmount(max)}`;
+  if (hasMax) return formatAmount(max);
+  if (hasMin) return formatAmount(min);
+  return '-';
+}
+
+function statModTierText(mod) {
+  const parts = [];
+  if (mod?.tier) parts.push(`${t('affixTier')}: ${cleanPoeText(mod.tier)}`);
+  if (mod?.level) parts.push(`${t('affixLevel')}: ${formatAmount(mod.level)}`);
+  return parts.join(' · ') || '-';
+}
+
+function renderFocusedSimilarLots(lot, target) {
+  const sampleLots = (lot.similar_lots || []).slice(0, 6);
+  if (!sampleLots.length) {
+    return `<p class="text-secondary">${t('noSimilarLots')}</p>`;
+  }
+  return `
+    <div class="lot-profile-samples">
+      ${sampleLots.map(item => `
+        <div class="lot-profile-sample">
+          <span>${escapeHtml(cleanPoeText(item.display_name || item.type_line || '-'))}</span>
+          <strong>${lotTargetPrice(item.price_target, target)}</strong>
+          <small>${escapeHtml([item.seller, item.item_level ? `ilvl ${item.item_level}` : '', item.stash].filter(Boolean).join(' · '))}</small>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderSellerLotProfilePanel() {
+  const panel = byId('seller-lot-profile-panel');
+  if (!panel) return;
+  const lot = focusedSellerLot();
+  if (!state.sellerLots || !lot) {
+    panel.innerHTML = '';
+    return;
+  }
+  state.focusedSellerLotId = lot.id || state.focusedSellerLotId;
+  const profile = sellerLotProfile(lot);
+  const statMods = (lot.stat_mods || [])
+    .filter(mod => mod.id && ['explicit', 'fractured', 'implicit', 'rune', 'desecrated'].includes(mod.type))
+    .slice(0, 12);
+  const lotName = cleanPoeText(lot.display_name);
+  const lotBase = cleanPoeText(lot.base_type || lot.type_line || '');
+  const target = lot.target || selectedTarget();
+  const market = lot.market || {};
+  panel.innerHTML = `
+    <div class="lot-stat-profile">
+      <div class="lot-stat-profile-head">
+        <div>
+          <span>${t('sellerStatProfile')}</span>
+          <strong>${escapeHtml(lotName)}</strong>
+          <small>${escapeHtml([rarityLabel(lot.rarity), lotBase, lot.item_level ? `ilvl ${lot.item_level}` : ''].filter(Boolean).join(' / '))}</small>
+        </div>
+        <div class="lot-profile-price-strip">
+          <span>${t('sellerPrice')}: <strong>${lotNativePrice(lot)}</strong></span>
+          <span>${t('currentMarketPrice')}: <strong>${market.pending ? t('marketEvaluating') : lotTargetPrice(market.current, target)}</strong></span>
+          <span>${t('marketRange')}: <strong>${lotTargetPrice(market.min, target)} - ${lotTargetPrice(market.p75, target)}</strong></span>
+        </div>
+      </div>
+      <div class="lot-stat-row base-row">
+        <div class="lot-stat-main">
+          <strong>${t('sellerBaseProperty')}</strong>
+          <span>${escapeHtml(lotBase || '-')}</span>
+        </div>
+        <div class="lot-stat-actions">
+          <label class="lot-stat-check">
+            <input type="checkbox" data-lot-profile-base="required" data-lot-id="${escapeHtml(lot.id || '')}" ${profile.baseMode !== 'ignored' || profile.baseOnly ? 'checked' : ''}>
+            <span>${t('sellerBaseImportant')}</span>
+          </label>
+          <label class="lot-stat-check">
+            <input type="checkbox" data-lot-profile-base-only="true" data-lot-id="${escapeHtml(lot.id || '')}" ${profile.baseOnly ? 'checked' : ''}>
+            <span>${t('sellerBaseOnly')}</span>
+          </label>
+        </div>
+      </div>
+      ${statMods.length ? statMods.map(mod => {
+        const statId = String(mod.id);
+        const label = cleanPoeText(mod.text || mod.name || statId);
+        const range = profile.ranges[statId] || {};
+        return `
+          <div class="lot-stat-row">
+            <div class="lot-stat-main">
+              <span>${escapeHtml(label)}</span>
+              <small>${escapeHtml(statModTierText(mod))} · ${t('affixValue')}: ${escapeHtml(statModValueText(mod))}</small>
+            </div>
+            <div class="lot-stat-actions">
+              <label class="lot-stat-check">
+                <input type="checkbox" data-lot-profile="important" data-lot-id="${escapeHtml(lot.id || '')}" data-stat-id="${escapeHtml(statId)}" ${profile.important.includes(statId) ? 'checked' : ''}>
+                <span>${t('sellerStatImportantShort')}</span>
+              </label>
+              <label class="lot-stat-check">
+                <input type="checkbox" data-lot-profile="ignored" data-lot-id="${escapeHtml(lot.id || '')}" data-stat-id="${escapeHtml(statId)}" ${profile.ignored.includes(statId) ? 'checked' : ''}>
+                <span>${t('sellerStatIgnoredShort')}</span>
+              </label>
+              <label class="lot-stat-check">
+                <input type="checkbox" data-lot-profile="tier" data-lot-id="${escapeHtml(lot.id || '')}" data-stat-id="${escapeHtml(statId)}" ${profile.tier.includes(statId) ? 'checked' : ''}>
+                <span>${t('sellerStatTierShort')}</span>
+              </label>
+              <span class="lot-stat-range">
+                <input type="number" inputmode="decimal" step="any" data-lot-range="min" data-lot-id="${escapeHtml(lot.id || '')}" data-stat-id="${escapeHtml(statId)}" value="${escapeHtml(range.min ?? '')}" placeholder="${t('affixMin')}">
+                <input type="number" inputmode="decimal" step="any" data-lot-range="max" data-lot-id="${escapeHtml(lot.id || '')}" data-stat-id="${escapeHtml(statId)}" value="${escapeHtml(range.max ?? '')}" placeholder="${t('affixMax')}">
+              </span>
+            </div>
+          </div>
+        `;
+      }).join('') : `<p class="text-secondary">${t('sellerNoStatProperties')}</p>`}
+      <div class="lot-profile-similar">
+        <strong>${t('nearestPrices')}</strong>
+        ${renderFocusedSimilarLots(lot, target)}
+      </div>
+    </div>
+  `;
+}
+
+function sellerLotProfilePatch(lot, nextProfile) {
+  const key = sellerLotProfileKey(lot);
+  const ranges = nextProfile.ranges || {};
+  const normalizedRanges = {};
+  Object.entries(ranges).forEach(([statId, range]) => {
+    const min = String(range?.min ?? '').trim();
+    const max = String(range?.max ?? '').trim();
+    if (min || max) normalizedRanges[statId] = { min, max };
+  });
+  const normalized = {
+    important: nextProfile.important || [],
+    ignored: nextProfile.ignored || [],
+    tier: nextProfile.tier || [],
+    ranges: normalizedRanges,
+    baseOnly: Boolean(nextProfile.baseOnly),
+    baseMode: nextProfile.baseMode || 'default',
+  };
+  if (
+    normalized.important.length
+    || normalized.ignored.length
+    || normalized.tier.length
+    || Object.keys(normalized.ranges).length
+    || normalized.baseOnly
+    || normalized.baseMode !== 'default'
+  ) {
+    state.sellerLotProfiles[key] = normalized;
+  } else {
+    delete state.sellerLotProfiles[key];
+  }
+}
+
+async function recalculateFocusedSellerLot(lot) {
+  persistSellerLotProfiles();
+  lot.market = { ...(lot.market || {}), pending: true };
+  renderSellerLotProfilePanel();
+  renderSellerLots();
+  const params = state.sellerLotsParams;
+  if (params) {
+    await fetchSellerLotMarket(lot, params, state.sellerLotsRequestId || Date.now());
+  }
+}
+
+async function updateSellerLotBaseProfile(lotId, checked) {
+  const lot = (state.sellerLots?.lots || []).find(item => item.id === lotId);
+  if (!lot) return;
+  const current = sellerLotProfile(lot);
+  current.baseMode = checked ? 'required' : 'ignored';
+  if (!checked) current.baseOnly = false;
+  sellerLotProfilePatch(lot, current);
+  await recalculateFocusedSellerLot(lot);
+}
+
+async function updateSellerLotBaseOnlyProfile(lotId, checked) {
+  const lot = (state.sellerLots?.lots || []).find(item => item.id === lotId);
+  if (!lot) return;
+  const current = sellerLotProfile(lot);
+  sellerLotProfilePatch(lot, { ...current, baseOnly: checked, baseMode: checked ? 'required' : current.baseMode });
+  await recalculateFocusedSellerLot(lot);
+}
+
+async function updateSellerLotPropertyProfile(lotId, statId, mode, checked) {
+  const lot = (state.sellerLots?.lots || []).find(item => item.id === lotId);
+  if (!lot || !statId) return;
+  const current = sellerLotProfile(lot);
+  const important = new Set(current.important);
+  const ignored = new Set(current.ignored);
+  const tier = new Set(current.tier);
+  const ranges = { ...(current.ranges || {}) };
+  if (mode === 'important') {
+    if (checked) {
+      important.add(statId);
+      ignored.delete(statId);
+    } else {
+      important.delete(statId);
+    }
+  } else if (mode === 'ignored') {
+    if (checked) {
+      ignored.add(statId);
+      important.delete(statId);
+      tier.delete(statId);
+      delete ranges[statId];
+    } else {
+      ignored.delete(statId);
+    }
+  } else if (mode === 'tier') {
+    if (checked) {
+      tier.add(statId);
+      important.add(statId);
+      ignored.delete(statId);
+    } else {
+      tier.delete(statId);
+    }
+  }
+  sellerLotProfilePatch(lot, { ...current, important: [...important], ignored: [...ignored], tier: [...tier], ranges });
+  await recalculateFocusedSellerLot(lot);
+}
+
+async function updateSellerLotRangeProfile(lotId, statId, bound, value) {
+  const lot = (state.sellerLots?.lots || []).find(item => item.id === lotId);
+  if (!lot || !statId || !['min', 'max'].includes(bound)) return;
+  const current = sellerLotProfile(lot);
+  const ranges = { ...(current.ranges || {}) };
+  const range = { ...(ranges[statId] || {}) };
+  const normalizedValue = String(value || '').trim();
+  if (normalizedValue) range[bound] = normalizedValue;
+  else delete range[bound];
+  if (range.min || range.max) {
+    ranges[statId] = range;
+  } else {
+    delete ranges[statId];
+  }
+  const important = new Set(current.important);
+  const ignored = new Set(current.ignored);
+  if (ranges[statId]) {
+    important.add(statId);
+    ignored.delete(statId);
+  }
+  sellerLotProfilePatch(lot, { ...current, important: [...important], ignored: [...ignored], ranges });
+  await recalculateFocusedSellerLot(lot);
+}
+
+async function focusSellerLot(lotId) {
+  if (!lotId) return;
+  state.focusedSellerLotId = lotId;
+  renderSellerLotProfilePanel();
+  renderSellerLots();
+  const lot = focusedSellerLot();
+  if (lot?.market?.pending && state.sellerLotsParams) {
+    await fetchSellerLotMarket(lot, state.sellerLotsParams, state.sellerLotsRequestId || Date.now());
+  }
+}
+
+function renderSellerLotPropertySummary(lot) {
+  const profile = sellerLotProfile(lot);
+  const parts = [];
+  if (profile.baseMode === 'required') parts.push(t('sellerBaseImportant'));
+  if (profile.baseMode === 'ignored') parts.push(t('sellerBaseIgnored'));
+  if (profile.baseOnly) parts.push(t('sellerBaseOnly'));
+  if (profile.important.length) parts.push(`${t('sellerStatImportant')}: ${formatAmount(profile.important.length)}`);
+  if (profile.ignored.length) parts.push(`${t('sellerStatIgnored')}: ${formatAmount(profile.ignored.length)}`);
+  if (profile.tier.length) parts.push(`${t('sellerStatTierFocus')}: ${formatAmount(profile.tier.length)}`);
+  if (Object.keys(profile.ranges || {}).length) parts.push(`${t('affixValueRange')}: ${formatAmount(Object.keys(profile.ranges).length)}`);
+  return parts.length ? `<span class="lot-card-note">${t('manualProfile')}: ${escapeHtml(parts.join(' · '))}</span>` : '';
+}
+
+function renderSellerBaseSummary() {
+  const panel = byId('seller-base-summary-panel');
+  if (!panel) return;
+  const rows = state.sellerLots?.base_summary || [];
+  if (!state.sellerLots || !rows.length) {
+    panel.innerHTML = '';
+    return;
+  }
+  const target = state.sellerLots.target || selectedTarget();
+  panel.innerHTML = `
+    <div class="seller-base-summary">
+      <div class="seller-base-summary-head">
+        <strong>${t('topSellerBases')}</strong>
+        <span>${t('topSellerBasesHint')}</span>
+      </div>
+      <div class="seller-base-grid">
+        ${rows.slice(0, 8).map(row => `
+          <button class="seller-base-card" type="button" data-base-filter="${escapeHtml(row.base_type || '')}">
+            <span>${escapeHtml(cleanPoeText(row.base_type || '-'))}</span>
+            <small>${escapeHtml([rarityLabel(row.rarity), row.item_level ? `ilvl ${row.item_level}` : ''].filter(Boolean).join(' / '))}</small>
+            <strong>${lotTargetPrice(row.median, target)}</strong>
+            <small>${t('averagePrice')}: ${lotTargetPrice(row.avg, target)} · ${t('marketLots')}: ${formatAmount(row.count || 0)}</small>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderSellerLotStatProfile(lot) {
+  const statMods = (lot.stat_mods || [])
+    .filter(mod => mod.id && ['explicit', 'fractured', 'implicit', 'rune', 'desecrated'].includes(mod.type))
+    .slice(0, 8);
+  if (!statMods.length) return '';
+  return `<span class="lot-card-note">${t('propertyCount')}: ${formatAmount(statMods.length)}</span>`;
 }
 
 function sellerUnitNote(lot, market, target) {
@@ -2824,8 +3689,10 @@ function renderSellerLotCard(lot) {
   const delta = verdict.delta_pct === null || verdict.delta_pct === undefined ? '' : ` (${formatChange(verdict.delta_pct)})`;
   const lotName = cleanPoeText(lot.display_name);
   const lotBase = cleanPoeText(lot.base_type);
+  const manualProfile = market.comparison?.manual_profile ? ` · ${t('manualProfile')}` : '';
+  const active = lot.id && lot.id === state.focusedSellerLotId;
   return `
-    <article class="lot-card ${escapeHtml(verdict.kind || 'unknown')}">
+    <article class="lot-card ${escapeHtml(verdict.kind || 'unknown')} ${active ? 'active' : ''}" data-lot-focus data-lot-id="${escapeHtml(lot.id || '')}" tabindex="0">
       <div class="lot-card-grid">
         <div>
           <div class="lot-title">
@@ -2836,6 +3703,8 @@ function renderSellerLotCard(lot) {
             </div>
           </div>
           ${mods ? `<div class="lot-card-note">${mods}</div>` : ''}
+          ${renderSellerLotStatProfile(lot)}
+          ${renderSellerLotPropertySummary(lot)}
           <div class="lot-card-note">${t('stashSection')}: ${escapeHtml(lot.stash || '-')} · ${t('listed')}: ${formatDateTime(lot.indexed)}</div>
         </div>
         <div>
@@ -2849,7 +3718,7 @@ function renderSellerLotCard(lot) {
           ${market.pending ? loadingMarkup(t('marketEvaluating'), 'inline') : `
             <strong class="lot-card-value">${lotTargetPrice(market.current, target)}</strong>
             <span class="lot-card-note">${marketSourceNote(market)}</span>
-            <span class="lot-card-note">${t('confidence')}: ${confidenceLabel(market.confidence)} · ${comparisonLabel(market.comparison?.mode)}</span>
+            <span class="lot-card-note">${t('confidence')}: ${confidenceLabel(market.confidence)} · ${comparisonLabel(market.comparison?.mode)}${manualProfile}</span>
           `}
         </div>
         <div>
@@ -2860,6 +3729,7 @@ function renderSellerLotCard(lot) {
         <div>
           <span class="advice-badge">${verdictLabel(verdict.kind)}</span>
           <strong class="lot-card-value">${delta || '-'}</strong>
+          <button class="lot-focus-button" type="button" data-lot-focus data-lot-id="${escapeHtml(lot.id || '')}">${t('openLotDetails')}</button>
         </div>
       </div>
     </article>
@@ -2871,18 +3741,36 @@ function renderSellerLots() {
   if (!list) return;
   if (state.isLoadingSellerLots) {
     list.innerHTML = '';
+    renderSellerBaseSummary();
+    renderSellerLotProfilePanel();
     return;
   }
   if (!state.sellerLots) {
     list.innerHTML = `<p class="text-secondary">${t('sellerLotsEmpty')}</p>`;
+    renderSellerBaseSummary();
+    renderSellerLotProfilePanel();
     return;
   }
-  const lots = state.sellerLots.lots || [];
-  if (!lots.length) {
+  const filteredLots = filteredSellerLots();
+  const lots = filteredLots.slice(0, sellerLotDisplayLimit());
+  const status = byId('lot-search-status');
+  if (status) {
+    const total = state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0;
+    const shown = Math.min(filteredLots.length, sellerLotDisplayLimit());
+    status.textContent = `${t('marketLots')}: ${formatAmount(shown)} / ${formatAmount(total)} · ${t('sellerLocalFilterHint')} · ${t('autoMarketLimit')}: ${formatAmount(Math.min(SELLER_LOT_AUTO_MARKET_LIMIT, state.sellerLots.lots?.length || 0))}`;
+  }
+  if (!filteredLots.length) {
     list.innerHTML = `<p class="text-secondary">${t('sellerLotsNoResults')}</p>`;
+    renderSellerBaseSummary();
+    renderSellerLotProfilePanel();
     return;
+  }
+  if (!state.focusedSellerLotId || !filteredLots.some(lot => lot.id === state.focusedSellerLotId)) {
+    state.focusedSellerLotId = lots[0]?.id || '';
   }
   list.innerHTML = lots.map(renderSellerLotCard).join('');
+  renderSellerBaseSummary();
+  renderSellerLotProfilePanel();
 }
 
 function renderItemParser() {
@@ -3004,12 +3892,14 @@ async function pricePastedItem() {
 
 async function fetchSellerLotMarket(lot, params, requestId) {
   if (!lot.id || state.sellerLotsRequestId !== requestId) return;
+  const profileParams = sellerLotProfileParams(lot);
   const marketParams = new URLSearchParams({
     league: params.league,
     seller: params.seller,
     lot_id: lot.id,
     target: params.target,
     status: params.status,
+    ...profileParams,
   });
   const cacheKey = marketParams.toString();
   try {
@@ -3034,6 +3924,7 @@ async function fetchSellerLotMarket(lot, params, requestId) {
     targetLot.verdict = data.verdict || targetLot.verdict;
     targetLot.price_target = data.price_target ?? targetLot.price_target;
     targetLot.target = data.target || targetLot.target;
+    targetLot.similar_lots = data.sample_lots || targetLot.similar_lots || [];
     renderSellerLots();
   } catch (error) {
     if (state.sellerLotsRequestId !== requestId || !state.sellerLots?.lots) return;
@@ -3046,7 +3937,7 @@ async function fetchSellerLotMarket(lot, params, requestId) {
 
 async function loadSellerLotMarkets(params, requestId) {
   const lots = state.sellerLots?.lots || [];
-  const queue = lots.filter(lot => lot.id);
+  const queue = lots.filter(lot => lot.id).slice(0, SELLER_LOT_AUTO_MARKET_LIMIT);
   const workers = [0, 1].map(async () => {
     while (queue.length && state.sellerLotsRequestId === requestId) {
       const lot = queue.shift();
@@ -3056,7 +3947,8 @@ async function loadSellerLotMarkets(params, requestId) {
   await Promise.allSettled(workers);
   const status = byId('lot-search-status');
   if (state.sellerLotsRequestId === requestId && status && state.sellerLots) {
-    status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)}`;
+    const total = state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0;
+    status.textContent = `${t('marketLots')}: ${formatAmount(total)} · ${t('autoMarketLimit')}: ${formatAmount(Math.min(SELLER_LOT_AUTO_MARKET_LIMIT, lots.length))}`;
   }
 }
 
@@ -3071,15 +3963,18 @@ async function searchSellerLots() {
   const league = byId('live-league')?.value || '';
   const target = selectedTarget();
   const liveStatus = byId('live-status')?.value || 'any';
-  const query = (byId('lot-query')?.value || '').trim();
-  const limit = byId('lot-limit')?.value || '10';
-  const params = { league, seller, q: query, target, status: liveStatus, limit };
+  const limit = '200';
+  const params = { league, seller, target, status: liveStatus, limit };
+  state.sellerLotsParams = params;
   const searchParams = new URLSearchParams({ ...params, analyze: 'false' });
   const cacheKey = searchParams.toString();
   if (state.sellerLotsCache[cacheKey]) {
     state.sellerLots = state.sellerLotsCache[cacheKey];
-    if (status) status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)} · ${t('cacheLabel')}`;
+    state.focusedSellerLotId = filteredSellerLots()[0]?.id || state.sellerLots.lots?.[0]?.id || '';
+    if (status) status.textContent = `${t('marketLots')}: ${formatAmount(state.sellerLots.matched_total ?? state.sellerLots.total ?? state.sellerLots.lots?.length ?? 0)} · ${t('cacheLabel')} · ${t('sellerLocalFilterHint')}`;
     renderSellerLots();
+    state.sellerLotsRequestId = Date.now();
+    loadSellerLotMarkets(params, state.sellerLotsRequestId);
     return;
   }
   const requestId = Date.now();
@@ -3101,11 +3996,13 @@ async function searchSellerLots() {
     if (state.sellerLotsRequestId !== requestId) return;
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
     state.sellerLots = data;
+    state.focusedSellerLotId = data.lots?.[0]?.id || '';
     state.sellerLotsCache[cacheKey] = data;
     if (status) {
       const cacheLabel = data.cached ? ` · ${t('cacheLabel')}` : '';
       const timeoutLabel = data.analysis_timed_out ? ` · ${t('partialResults')}` : '';
-      status.textContent = `${t('marketLots')}: ${formatAmount(data.matched_total ?? data.total ?? data.lots?.length ?? 0)}${cacheLabel}${timeoutLabel}`;
+      const fetchedLabel = data.fetched_total && data.total && data.fetched_total < data.total ? ` · ${t('sellerFetched')}: ${formatAmount(data.fetched_total)} / ${formatAmount(data.total)}` : '';
+      status.textContent = `${t('marketLots')}: ${formatAmount(data.matched_total ?? data.total ?? data.lots?.length ?? 0)}${fetchedLabel}${cacheLabel}${timeoutLabel} · ${t('sellerLocalFilterHint')}`;
     }
     loadSellerLotMarkets(params, requestId);
   } catch (error) {
@@ -3905,7 +4802,17 @@ function switchMainView(view) {
   });
   renderMainControls();
   if (state.mainView === 'signals' && state.activeAdviceTab === 'cross') loadCrossCurrencyDeals();
-  if (state.mainView === 'lots') renderSellerLots();
+  if (state.mainView === 'lots') {
+    renderLotSubtabs();
+    if (state.lotSubtab === 'bases') {
+      renderBaseMarket();
+      if (!state.baseMarket && !state.isLoadingBaseMarket) {
+        refreshBaseMarket(false);
+      }
+    } else {
+      renderSellerLots();
+    }
+  }
   if (state.mainView === 'cabinet') renderCabinet();
   if (state.mainView === 'admin') renderAdminPanel();
   if (state.mainView === 'ai') {
@@ -4965,9 +5872,25 @@ function scheduleAutoRefresh() {
   if (!state.autoRefreshMs) return;
   state.autoRefreshTimer = setInterval(() => {
     if (!document.hidden) {
-      loadLatestCachedRates({ onlyIfNew: true, silent: true });
+      if (state.mainView === 'lots' && state.lotSubtab === 'bases') {
+        refreshBaseMarket(false);
+      } else {
+        loadLatestCachedRates({ onlyIfNew: true, silent: true });
+      }
     }
   }, state.autoRefreshMs);
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 0) {
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(url, controller ? { signal: controller.signal } : undefined);
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function refreshRates(options = {}) {
@@ -5010,17 +5933,20 @@ async function initLiveTrade() {
       localStorage.setItem('poe2-lang', state.lang);
       applyLanguage();
     });
-    const [leaguesResponse, staticResponse] = await Promise.all([
-      fetch('/api/trade/leagues'),
-      fetch('/api/trade/static'),
+    const [leaguesResult, staticResult] = await Promise.all([
+      fetchJsonWithTimeout('/api/trade/leagues', LEAGUES_REFERENCE_TIMEOUT_MS).catch(error => ({ error })),
+      fetchJsonWithTimeout('/api/trade/static', STATIC_REFERENCE_TIMEOUT_MS).catch(error => ({ error })),
     ]);
-    const leaguesData = await leaguesResponse.json();
-    const staticData = await staticResponse.json();
-    if (!leaguesResponse.ok || leaguesData.error) throw new Error(leaguesData.error || t('leaguesLoadError'));
-    if (!staticResponse.ok || staticData.error) throw new Error(staticData.error || t('staticLoadError'));
-    state.leagues = leaguesData.leagues || [];
-    state.categories = staticData.categories || {};
-    state.categoryMeta = staticData.category_meta || [];
+    const leaguesResponse = leaguesResult.response;
+    const leaguesData = leaguesResult.data || {};
+    const staticResponse = staticResult.response;
+    const staticData = staticResult.data || {};
+    const leaguesLoadFailed = Boolean(leaguesResult.error) || !leaguesResponse?.ok || leaguesData.error;
+    const staticLoadFailed = Boolean(staticResult.error) || !staticResponse?.ok || staticData.error;
+    state.leagues = leaguesLoadFailed ? fallbackTradeLeagues() : (leaguesData.leagues || []);
+    if (!state.leagues.length) state.leagues = fallbackTradeLeagues();
+    state.categories = staticLoadFailed ? fallbackStaticCategories() : (staticData.categories || {});
+    state.categoryMeta = staticLoadFailed ? fallbackStaticCategoryMeta(state.categories) : (staticData.category_meta || []);
     if (!state.categories[state.selectedCategory]) state.selectedCategory = state.categoryMeta[0]?.id || 'Currency';
 
     fillSelect(leagueSelect, state.leagues.map(league => ({ id: league.id, text: league.text })), state.leagues[0]?.id);
@@ -5039,6 +5965,59 @@ async function initLiveTrade() {
     });
     byId('market-search').addEventListener('input', renderMarket);
     byId('search-lots')?.addEventListener('click', searchSellerLots);
+    document.querySelectorAll('[data-lot-tab]').forEach(button => {
+      button.addEventListener('click', () => switchLotSubtab(button.dataset.lotTab));
+    });
+    byId('refresh-base-market')?.addEventListener('click', () => refreshBaseMarket(true));
+    byId('base-market-results')?.addEventListener('click', event => {
+      const target = event.target.closest('[data-base-market-focus]');
+      if (!target) return;
+      event.preventDefault();
+      focusBaseMarketRow(target.dataset.baseMarketFocus || '');
+    });
+    byId('base-market-detail')?.addEventListener('click', event => {
+      const target = event.target.closest('[data-base-track]');
+      if (!target) return;
+      event.preventDefault();
+      trackFocusedBaseMarket();
+    });
+    byId('lot-results')?.addEventListener('click', event => {
+      const target = event.target.closest('[data-lot-focus]');
+      if (!target) return;
+      event.preventDefault();
+      focusSellerLot(target.dataset.lotId || '');
+    });
+    byId('lot-results')?.addEventListener('keydown', event => {
+      if (!['Enter', ' '].includes(event.key)) return;
+      const target = event.target.closest('[data-lot-focus]');
+      if (!target) return;
+      event.preventDefault();
+      focusSellerLot(target.dataset.lotId || '');
+    });
+    byId('seller-lot-profile-panel')?.addEventListener('change', event => {
+      const control = event.target.closest('[data-lot-profile], [data-lot-profile-base], [data-lot-profile-base-only], [data-lot-range]');
+      if (!control) return;
+      const lotId = control.dataset.lotId || '';
+      const statId = control.dataset.statId || '';
+      if (control.dataset.lotProfileBaseOnly) {
+        updateSellerLotBaseOnlyProfile(lotId, control.checked);
+      } else if (control.dataset.lotProfileBase) {
+        updateSellerLotBaseProfile(lotId, control.checked);
+      } else if (control.dataset.lotProfile) {
+        updateSellerLotPropertyProfile(lotId, statId, control.dataset.lotProfile, control.checked);
+      } else if (control.dataset.lotRange) {
+        updateSellerLotRangeProfile(lotId, statId, control.dataset.lotRange, control.value);
+      }
+    });
+    byId('seller-base-summary-panel')?.addEventListener('click', event => {
+      const button = event.target.closest('[data-base-filter]');
+      if (!button) return;
+      event.preventDefault();
+      const input = byId('lot-query');
+      if (input) input.value = button.dataset.baseFilter || '';
+      state.focusedSellerLotId = '';
+      renderSellerLots();
+    });
     byId('parse-item-text')?.addEventListener('click', parsePastedItem);
     byId('price-item-text')?.addEventListener('click', pricePastedItem);
     byId('run-ai-analysis')?.addEventListener('click', runAiAnalysis);
@@ -5059,11 +6038,26 @@ async function initLiveTrade() {
       });
     });
     bindAccountEvents();
-    ['lot-seller', 'lot-query'].forEach(id => {
+    byId('lot-query')?.addEventListener('input', () => {
+      state.focusedSellerLotId = '';
+      renderSellerLots();
+    });
+    byId('lot-limit')?.addEventListener('change', renderSellerLots);
+    ['lot-seller'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
         if (event.key === 'Enter') searchSellerLots();
       });
     });
+    byId('base-market-query')?.addEventListener('input', () => {
+      if (state.baseMarketFilterTimer) window.clearTimeout(state.baseMarketFilterTimer);
+      state.baseMarketFilterTimer = window.setTimeout(() => refreshBaseMarket(false), 350);
+    });
+    ['base-market-query', 'base-market-min-ilvl'].forEach(id => {
+      byId(id)?.addEventListener('keydown', event => {
+        if (event.key === 'Enter') refreshBaseMarket(false);
+      });
+    });
+    byId('base-market-limit')?.addEventListener('change', () => refreshBaseMarket(false));
     byId('detail-target-currency').addEventListener('change', event => {
       state.detailTarget = event.target.value;
       renderSelectedItemDetail();
@@ -5120,12 +6114,21 @@ async function initLiveTrade() {
         state.detailDemandCache = {};
         state.detailSeriesCache = {};
         state.sellerLots = null;
+        state.sellerLotsParams = null;
+        state.baseMarket = null;
+        state.baseMarketParams = null;
+        state.baseMarketCache = {};
+        state.baseMarketHistoryCache = {};
+        state.baseMarketHistoryLoading = {};
+        state.baseMarketError = '';
+        state.focusedBaseMarketId = '';
         setText('last-snapshot', '-');
         setText('rate-source', '-');
         renderTargetCurrencyInfo();
         renderAiPanel();
         renderMarket();
         renderAdvice([]);
+        renderBaseMarket();
         renderSelectedItemDetail();
         loadLatestCachedRates();
       });
@@ -5151,6 +6154,9 @@ async function initLiveTrade() {
       });
     });
     applyLanguage();
+    if (leaguesLoadFailed || staticLoadFailed) {
+      setLiveError(t('staticFallbackNotice'));
+    }
     loadLatestCachedRates();
     loadAccountState().then(() => {
       showVerificationQueryStatus();

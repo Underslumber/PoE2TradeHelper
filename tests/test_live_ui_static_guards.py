@@ -44,6 +44,45 @@ def test_cabinet_view_is_not_persisted_in_url() -> None:
     assert "state.account.authenticated ? 'cabinet' : 'market'" not in app_js
 
 
+def test_live_ui_keeps_navigation_when_static_reference_is_unavailable() -> None:
+    app_js = (Path(__file__).resolve().parents[1] / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "LEAGUES_REFERENCE_TIMEOUT_MS" in app_js
+    assert "STATIC_REFERENCE_TIMEOUT_MS" in app_js
+    assert "fallbackTradeLeagues()" in app_js
+    assert "fetchJsonWithTimeout('/api/trade/leagues', LEAGUES_REFERENCE_TIMEOUT_MS)" in app_js
+    assert "fetchJsonWithTimeout('/api/trade/static', STATIC_REFERENCE_TIMEOUT_MS)" in app_js
+    assert "fallbackStaticCategories()" in app_js
+    assert "const leaguesLoadFailed = Boolean(leaguesResult.error) || !leaguesResponse?.ok || leaguesData.error" in app_js
+    assert "const staticLoadFailed = Boolean(staticResult.error) || !staticResponse?.ok || staticData.error" in app_js
+    assert "state.leagues = leaguesLoadFailed ? fallbackTradeLeagues()" in app_js
+    assert "state.categories = staticLoadFailed ? fallbackStaticCategories()" in app_js
+    assert "if (leaguesLoadFailed || staticLoadFailed)" in app_js
+
+
+def test_live_ui_has_separate_base_tracking_surface() -> None:
+    root = Path(__file__).resolve().parents[1]
+    app_js = (root / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    template = (root / "app" / "web" / "templates" / "live.html").read_text(encoding="utf-8")
+    i18n_js = (root / "app" / "web" / "static" / "i18n.js").read_text(encoding="utf-8")
+
+    assert 'data-account-tab="bases"' in template
+    assert 'id="base-pins-list"' in template
+    assert "isBaseMarketPin" in app_js
+    assert "data-base-track" in app_js
+    assert "trackFocusedBaseMarket" in app_js
+    assert "baseMarketIconMarkup" in app_js
+    assert "baseMarketPriceText" in app_js
+    assert "base-market-title-line" in app_js
+    assert "if (state.mainView === 'lots') {\n    renderLotSubtabs();" in app_js
+    assert "state.lotSubtab === 'bases'" in app_js
+    assert "refreshBaseMarket(false)" in app_js
+    assert "sellerLotsTab: 'Предметы'" in i18n_js
+    assert "sellerLotsTitle: 'Предметы'" in i18n_js
+    assert "baseTrackSaved: 'Основа добавлена в отслеживание.'" in i18n_js
+    assert "baseMarketPricesPending: 'цены ожидают ответа trade2'" in i18n_js
+
+
 def test_russian_ui_translates_internal_risk_flags() -> None:
     root = Path(__file__).resolve().parents[1]
     app_js = (root / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")

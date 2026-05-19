@@ -164,11 +164,12 @@ def test_funpay_rub_context_requires_profile_opt_in(client_and_session, monkeypa
 
     preferences = client.patch(
         "/api/account/preferences",
-        json={"fiat_rub_enabled": True, "account_target_currency": "divine"},
+        json={"fiat_rub_enabled": True, "account_target_currency": "divine", "default_seller_account": "Seller#1234"},
     )
     assert preferences.status_code == 200
     assert preferences.json()["user"]["fiat_rub_enabled"] is True
     assert preferences.json()["user"]["account_target_currency"] == "divine"
+    assert preferences.json()["user"]["default_seller_account"] == "Seller#1234"
 
     allowed = client.get("/api/account/funpay-rub", params={"league": "Test", "target": "divine"})
     assert allowed.status_code == 200

@@ -9,7 +9,7 @@
     <button class="main-view-tab nav-view-tab active" type="button" data-main-tab="market" data-i18n="marketTab">Рынок</button>
     <button class="main-view-tab nav-view-tab" type="button" data-main-tab="signals" data-i18n="signalsTab">Сигналы</button>
     <button id="ai-nav-tab" class="main-view-tab nav-view-tab d-none" type="button" data-main-tab="ai" data-i18n="aiTab">ИИ</button>
-    <button class="main-view-tab nav-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Лоты продавца</button>
+    <button class="main-view-tab nav-view-tab" type="button" data-main-tab="lots" data-i18n="sellerLotsTab">Предметы</button>
     <button class="main-view-tab nav-view-tab" type="button" data-main-tab="cabinet" data-i18n="cabinetTab">Кабинет</button>
     <button id="admin-nav-tab" class="main-view-tab nav-view-tab d-none" type="button" data-main-tab="admin" data-i18n="adminTab">Админка</button>
   </div>
@@ -67,35 +67,75 @@
     <section id="lot-search-panel" class="lot-panel view-hidden" data-main-view="lots">
       <div class="lot-panel-header">
         <div>
-          <h2 data-i18n="sellerLotsTitle">Поиск лотов продавца</h2>
-          <p data-i18n="sellerLotsHint">Ищем лоты с ценой выкупа из секций сундука и сравниваем с похожими лотами рынка.</p>
+          <h2 data-i18n="sellerLotsTitle">Предметы</h2>
+          <p data-i18n="sellerLotsHint">Показываем лоты с ценой выкупа продавца, рынок чистых основ и оценку скопированного текста предмета.</p>
         </div>
       </div>
-      <div class="lot-search-grid">
-        <label class="form-field">
-          <span data-i18n="sellerAccount">Продавец</span>
-          <input id="lot-seller" class="form-control" type="search" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
-        </label>
-        <label class="form-field">
-          <span data-i18n="lotNameFilter">Название или тип</span>
-          <input id="lot-query" class="form-control" type="search" data-i18n-placeholder="lotNameFilterPlaceholder" placeholder="Необязательно">
-        </label>
-        <label class="form-field">
-          <span data-i18n="lotLimit">Лотов</span>
-          <select id="lot-limit" class="form-select">
-            <option value="3" selected>3</option>
-            <option value="5">5</option>
-            <option value="10">10</option>
-            <option value="20">20</option>
-          </select>
-        </label>
+      <div class="lot-subtabs" role="tablist" aria-label="Лоты и основы">
+        <button class="lot-subtab active" type="button" data-lot-tab="seller" data-i18n="sellerLotsSubtab">Лоты продавца</button>
+        <button class="lot-subtab" type="button" data-lot-tab="bases" data-i18n="baseMarketSubtab">Рынок основ</button>
       </div>
-      <div class="action-row">
-        <button id="search-lots" class="btn btn-primary" type="button" data-i18n="searchSellerLots">Найти лоты</button>
-        <span id="lot-search-status" class="muted-status"></span>
+      <div class="lot-subpanel" data-lot-panel="seller">
+        <div class="lot-search-grid">
+          <label class="form-field">
+            <span data-i18n="sellerAccount">Продавец</span>
+            <input id="lot-seller" class="form-control" type="search" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
+          </label>
+          <label class="form-field">
+            <span data-i18n="lotNameFilter">Название или тип</span>
+            <input id="lot-query" class="form-control" type="search" data-i18n-placeholder="lotNameFilterPlaceholder" placeholder="Фильтр уже найденных лотов">
+          </label>
+          <label class="form-field">
+            <span data-i18n="lotLimit">Лотов</span>
+            <select id="lot-limit" class="form-select">
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200" selected data-i18n="lotLimitAll">Все</option>
+              <option value="3">3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+        </div>
+        <div class="action-row">
+          <button id="search-lots" class="btn btn-primary" type="button" data-i18n="searchSellerLots">Найти лоты</button>
+          <button id="save-lot-default-seller" class="btn btn-outline-light" type="button" data-i18n="saveDefaultSeller">Сохранить продавца</button>
+          <span id="lot-search-status" class="muted-status"></span>
+        </div>
+        <section id="seller-base-summary-panel" class="seller-base-summary-panel"></section>
+        <section id="seller-lot-profile-panel" class="seller-lot-profile-panel"></section>
+        <div id="lot-results" class="lot-results">
+          <p class="text-secondary" data-i18n="sellerLotsEmpty">Введите имя продавца и запустите поиск.</p>
+        </div>
       </div>
-      <div id="lot-results" class="lot-results">
-        <p class="text-secondary" data-i18n="sellerLotsEmpty">Введите имя продавца и запустите поиск.</p>
+      <div class="lot-subpanel d-none" data-lot-panel="bases">
+        <div class="lot-market-grid">
+          <label class="form-field">
+            <span data-i18n="baseMarketSearch">Основа</span>
+            <input id="base-market-query" class="form-control" type="search" data-i18n-placeholder="baseMarketSearchPlaceholder" placeholder="Название базы">
+          </label>
+          <label class="form-field">
+            <span data-i18n="baseMarketMinIlvl">Минимальный ilvl</span>
+            <input id="base-market-min-ilvl" class="form-control" type="number" min="1" max="100" placeholder="82">
+          </label>
+          <label class="form-field">
+            <span data-i18n="baseMarketLimit">Основ</span>
+            <select id="base-market-limit" class="form-select">
+              <option value="20">20</option>
+              <option value="40" selected>40</option>
+              <option value="80">80</option>
+            </select>
+          </label>
+        </div>
+        <div class="action-row">
+          <button id="refresh-base-market" class="btn btn-primary" type="button" data-i18n="refreshBaseMarket">Обновить основы</button>
+          <span id="base-market-status" class="muted-status"></span>
+        </div>
+        <section id="base-market-detail" class="base-market-detail"></section>
+        <div id="base-market-results" class="base-market-results">
+          <p class="text-secondary" data-i18n="baseMarketEmpty">Обновите сводку, чтобы увидеть чистые основы без аффиксов.</p>
+        </div>
       </div>
       <section class="item-parser-panel">
         <div class="cabinet-section-head">
@@ -198,6 +238,11 @@
             <span data-i18n="chartPeriod">Период графиков</span>
             <select id="account-chart-days" class="form-select" data-chart-days-select></select>
           </label>
+          <label class="form-field">
+            <span data-i18n="defaultSellerAccount">Продавец по умолчанию</span>
+            <input id="default-seller-account" class="form-control" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
+          </label>
+          <button id="save-default-seller" class="btn btn-outline-light btn-sm" type="button" data-i18n="saveProfileSettings">Сохранить</button>
           <label class="permission-toggle fiat-rub-toggle">
             <input id="fiat-rub-enabled" type="checkbox">
             <span data-i18n="fiatRubEnabled">Рублевый слой FunPay</span>
@@ -206,6 +251,7 @@
         </div>
         <div class="account-tabs" role="tablist">
           <button class="account-tab active" type="button" data-account-tab="tracking" data-i18n="accountTrackingTab">Закрепленные</button>
+          <button class="account-tab" type="button" data-account-tab="bases" data-i18n="accountBaseTrackingTab">Основы</button>
           <button class="account-tab" type="button" data-account-tab="rub" data-i18n="accountRubTab">Рубли</button>
         </div>
         <section id="rub-market-panel" class="rub-market-panel account-tab-panel d-none" data-account-tab-panel="rub">
@@ -317,6 +363,21 @@
           <div id="telegram-config-status" class="muted-status"></div>
           <div id="notifications-list" class="cabinet-list notification-list"></div>
         </section>
+        </div>
+        <div id="account-bases-tab" class="account-tab-panel d-none" data-account-tab-panel="bases">
+          <section class="cabinet-list-panel">
+            <div class="cabinet-section-head">
+              <div>
+                <h3 data-i18n="trackedBasesTitle">Отслеживание основ</h3>
+                <p class="panel-hint" data-i18n="trackedBasesHint">Чистые основы без аффиксов с графиком нижней цены и быстрым входом в сделку.</p>
+              </div>
+              <label class="chart-period-inline">
+                <span data-i18n="chartPeriod">Период графика</span>
+                <select class="form-select form-select-sm" data-chart-days-select></select>
+              </label>
+            </div>
+            <div id="base-pins-list" class="cabinet-list"></div>
+          </section>
         </div>
         <div id="account-status" class="muted-status"></div>
       </section>

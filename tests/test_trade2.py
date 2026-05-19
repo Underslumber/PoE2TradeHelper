@@ -171,6 +171,18 @@ def test_normalize_item_listing_requires_stash_buyout_price():
 def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():
     assert trade2._normalize_item_listing({"listing": {"price": {"amount": 1, "currency": "exalted"}}, "item": {}}) is None
     assert trade2._normalize_item_listing({"listing": {"stash": {"name": "Tab"}}, "item": {}}) is None
+    assert (
+        trade2._normalize_item_listing(
+            {
+                "listing": {
+                    "stash": {"name": "Tab"},
+                    "price": {"type": "~c/o", "amount": 1, "currency": "exalted"},
+                },
+                "item": {},
+            }
+        )
+        is None
+    )
 
 
 def test_market_price_stats_excludes_same_seller_and_marks_verdict():
@@ -366,6 +378,320 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
 
     assert [lot["price_target"] for lot in strict] == [1.0]
     assert [lot["price_target"] for lot in relaxed] == [1.0, 2.0]
+
+
+def test_manual_seller_lot_profile_requires_selected_stats():
+    target = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [
+            {"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life"},
+            {"id": "explicit.stat_res", "type": "explicit", "text": "+30% to Fire Resistance"},
+        ],
+    }
+    lots = [
+        {
+            "seller": "Other#1",
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 83,
+            "stat_mods": [{"id": "explicit.stat_life", "type": "explicit", "text": "+55 to maximum Life"}],
+            "price_target": 10.0,
+        },
+        {
+            "seller": "Other#2",
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 83,
+            "stat_mods": [{"id": "explicit.stat_res", "type": "explicit", "text": "+35% to Fire Resistance"}],
+            "price_target": 20.0,
+        },
+    ]
+    profile = trade2._manual_stat_profile(
+        preferred_stat_ids="explicit.stat_life",
+        ignored_stat_ids="explicit.stat_res",
+    )
+
+    query = trade2._similar_lots_query(target, "any", looseness=0, profile=profile)
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0, profile=profile)
+    comparison = trade2._comparable_lot_profile(target, looseness=0, profile=profile)
+
+    assert [item["id"] for item in query["stats"][0]["filters"]] == ["explicit.stat_life"]
+    assert [lot["price_target"] for lot in strict] == [10.0]
+    assert comparison["manual_profile"] is True
+    assert comparison["preferred_stat_ids"] == ["explicit.stat_life"]
+    assert comparison["ignored_stat_ids"] == ["explicit.stat_res"]
+
+
+def test_manual_seller_lot_profile_can_ignore_base_type():
+    target = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [{"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life"}],
+    }
+    lots = [
+        {
+            "base_type": "Silk Robe",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [{"id": "explicit.stat_life", "type": "explicit", "text": "+55 to maximum Life"}],
+            "price_target": 10.0,
+        },
+        {
+            "base_type": "Silk Robe",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [{"id": "explicit.stat_res", "type": "explicit", "text": "+35% to Fire Resistance"}],
+            "price_target": 20.0,
+        },
+    ]
+    profile = trade2._manual_stat_profile(preferred_stat_ids="explicit.stat_life", base_mode="ignored")
+
+    query = trade2._similar_lots_query(target, "any", looseness=0, profile=profile)
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0, profile=profile)
+
+    assert "type" not in query
+    assert [lot["price_target"] for lot in strict] == [10.0]
+
+
+def test_manual_seller_lot_profile_can_focus_affix_tier():
+    target = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [
+            {"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life", "tier": "T3", "level": 55},
+        ],
+    }
+    lots = [
+        {
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [
+                {"id": "explicit.stat_life", "type": "explicit", "text": "+52 to maximum Life", "tier": "T3", "level": 55},
+            ],
+            "price_target": 10.0,
+        },
+        {
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [
+                {"id": "explicit.stat_life", "type": "explicit", "text": "+70 to maximum Life", "tier": "T2", "level": 62},
+            ],
+            "price_target": 20.0,
+        },
+    ]
+    profile = trade2._manual_stat_profile(tier_stat_ids="explicit.stat_life")
+
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0, profile=profile)
+    comparison = trade2._comparable_lot_profile(target, looseness=0, profile=profile)
+
+    assert [lot["price_target"] for lot in strict] == [10.0]
+    assert comparison["tier_stat_ids"] == ["explicit.stat_life"]
+
+
+def test_manual_seller_lot_profile_can_limit_affix_value_range():
+    target = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [
+            {"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life", "min": 50.0, "max": 50.0},
+        ],
+    }
+    lots = [
+        {
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [
+                {"id": "explicit.stat_life", "type": "explicit", "text": "+55 to maximum Life", "min": 55.0, "max": 55.0},
+            ],
+            "price_target": 10.0,
+        },
+        {
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 82,
+            "stat_mods": [
+                {"id": "explicit.stat_life", "type": "explicit", "text": "+70 to maximum Life", "min": 70.0, "max": 70.0},
+            ],
+            "price_target": 20.0,
+        },
+    ]
+    profile = trade2._manual_stat_profile(stat_value_ranges='{"explicit.stat_life":{"min":45,"max":60}}')
+
+    query = trade2._similar_lots_query(target, "any", looseness=0, profile=profile)
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0, profile=profile)
+
+    assert query["stats"][0]["filters"][0]["value"] == {"min": 45.0, "max": 60.0}
+    assert [lot["price_target"] for lot in strict] == [10.0]
+
+
+def test_manual_seller_lot_profile_can_match_base_without_properties():
+    target = {
+        "base_type": "Waxed Jacket",
+        "rarity": "Rare",
+        "item_level": 82,
+        "stat_mods": [
+            {"id": "explicit.stat_life", "type": "explicit", "text": "+50 to maximum Life"},
+        ],
+    }
+    lots = [
+        {
+            "base_type": "Waxed Jacket",
+            "rarity": "Rare",
+            "item_level": 83,
+            "stat_mods": [{"id": "explicit.stat_res", "type": "explicit", "text": "+35% to Fire Resistance"}],
+            "price_target": 10.0,
+        },
+        {
+            "base_type": "Silk Robe",
+            "rarity": "Rare",
+            "item_level": 83,
+            "stat_mods": [{"id": "explicit.stat_life", "type": "explicit", "text": "+55 to maximum Life"}],
+            "price_target": 20.0,
+        },
+    ]
+    profile = trade2._manual_stat_profile(base_only=True, base_mode="ignored")
+
+    query = trade2._similar_lots_query(target, "any", looseness=0, profile=profile)
+    strict = trade2._filter_comparable_lots(target, lots, looseness=0, profile=profile)
+    comparison = trade2._comparable_lot_profile(target, looseness=0, profile=profile)
+
+    assert query["type"] == "Waxed Jacket"
+    assert query["stats"][0]["filters"] == []
+    assert [lot["price_target"] for lot in strict] == [10.0]
+    assert comparison["mode"] == "base-only"
+    assert comparison["base_only"] is True
+
+
+def test_seller_base_summaries_rank_by_median_buyout_price():
+    lots = [
+        {"base_type": "Waxed Jacket", "rarity": "Rare", "item_level": 82, "price_target": 10.0, "id": "a"},
+        {"base_type": "Waxed Jacket", "rarity": "Rare", "item_level": 82, "price_target": 12.0, "id": "b"},
+        {"base_type": "Silk Robe", "rarity": "Rare", "item_level": 82, "price_target": 30.0, "id": "c"},
+    ]
+
+    summaries = trade2._seller_base_summaries(lots, "exalted", top=2)
+
+    assert summaries[0]["base_type"] == "Silk Robe"
+    assert summaries[0]["median"] == 30.0
+    assert summaries[1]["base_type"] == "Waxed Jacket"
+    assert summaries[1]["avg"] == 11.0
+    assert summaries[1]["count"] == 2
+
+
+def test_normalize_item_base_catalog_prefers_localized_query_text():
+    payload = {
+        "result": [
+            {
+                "id": "armour",
+                "label": "Armour",
+                "entries": [
+                    {"type": "Waxed Jacket", "text": "Waxed Jacket"},
+                    {"type": "Silk Robe", "text": "Silk Robe"},
+                ],
+            },
+            {
+                "id": "currency",
+                "label": "Currency",
+                "entries": [{"type": "Chaos Orb", "text": "Chaos Orb"}],
+            },
+        ]
+    }
+    localized_payload = {
+        "result": [
+            {
+                "id": "armour",
+                "label": "Броня",
+                "entries": [
+                    {"type": "Вощеная куртка", "text": "Вощеная куртка"},
+                    {"type": "Шелковая роба", "text": "Шелковая роба"},
+                ],
+            }
+        ]
+    }
+
+    bases = trade2.normalize_item_base_catalog(payload, localized_payload)
+
+    assert [base["type"] for base in bases] == ["Silk Robe", "Waxed Jacket"]
+    assert bases[0]["type_ru"] == "Шелковая роба"
+    assert bases[0]["query_type"] == "Шелковая роба"
+    assert all(base["category"] == "armour" for base in bases)
+
+
+def test_item_base_fallback_catalog_is_russian_and_has_icons():
+    bases = trade2._item_base_fallback_catalog()
+
+    first = bases[0]
+    assert first["type"] == "Waxed Jacket"
+    assert first["type_ru"] == "Вощеная куртка"
+    assert first["category_label_ru"] == "Нательная броня"
+    assert first["image"].startswith("data:image/svg+xml")
+    assert first["icon_key"] == "armour"
+    assert all(base["category_label_ru"] != "Fallback" for base in bases)
+
+
+def test_item_base_market_query_uses_normal_rarity_and_priced_buyout():
+    query = trade2._item_base_market_query("Вощеная куртка", "any", min_ilvl=82)
+
+    assert query["type"] == "Вощеная куртка"
+    assert query["stats"][0]["filters"] == []
+    assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
+    assert query["filters"]["type_filters"]["filters"]["rarity"]["option"] == "normal"
+    assert query["filters"]["type_filters"]["filters"]["ilvl"] == {"min": 82}
+
+
+def test_item_base_market_overview_query_does_not_pin_single_base():
+    query = trade2._item_base_market_overview_query("online", min_ilvl=70)
+
+    assert "type" not in query
+    assert query["status"]["option"] == "online"
+    assert query["stats"][0]["filters"] == []
+    assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
+    assert query["filters"]["type_filters"]["filters"]["rarity"]["option"] == "normal"
+    assert query["filters"]["type_filters"]["filters"]["ilvl"] == {"min": 70}
+
+
+def test_clean_item_base_lot_requires_normal_item_without_affixes():
+    clean = {
+        "rarity": "Normal",
+        "implicit_mods": ["10% increased Charm Effect Duration"],
+        "explicit_mods": [],
+        "rune_mods": [],
+        "desecrated_mods": [],
+        "stat_mods": [{"type": "implicit", "id": "implicit.stat_1"}],
+    }
+    rare = {**clean, "rarity": "Rare"}
+    explicit = {**clean, "explicit_mods": ["+10 to maximum Life"]}
+    fractured = {**clean, "stat_mods": [{"type": "fractured", "id": "explicit.stat_1"}]}
+
+    assert trade2._is_clean_item_base_lot(clean) is True
+    assert trade2._is_clean_item_base_lot(rare) is False
+    assert trade2._is_clean_item_base_lot(explicit) is False
+    assert trade2._is_clean_item_base_lot(fractured) is False
+
+
+def test_base_market_stats_store_low_market_as_chart_price():
+    lots = [
+        {"price_target": 5.0},
+        {"price_target": 10.0},
+        {"price_target": 30.0},
+    ]
+
+    stats = trade2._base_market_stats(lots, raw_count=5)
+
+    assert stats["low"] == 5.0
+    assert stats["best"] == 5.0
+    assert stats["median"] == 5.0
+    assert stats["market_median"] == 10.0
+    assert stats["raw_count"] == 5
+    assert stats["clean_count"] == 3
 
 
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():

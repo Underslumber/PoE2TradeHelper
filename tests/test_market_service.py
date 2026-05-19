@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from app.market_service import MarketSnapshotService, MarketSnapshotServiceSettings, known_league_start_ts, select_market_league
 
 
@@ -41,3 +43,16 @@ def test_market_snapshot_service_status_includes_funpay_rub_settings():
     assert status["funpay_rub"]["enabled"] is True
     assert status["funpay_rub"]["target_currency"] == "divine"
     assert status["funpay_rub"]["last_collection_ts"] is None
+
+
+def test_market_snapshot_service_uses_fallback_league_when_refresh_fails(monkeypatch):
+    async def fake_leagues():
+        raise RuntimeError("league endpoint unavailable")
+
+    monkeypatch.setattr("app.market_service.get_trade_leagues", fake_leagues)
+    service = MarketSnapshotService(MarketSnapshotServiceSettings(preferred_league=""))
+
+    asyncio.run(service._refresh_league())
+
+    assert service.current_league == "Fate of the Vaal"
+    assert service.current_league_text == "Fate of the Vaal"

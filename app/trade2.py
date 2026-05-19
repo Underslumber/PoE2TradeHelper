@@ -31,17 +31,95 @@ TRADE_STATIC_CACHE_TTL = 3600
 TRADE_STATIC_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None}
 TRADE_STATIC_LOCK = asyncio.Lock()
 SELLER_LOTS_CACHE_TTL = 900
-SELLER_LOTS_FETCH_LIMIT = 100
+SELLER_LOTS_FETCH_LIMIT = 200
 SELLER_MARKET_CACHE_TTL = 600
 SELLER_MARKET_FETCH_LIMIT = 60
 SELLER_MARKET_MIN_COMPARABLES = 3
 SELLER_MARKET_MAX_STAT_FILTERS = 12
+SELLER_MARKET_PROFILE_MAX_STATS = 24
 SELLER_SNAPSHOT_TIMEOUT = 30
 SELLER_CURRENCY_RATES_TIMEOUT = 20
 SELLER_MARKET_PER_LOT_TIMEOUT = 20
 SELLER_ANALYSIS_BUDGET = 70
+TRADE2_MAX_RETRY_AFTER_WAIT_SECONDS = 8
 SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+INSTANT_BUYOUT_PRICE_TYPES = {"~price", "~b/o"}
+ITEM_BASES_CACHE_TTL = 3600
+ITEM_BASE_MARKET_CATEGORY = "ItemBases"
+ITEM_BASE_MARKET_CACHE_TTL = 900
+ITEM_BASE_MARKET_FETCH_LIMIT = 40
+ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
+ITEM_BASE_MARKET_MAX_BASES = 80
+ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
+ITEM_BASES_LOCK = asyncio.Lock()
+ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+ITEM_BASE_FALLBACKS = [
+    {"type": "Waxed Jacket", "type_ru": "Вощеная куртка", "category": "body-armour", "category_ru": "Нательная броня", "icon_key": "armour"},
+    {"type": "Silk Robe", "type_ru": "Шелковая роба", "category": "body-armour", "category_ru": "Нательная броня", "icon_key": "robe"},
+    {"type": "Votive Raiment", "type_ru": "Обетное одеяние", "category": "body-armour", "category_ru": "Нательная броня", "icon_key": "robe"},
+    {"type": "Feathered Tiara", "type_ru": "Перьевая тиара", "category": "helmet", "category_ru": "Шлемы", "icon_key": "helmet"},
+    {"type": "Hooded Mask", "type_ru": "Маска с капюшоном", "category": "helmet", "category_ru": "Шлемы", "icon_key": "helmet"},
+    {"type": "Wrapped Sandals", "type_ru": "Обмотанные сандалии", "category": "boots", "category_ru": "Обувь", "icon_key": "boots"},
+    {"type": "Rawhide Boots", "type_ru": "Сыромятные сапоги", "category": "boots", "category_ru": "Обувь", "icon_key": "boots"},
+    {"type": "Gold Ring", "type_ru": "Золотое кольцо", "category": "ring", "category_ru": "Кольца", "icon_key": "ring"},
+    {"type": "Sapphire Ring", "type_ru": "Сапфировое кольцо", "category": "ring", "category_ru": "Кольца", "icon_key": "ring"},
+    {"type": "Ruby Ring", "type_ru": "Рубиновое кольцо", "category": "ring", "category_ru": "Кольца", "icon_key": "ring"},
+    {"type": "Emerald Ring", "type_ru": "Изумрудное кольцо", "category": "ring", "category_ru": "Кольца", "icon_key": "ring"},
+    {"type": "Gold Amulet", "type_ru": "Золотой амулет", "category": "amulet", "category_ru": "Амулеты", "icon_key": "amulet"},
+    {"type": "Heavy Belt", "type_ru": "Тяжелый пояс", "category": "belt", "category_ru": "Пояса", "icon_key": "belt"},
+    {"type": "Wide Belt", "type_ru": "Широкий пояс", "category": "belt", "category_ru": "Пояса", "icon_key": "belt"},
+    {"type": "Quarterstaff", "type_ru": "Боевой посох", "category": "weapon", "category_ru": "Оружие", "icon_key": "staff"},
+    {"type": "Volant Quarterstaff", "type_ru": "Летучий боевой посох", "category": "weapon", "category_ru": "Оружие", "icon_key": "staff"},
+    {"type": "Sceptre", "type_ru": "Скипетр", "category": "weapon", "category_ru": "Оружие", "icon_key": "sceptre"},
+    {"type": "Wand", "type_ru": "Жезл", "category": "weapon", "category_ru": "Оружие", "icon_key": "wand"},
+    {"type": "Shortbow", "type_ru": "Короткий лук", "category": "weapon", "category_ru": "Оружие", "icon_key": "bow"},
+    {"type": "Crossbow", "type_ru": "Арбалет", "category": "weapon", "category_ru": "Оружие", "icon_key": "crossbow"},
+    {"type": "Focus", "type_ru": "Фокус", "category": "focus", "category_ru": "Фокусы", "icon_key": "focus"},
+    {"type": "Buckler", "type_ru": "Баклер", "category": "shield", "category_ru": "Щиты", "icon_key": "shield"},
+]
+
+ITEM_BASE_RU = {str(item["type"]): str(item["type_ru"]) for item in ITEM_BASE_FALLBACKS}
+ITEM_BASE_CATEGORY_RU = {
+    "armour": "Броня",
+    "body-armour": "Нательная броня",
+    "body armour": "Нательная броня",
+    "helmet": "Шлемы",
+    "helmets": "Шлемы",
+    "boots": "Обувь",
+    "gloves": "Перчатки",
+    "ring": "Кольца",
+    "rings": "Кольца",
+    "amulet": "Амулеты",
+    "amulets": "Амулеты",
+    "belt": "Пояса",
+    "belts": "Пояса",
+    "weapon": "Оружие",
+    "weapons": "Оружие",
+    "focus": "Фокусы",
+    "focuses": "Фокусы",
+    "shield": "Щиты",
+    "shields": "Щиты",
+    "fallback": "Резервный каталог",
+}
+ITEM_BASE_ICON_STYLES = {
+    "armour": ("#60a5fa", "ARM"),
+    "robe": ("#a78bfa", "ROB"),
+    "helmet": ("#f59e0b", "HLM"),
+    "boots": ("#22c55e", "BOT"),
+    "ring": ("#facc15", "RNG"),
+    "amulet": ("#fb7185", "AMU"),
+    "belt": ("#c084fc", "BLT"),
+    "staff": ("#38bdf8", "STF"),
+    "sceptre": ("#f97316", "SCP"),
+    "wand": ("#818cf8", "WND"),
+    "bow": ("#34d399", "BOW"),
+    "crossbow": ("#2dd4bf", "XBW"),
+    "focus": ("#e879f9", "FOC"),
+    "shield": ("#93c5fd", "SHD"),
+    "base": ("#94a3b8", "BAS"),
+}
 
 COMPARABLE_STAT_TYPES = ("explicit", "fractured", "implicit", "rune", "desecrated")
 IMPORTANT_STAT_RE = re.compile(
@@ -66,6 +144,15 @@ POE_NINJA_CATEGORY_TYPES = {
     "Delirium": "Delirium",
     "Breach": "Breach",
 }
+
+
+def _retry_after_wait(response: httpx.Response, context: str, fallback: int = 4) -> int:
+    retry_after = response.headers.get("Retry-After")
+    wait = int(retry_after) if retry_after and retry_after.isdigit() else fallback
+    if wait > TRADE2_MAX_RETRY_AFTER_WAIT_SECONDS:
+        suffix = f"; retry after {retry_after}s" if retry_after else ""
+        raise RuntimeError(f"{context} rate limited{suffix}")
+    return wait
 
 
 CATEGORY_RU = {
@@ -231,8 +318,7 @@ async def get_trade_leagues() -> list[dict[str, str]]:
             async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
                 response = await client.get(f"{TRADE2_BASE}/data/leagues")
                 if response.status_code == 429 and attempt < 2:
-                    retry_after = response.headers.get("Retry-After")
-                    wait = int(retry_after) if retry_after and retry_after.isdigit() else 2 * (attempt + 1)
+                    wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
                     await asyncio.sleep(wait)
                     continue
                 response.raise_for_status()
@@ -291,8 +377,7 @@ async def _post_exchange(
     async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
         response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
         if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            wait = int(retry_after) if retry_after and retry_after.isdigit() else 4
+            wait = _retry_after_wait(response, "trade2 exchange")
             await asyncio.sleep(wait)
             response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
         response.raise_for_status()
@@ -432,8 +517,7 @@ async def _post_search(
     async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
         response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
         if response.status_code == 429:
-            retry_after = response.headers.get("Retry-After")
-            wait = int(retry_after) if retry_after and retry_after.isdigit() else 4
+            wait = _retry_after_wait(response, "trade2 search")
             await asyncio.sleep(wait)
             response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
         response.raise_for_status()
@@ -451,8 +535,7 @@ async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> 
             chunk = ",".join(chunk_ids)
             response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
             if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                wait = int(retry_after) if retry_after and retry_after.isdigit() else 4
+                wait = _retry_after_wait(response, "trade2 fetch")
                 await asyncio.sleep(wait)
                 response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
             response.raise_for_status()
@@ -475,6 +558,647 @@ def _priced_trade_filters(extra: dict[str, Any] | None = None) -> dict[str, Any]
     return filters
 
 
+def _base_market_item_id(value: str) -> str:
+    text = _clean_trade_text(value).lower()
+    text = re.sub(r"[^0-9a-zа-яё]+", "-", text, flags=re.IGNORECASE)
+    text = text.strip("-")
+    return f"base:{text or 'unknown'}"
+
+
+def _item_base_icon_key(category_id: str = "", label: str = "", base_type: str = "") -> str:
+    value = f"{category_id} {label} {base_type}".lower()
+    if "ring" in value or "кольц" in value:
+        return "ring"
+    if "amulet" in value or "амулет" in value:
+        return "amulet"
+    if "belt" in value or "пояс" in value:
+        return "belt"
+    if "boot" in value or "sandals" in value or "сапог" in value or "сандал" in value:
+        return "boots"
+    if "helmet" in value or "tiara" in value or "mask" in value or "шлем" in value or "тиар" in value or "маск" in value:
+        return "helmet"
+    if "robe" in value or "raiment" in value or "одея" in value or "роб" in value:
+        return "robe"
+    if "armour" in value or "body" in value or "jacket" in value or "брон" in value or "куртк" in value:
+        return "armour"
+    if "crossbow" in value or "арбалет" in value:
+        return "crossbow"
+    if "shortbow" in value or "bow" in value or "лук" in value:
+        return "bow"
+    if "quarterstaff" in value or "staff" in value or "посох" in value:
+        return "staff"
+    if "sceptre" in value or "скипетр" in value:
+        return "sceptre"
+    if "wand" in value or "жезл" in value:
+        return "wand"
+    if "focus" in value or "фокус" in value:
+        return "focus"
+    if "shield" in value or "buckler" in value or "щит" in value or "баклер" in value:
+        return "shield"
+    return "base"
+
+
+def _item_base_icon_data_url(icon_key: str) -> str:
+    color, label = ITEM_BASE_ICON_STYLES.get(icon_key, ITEM_BASE_ICON_STYLES["base"])
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+        "<rect width='64' height='64' rx='10' fill='#0b1720'/>"
+        f"<circle cx='32' cy='26' r='18' fill='{color}' fill-opacity='.22' stroke='{color}' stroke-width='3'/>"
+        f"<text x='32' y='48' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' font-weight='700' fill='{color}'>{label}</text>"
+        "</svg>"
+    )
+    return f"data:image/svg+xml;utf8,{quote(svg, safe='')}"
+
+
+def _item_base_category_ru(category_id: str, label: str) -> str:
+    key_values = [category_id.lower(), label.lower()]
+    for key in key_values:
+        if key in ITEM_BASE_CATEGORY_RU:
+            return ITEM_BASE_CATEGORY_RU[key]
+    return ITEM_BASE_CATEGORY_RU.get(_item_base_icon_key(category_id, label), label or "Основы")
+
+
+def _item_base_fallback_catalog() -> list[dict[str, Any]]:
+    bases = []
+    for item in ITEM_BASE_FALLBACKS:
+        icon_key = str(item.get("icon_key") or "base")
+        base_type = str(item["type"])
+        bases.append(
+            {
+                "id": _base_market_item_id(base_type),
+                "type": base_type,
+                "type_ru": str(item.get("type_ru") or ITEM_BASE_RU.get(base_type) or base_type),
+                "query_type": base_type,
+                "category": str(item.get("category") or "fallback"),
+                "category_label": "Fallback",
+                "category_label_ru": str(item.get("category_ru") or "Резервный каталог"),
+                "icon_key": icon_key,
+                "image": _item_base_icon_data_url(icon_key),
+            }
+        )
+    return bases
+
+
+def _entry_text(entry: dict[str, Any]) -> str:
+    return str(entry.get("text") or entry.get("name") or entry.get("type") or "").strip()
+
+
+def _entry_query_text(entry: dict[str, Any]) -> str:
+    return str(entry.get("type") or entry.get("text") or entry.get("name") or "").strip()
+
+
+def _skip_item_base_category(category_id: str, label: str) -> bool:
+    value = f"{category_id} {label}".lower()
+    return bool(
+        re.search(
+            r"currency|fragment|gem|flask|map|waystone|tablet|rune|soul|"
+            r"essence|omen|delirium|breach|expedition|ritual|ultimatum|"
+            r"sanctum|relic|card|hideout|microtransaction",
+            value,
+        )
+    )
+
+
+def normalize_item_base_catalog(
+    payload: dict[str, Any] | None,
+    localized_payload: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    localized_categories = {
+        category.get("id"): category
+        for category in (localized_payload or {}).get("result", [])
+        if category.get("id")
+    }
+    bases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for category in payload.get("result", []):
+        category_id = str(category.get("id") or "").strip()
+        category_label = str(category.get("label") or category.get("text") or category_id).strip()
+        if not category_id or _skip_item_base_category(category_id, category_label):
+            continue
+        entries = category.get("entries") or []
+        localized_entries = (localized_categories.get(category_id) or {}).get("entries") or []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            text = _entry_text(entry)
+            query_type = _entry_query_text(entry) or text
+            if not text or not query_type:
+                continue
+            localized_entry = localized_entries[index] if index < len(localized_entries) and isinstance(localized_entries[index], dict) else {}
+            text_ru = _entry_text(localized_entry) or ITEM_BASE_RU.get(text) or text
+            query_type_ru = _entry_query_text(localized_entry) or ITEM_BASE_RU.get(query_type) or text_ru
+            key = _lookup_text_key(query_type)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            icon_key = _item_base_icon_key(category_id, category_label, query_type)
+            image = _image_url(entry.get("image") or entry.get("icon") or localized_entry.get("image") or localized_entry.get("icon"))
+            bases.append(
+                {
+                    "id": _base_market_item_id(query_type),
+                    "type": text,
+                    "type_ru": text_ru,
+                    "query_type": query_type_ru or query_type,
+                    "category": category_id,
+                    "category_label": category_label,
+                    "category_label_ru": str((localized_categories.get(category_id) or {}).get("label") or _item_base_category_ru(category_id, category_label)),
+                    "icon_key": icon_key,
+                    "image": image or _item_base_icon_data_url(icon_key),
+                }
+            )
+    bases.sort(key=lambda item: (_lookup_text_key(item.get("category_label")), _lookup_text_key(item.get("type"))))
+    return bases
+
+
+async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]:
+    base_url = TRADE2_RU_BASE if locale == "ru" else TRADE2_BASE
+    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+        response = await client.get(f"{base_url}/data/items")
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            suffix = f"; retry after {retry_after}s" if retry_after else ""
+            raise RuntimeError(f"trade2 item catalog rate limited{suffix}")
+        response.raise_for_status()
+    return response.json()
+
+
+async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]:
+    q = q.strip()
+    limit = max(1, min(limit, 1000))
+    cached = ITEM_BASES_CACHE.get("data")
+    if cached and time.time() - float(ITEM_BASES_CACHE.get("created_ts") or 0) < ITEM_BASES_CACHE_TTL:
+        bases = list(cached)
+        errors = list(ITEM_BASES_CACHE.get("errors") or [])
+    else:
+        async with ITEM_BASES_LOCK:
+            cached = ITEM_BASES_CACHE.get("data")
+            if cached and time.time() - float(ITEM_BASES_CACHE.get("created_ts") or 0) < ITEM_BASES_CACHE_TTL:
+                bases = list(cached)
+                errors = list(ITEM_BASES_CACHE.get("errors") or [])
+            else:
+                errors = []
+                en_payload = None
+                ru_payload = None
+                for locale in ("en", "ru"):
+                    try:
+                        payload = await _fetch_item_base_catalog_payload(locale)
+                        if locale == "en":
+                            en_payload = payload
+                        else:
+                            ru_payload = payload
+                    except Exception as exc:
+                        errors.append({"source": f"trade2/data/items:{locale}", "error": str(exc)})
+                bases = normalize_item_base_catalog(en_payload, ru_payload)
+                source = "trade2/data/items"
+                if not bases:
+                    bases = _item_base_fallback_catalog()
+                    source = "fallback"
+                ITEM_BASES_CACHE["created_ts"] = time.time()
+                ITEM_BASES_CACHE["data"] = bases
+                ITEM_BASES_CACHE["errors"] = errors
+                ITEM_BASES_CACHE["source"] = source
+    filtered = _filter_item_bases(bases, q)
+    return {
+        "schema_version": "poe2-item-base-catalog/v1",
+        "source": ITEM_BASES_CACHE.get("source") or "trade2/data/items",
+        "total": len(bases),
+        "matched_total": len(filtered),
+        "bases": filtered[:limit],
+        "errors": errors,
+    }
+
+
+def _filter_item_bases(bases: list[dict[str, Any]], q: str) -> list[dict[str, Any]]:
+    q = q.strip().lower()
+    if not q:
+        return list(bases)
+    return [
+        base
+        for base in bases
+        if q in " ".join(
+            str(base.get(key) or "")
+            for key in ("type", "type_ru", "query_type", "category", "category_label", "category_label_ru")
+        ).lower()
+    ]
+
+
+def _item_base_market_query(base_type: str, status: str, min_ilvl: int | None = None) -> dict[str, Any]:
+    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
+    if min_ilvl is not None and min_ilvl > 0:
+        type_filters["ilvl"] = {"min": min_ilvl}
+    filters = _priced_trade_filters()
+    filters["type_filters"] = {"filters": type_filters}
+    return {
+        "status": {"option": status},
+        "type": base_type,
+        "stats": [{"type": "and", "filters": []}],
+        "filters": filters,
+    }
+
+
+def _item_base_market_overview_query(status: str, min_ilvl: int | None = None) -> dict[str, Any]:
+    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
+    if min_ilvl is not None and min_ilvl > 0:
+        type_filters["ilvl"] = {"min": min_ilvl}
+    filters = _priced_trade_filters()
+    filters["type_filters"] = {"filters": type_filters}
+    return {
+        "status": {"option": status},
+        "stats": [{"type": "and", "filters": []}],
+        "filters": filters,
+    }
+
+
+def _is_clean_item_base_lot(lot: dict[str, Any]) -> bool:
+    if _rarity_option(lot.get("rarity")) != "normal":
+        return False
+    if lot.get("corrupted"):
+        return False
+    if lot.get("explicit_mods") or lot.get("rune_mods") or lot.get("desecrated_mods"):
+        return False
+    for mod in lot.get("stat_mods") or []:
+        if mod.get("type") in {"explicit", "fractured", "rune", "desecrated", "enchant"}:
+            return False
+    return True
+
+
+def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, Any]:
+    raw_values = sorted(lot["price_target"] for lot in lots if isinstance(lot.get("price_target"), float))
+    values, outliers = _trim_price_outliers(raw_values)
+    if not values:
+        return {
+            "count": 0,
+            "raw_count": raw_count,
+            "clean_count": len(lots),
+            "outliers": outliers,
+            "low": None,
+            "best": None,
+            "median": None,
+            "market_median": None,
+            "avg": None,
+            "p25": None,
+            "p75": None,
+            "max": None,
+            "offers": len(lots),
+            "volume": len(lots),
+            "confidence": "insufficient",
+        }
+    return {
+        "count": len(values),
+        "raw_count": raw_count,
+        "clean_count": len(lots),
+        "outliers": outliers,
+        "low": values[0],
+        "best": values[0],
+        "median": values[0],
+        "market_median": statistics.median(values),
+        "avg": statistics.mean(values),
+        "p25": _percentile(values, 0.25),
+        "p75": _percentile(values, 0.75),
+        "max": values[-1],
+        "offers": len(lots),
+        "volume": len(lots),
+        "confidence": "medium" if len(values) >= 8 else "low" if len(values) >= 3 else "insufficient",
+    }
+
+
+def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": lot.get("id"),
+            "seller": lot.get("seller"),
+            "stash": lot.get("stash"),
+            "indexed": lot.get("indexed"),
+            "item_level": lot.get("item_level"),
+            "price_amount": lot.get("price_amount"),
+            "price_currency": lot.get("price_currency"),
+            "price_target": lot.get("price_target"),
+        }
+        for lot in clean_lots[:6]
+    ]
+
+
+def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None) -> dict[str, Any]:
+    query_type = str(base.get("query_type") or base.get("type") or base.get("type_ru") or "").strip()
+    return {
+        "id": base.get("id") or _base_market_item_id(query_type),
+        "text": base.get("type") or query_type,
+        "text_ru": base.get("type_ru") or ITEM_BASE_RU.get(str(base.get("type") or "")) or query_type,
+        "query_type": query_type,
+        "category": base.get("category") or "",
+        "category_label": base.get("category_label") or "",
+        "category_label_ru": base.get("category_label_ru") or _item_base_category_ru(str(base.get("category") or ""), str(base.get("category_label") or "")),
+        "icon_key": base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), query_type),
+        "image": base.get("image") or "",
+        "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
+        "basis_ru": "обычная чистая основа без явных, рунных и оскверненных свойств",
+        "min_ilvl": min_ilvl,
+    }
+
+
+def _base_market_row_keys(row: dict[str, Any]) -> set[str]:
+    return {
+        key
+        for key in (
+            _lookup_text_key(row.get("text")),
+            _lookup_text_key(row.get("text_ru")),
+            _lookup_text_key(row.get("query_type")),
+        )
+        if key
+    }
+
+
+async def _fetch_item_base_market_overview(
+    league: str,
+    target: str,
+    status: str,
+    rates: dict[str, float],
+    min_ilvl: int | None = None,
+) -> dict[str, Any]:
+    market_search = await _post_search(league, _item_base_market_overview_query(status, min_ilvl=min_ilvl))
+    market_items = await _fetch_trade_items(
+        market_search.get("result") or [],
+        market_search.get("id") or "",
+        limit=ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT,
+    )
+    lots = [_normalize_item_listing(item) for item in market_items]
+    grouped_raw: dict[str, list[dict[str, Any]]] = {}
+    grouped_clean: dict[str, list[dict[str, Any]]] = {}
+    group_names: dict[str, str] = {}
+    group_icons: dict[str, str] = {}
+    for lot in lots:
+        if not lot:
+            continue
+        base_name = _clean_trade_text(lot.get("base_type") or lot.get("type_line") or lot.get("display_name"))
+        key = _lookup_text_key(base_name)
+        if not key:
+            continue
+        grouped_raw.setdefault(key, []).append(lot)
+        group_names.setdefault(key, base_name)
+        if lot.get("icon"):
+            group_icons.setdefault(key, lot["icon"])
+        if _is_clean_item_base_lot(lot):
+            priced_lot = _apply_target_price(lot, rates, target)
+            if isinstance(priced_lot.get("price_target"), float):
+                grouped_clean.setdefault(key, []).append(priced_lot)
+
+    rows_by_key = {}
+    for key, clean_lots in grouped_clean.items():
+        base_name = group_names.get(key) or key
+        icon_key = _item_base_icon_key(base_type=base_name)
+        row = {
+            "id": _base_market_item_id(base_name),
+            "text": base_name,
+            "text_ru": ITEM_BASE_RU.get(base_name) or base_name,
+            "query_type": base_name,
+            "category": "market-overview",
+            "category_label": "Market overview",
+            "category_label_ru": "С рынка",
+            "icon_key": icon_key,
+            "image": group_icons.get(key) or _item_base_icon_data_url(icon_key),
+            "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
+            "basis_ru": "обычная чистая основа без явных, рунных и оскверненных свойств",
+            "min_ilvl": min_ilvl,
+            **_base_market_stats(clean_lots, raw_count=len(grouped_raw.get(key) or [])),
+            "query_id": market_search.get("id"),
+            "total": market_search.get("total") or len(lots),
+            "sample_lots": _base_market_sample_lots(clean_lots),
+        }
+        rows_by_key[key] = row
+    return {
+        "query_id": market_search.get("id"),
+        "total": market_search.get("total") or len(lots),
+        "rows_by_key": rows_by_key,
+    }
+
+
+async def _fetch_item_base_market_row(
+    league: str,
+    base: dict[str, Any],
+    target: str,
+    status: str,
+    rates: dict[str, float],
+    min_ilvl: int | None = None,
+) -> dict[str, Any]:
+    row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+    query_type = str(row.get("query_type") or "").strip()
+    if not query_type:
+        return {**row, **_base_market_stats([], 0), "sample_lots": [], "error": "base type is empty"}
+    try:
+        market_search = await _post_search(
+            league,
+            _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
+        )
+        market_items = await _fetch_trade_items(
+            market_search.get("result") or [],
+            market_search.get("id") or "",
+            limit=ITEM_BASE_MARKET_FETCH_LIMIT,
+        )
+    except Exception as exc:
+        return {**row, **_base_market_stats([], 0), "sample_lots": [], "error": str(exc)}
+
+    lots = [_normalize_item_listing(item) for item in market_items]
+    clean_lots = [
+        _apply_target_price(lot, rates, target)
+        for lot in lots
+        if lot and _is_clean_item_base_lot(lot)
+    ]
+    clean_lots = [lot for lot in clean_lots if isinstance(lot.get("price_target"), float)]
+    stats = _base_market_stats(clean_lots, raw_count=len(lots))
+    return {
+        **row,
+        **stats,
+        "query_id": market_search.get("id"),
+        "total": market_search.get("total") or len(lots),
+        "sample_lots": _base_market_sample_lots(clean_lots),
+    }
+
+
+async def get_item_base_market(
+    league: str,
+    target: str = "exalted",
+    status: str = "any",
+    q: str = "",
+    limit: int = 40,
+    min_ilvl: int | None = None,
+    force_refresh: bool = False,
+) -> dict[str, Any]:
+    q = q.strip()
+    limit = max(1, min(limit, ITEM_BASE_MARKET_MAX_BASES))
+    min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
+    cache_key = (league, target, status, q.lower(), limit, min_ilvl)
+    canonical_cache_key = (league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
+    default_cache_key = (league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, None)
+    if not force_refresh:
+        cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
+        if not cached and cache_key != canonical_cache_key:
+            cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
+        if not cached and min_ilvl is not None:
+            cached = ITEM_BASE_MARKET_CACHE.get(default_cache_key)
+        if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
+            payload = _cache_copy(cached["data"])
+            rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
+            if min_ilvl is not None:
+                rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+            payload["rows"] = rows[:limit]
+            payload["matched_total"] = len(rows)
+            payload["cached"] = True
+            return payload
+        latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+        if latest:
+            rows = _filter_item_base_market_rows(latest.get("rows") or [], q)
+            if min_ilvl is not None:
+                rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+            rows = sorted(rows, key=lambda row: _to_float(row.get("low")) or _to_float(row.get("best")) or 0, reverse=True)
+            return {
+                **latest,
+                "schema_version": "poe2-item-base-market/v1",
+                "category": ITEM_BASE_MARKET_CATEGORY,
+                "rows": rows[:limit],
+                "matched_total": len(rows),
+                "catalog_total": len(rows),
+                "basis": "stored clean normal bases, price chart uses low market",
+                "cached": True,
+                "stored": True,
+            }
+        return {
+            "schema_version": "poe2-item-base-market/v1",
+            "created_ts": None,
+            "league": league,
+            "category": ITEM_BASE_MARKET_CATEGORY,
+            "target": target,
+            "status": status,
+            "rows": [],
+            "matched_total": 0,
+            "catalog_total": 0,
+            "priced_total": 0,
+            "basis": "stored clean normal bases, price chart uses low market",
+            "source": "stored",
+            "errors": [],
+            "cached": False,
+            "stored": False,
+        }
+
+    catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_MARKET_MAX_BASES)
+    bases = catalog.get("bases") or []
+    selected_bases = bases[:ITEM_BASE_MARKET_MAX_BASES]
+    catalog_errors = list(catalog.get("errors") or [])
+    try:
+        currency_rates = await asyncio.wait_for(
+            get_category_rates(league=league, category="Currency", target=target, status="any"),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        )
+        rates = _currency_rates_by_id(currency_rates, target)
+    except Exception:
+        rates = {target: 1.0}
+
+    errors = catalog_errors
+    overview_rows: dict[str, dict[str, Any]] = {}
+    overview_query_id = None
+    try:
+        overview = await _fetch_item_base_market_overview(league, target, status, rates, min_ilvl=min_ilvl)
+        overview_rows = dict(overview.get("rows_by_key") or {})
+        overview_query_id = overview.get("query_id")
+    except Exception as exc:
+        errors.append({"source": "trade2/search", "error": str(exc)})
+
+    rows: list[dict[str, Any]] = []
+    consumed_overview_keys: set[str] = set()
+    overview_error = next((item.get("error") for item in errors if item.get("source") == "trade2/search"), None)
+    for base in selected_bases:
+        row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+        overview_row = next((overview_rows[key] for key in _base_market_row_keys(row) if key in overview_rows), None)
+        if overview_row:
+            consumed_overview_keys.update(_base_market_row_keys(overview_row))
+            row = {
+                **row,
+                **{key: value for key, value in overview_row.items() if value not in (None, "", [])},
+                "id": row.get("id") or overview_row.get("id"),
+                "text": row.get("text") or overview_row.get("text"),
+                "text_ru": row.get("text_ru") or overview_row.get("text_ru"),
+                "category": row.get("category") or overview_row.get("category"),
+                "category_label": row.get("category_label") or overview_row.get("category_label"),
+                "category_label_ru": row.get("category_label_ru") or overview_row.get("category_label_ru"),
+                "icon_key": row.get("icon_key") or overview_row.get("icon_key"),
+                "image": overview_row.get("image") or row.get("image"),
+            }
+        else:
+            row = {**row, **_base_market_stats([], 0), "sample_lots": []}
+            if overview_error:
+                row["error"] = overview_error
+        rows.append(row)
+
+    for key, overview_row in overview_rows.items():
+        if key in consumed_overview_keys:
+            continue
+        rows.append(overview_row)
+
+    priced_rows = [row for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
+    unpriced_rows = [row for row in rows if row not in priced_rows]
+    priced_rows.sort(key=lambda row: _to_float(row.get("low")) or _to_float(row.get("best")) or 0, reverse=True)
+    unpriced_rows.sort(key=lambda row: _lookup_text_key(row.get("text_ru") or row.get("text")))
+    rows = priced_rows + unpriced_rows
+    created_ts = time.time()
+    snapshot_rows = priced_rows
+    snapshot = {
+        "created_ts": created_ts,
+        "league": league,
+        "category": ITEM_BASE_MARKET_CATEGORY,
+        "target": target,
+        "status": status,
+        "source": "trade2/search+fetch:overview",
+        "query_ids": [item for item in [overview_query_id] if item],
+        "errors": errors,
+        "rows": snapshot_rows,
+    }
+    if snapshot_rows:
+        log_market_history(snapshot, history_path=HISTORY_PATH)
+    full_result = {
+        "schema_version": "poe2-item-base-market/v1",
+        "created_ts": created_ts,
+        "league": league,
+        "category": ITEM_BASE_MARKET_CATEGORY,
+        "target": target,
+        "status": status,
+        "rows": rows,
+        "matched_total": len(rows),
+        "catalog_total": catalog.get("total") or len(rows),
+        "priced_total": len(snapshot_rows),
+        "basis": "normal rarity, clean item bases without explicit/rune/desecrated affixes; chart stores low market",
+        "source": "trade2/search+fetch:overview",
+        "catalog_source": catalog.get("source"),
+        "errors": errors,
+        "cached": False,
+    }
+    cache_created_ts = time.time()
+    ITEM_BASE_MARKET_CACHE[canonical_cache_key] = {"created_ts": cache_created_ts, "data": full_result}
+    filtered_rows = _filter_item_base_market_rows(rows, q)
+    matched_total = len(filtered_rows)
+    result = {
+        **full_result,
+        "rows": filtered_rows[:limit],
+        "matched_total": matched_total,
+    }
+    ITEM_BASE_MARKET_CACHE[cache_key] = {"created_ts": cache_created_ts, "data": result}
+    return _cache_copy(result)
+
+
+def _filter_item_base_market_rows(rows: list[dict[str, Any]], q: str) -> list[dict[str, Any]]:
+    q = q.strip().lower()
+    if not q:
+        return list(rows)
+    return [
+        row
+        for row in rows
+        if q in " ".join(
+            str(row.get(key) or "")
+            for key in ("text", "text_ru", "query_type", "category", "category_label", "category_label_ru")
+        ).lower()
+    ]
+
+
 def _seller_lots_query(seller: str, text: str, status: str, text_field: str = "type") -> dict[str, Any]:
     query: dict[str, Any] = {
         "status": {"option": status},
@@ -495,10 +1219,22 @@ def _rarity_option(rarity: str | None) -> str | None:
     return value if value in {"normal", "magic", "rare", "unique"} else None
 
 
-def _stat_filter(stat_id: str, weight: float | None = None) -> dict[str, Any]:
+def _stat_filter(
+    stat_id: str,
+    weight: float | None = None,
+    value_range: dict[str, float | None] | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"id": stat_id, "disabled": False}
+    value: dict[str, Any] = {}
     if weight is not None:
-        payload["value"] = {"weight": weight}
+        value["weight"] = weight
+    if value_range:
+        if value_range.get("min") is not None:
+            value["min"] = value_range["min"]
+        if value_range.get("max") is not None:
+            value["max"] = value_range["max"]
+    if value:
+        payload["value"] = value
     return payload
 
 
@@ -524,6 +1260,113 @@ def _stat_mod_priority(mod: dict[str, Any]) -> int:
         elif tier_num >= 7:
             score -= 10
     return score
+
+
+def _normalize_profile_stat_ids(values: Any) -> tuple[str, ...]:
+    if values in (None, ""):
+        return ()
+    if isinstance(values, str):
+        raw_values = re.split(r"[\s,]+", values)
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = []
+        for value in values:
+            raw_values.extend(re.split(r"[\s,]+", str(value or "")))
+    else:
+        raw_values = [str(values)]
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in raw_values:
+        stat_id = str(value or "").strip()
+        if not stat_id or stat_id in seen or len(stat_id) > 140:
+            continue
+        if not re.match(r"^[A-Za-z0-9_.:-]+$", stat_id):
+            continue
+        seen.add(stat_id)
+        result.append(stat_id)
+        if len(result) >= SELLER_MARKET_PROFILE_MAX_STATS:
+            break
+    return tuple(result)
+
+
+def _normalize_stat_value_ranges(values: Any) -> dict[str, dict[str, float | None]]:
+    if values in (None, ""):
+        return {}
+    if isinstance(values, str):
+        try:
+            values = json.loads(values)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(values, dict):
+        return {}
+
+    result: dict[str, dict[str, float | None]] = {}
+    for raw_stat_id, raw_range in values.items():
+        stat_ids = _normalize_profile_stat_ids([raw_stat_id])
+        if not stat_ids or not isinstance(raw_range, dict):
+            continue
+        min_value = _to_float(raw_range.get("min"))
+        max_value = _to_float(raw_range.get("max"))
+        if min_value is None and max_value is None:
+            continue
+        if min_value is not None and max_value is not None and min_value > max_value:
+            min_value, max_value = max_value, min_value
+        result[stat_ids[0]] = {"min": min_value, "max": max_value}
+    return result
+
+
+def _manual_stat_profile(
+    preferred_stat_ids: Any = None,
+    ignored_stat_ids: Any = None,
+    base_mode: Any = None,
+    tier_stat_ids: Any = None,
+    stat_value_ranges: Any = None,
+    base_only: Any = None,
+) -> dict[str, Any]:
+    tier_stats = _normalize_profile_stat_ids(tier_stat_ids)
+    ranges = _normalize_stat_value_ranges(stat_value_ranges)
+    preferred = _normalize_profile_stat_ids(preferred_stat_ids)
+    preferred_set = set(preferred)
+    for stat_id in [*tier_stats, *ranges.keys()]:
+        if stat_id not in preferred_set:
+            preferred_set.add(stat_id)
+            preferred = (*preferred, stat_id)
+    ignored = tuple(
+        stat_id
+        for stat_id in _normalize_profile_stat_ids(ignored_stat_ids)
+        if stat_id not in preferred_set
+    )
+    normalized_base_mode = str(base_mode or "default").strip().lower()
+    if normalized_base_mode not in {"default", "required", "ignored"}:
+        normalized_base_mode = "default"
+    normalized_base_only = str(base_only or "").strip().lower() in {"1", "true", "yes", "on"}
+    return {
+        "preferred_stat_ids": preferred,
+        "ignored_stat_ids": ignored,
+        "base_mode": normalized_base_mode,
+        "tier_stat_ids": tier_stats,
+        "stat_value_ranges": ranges,
+        "base_only": normalized_base_only,
+    }
+
+
+def _profile_has_rules(profile: dict[str, Any] | None) -> bool:
+    if not profile:
+        return False
+    return bool(
+        profile.get("preferred_stat_ids")
+        or profile.get("ignored_stat_ids")
+        or profile.get("base_mode") in {"required", "ignored"}
+        or profile.get("tier_stat_ids")
+        or profile.get("stat_value_ranges")
+        or profile.get("base_only")
+    )
+
+
+def _profile_requires_base(profile: dict[str, Any] | None) -> bool:
+    if (profile or {}).get("base_only"):
+        return True
+    return (profile or {}).get("base_mode") != "ignored"
 
 
 def _item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -586,27 +1429,48 @@ def _item_stat_mods(item: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _lot_key_stat_mods(lot: dict[str, Any], max_count: int = SELLER_MARKET_MAX_STAT_FILTERS) -> list[dict[str, Any]]:
+def _lot_key_stat_mods(
+    lot: dict[str, Any],
+    max_count: int = SELLER_MARKET_MAX_STAT_FILTERS,
+    profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
+    if (profile or {}).get("base_only"):
+        return []
+    preferred = set((profile or {}).get("preferred_stat_ids") or ())
+    ignored = set((profile or {}).get("ignored_stat_ids") or ())
     for mod in lot.get("stat_mods") or []:
         stat_id = mod.get("id")
         kind = mod.get("type")
         if not stat_id or stat_id in seen or kind not in COMPARABLE_STAT_TYPES:
             continue
+        if preferred and stat_id not in preferred:
+            continue
+        if not preferred and stat_id in ignored:
+            continue
         seen.add(stat_id)
         candidates.append(mod)
 
-    candidates.sort(key=_stat_mod_priority, reverse=True)
+    if preferred:
+        preferred_order = {stat_id: index for index, stat_id in enumerate((profile or {}).get("preferred_stat_ids") or ())}
+        candidates.sort(key=lambda mod: (preferred_order.get(mod.get("id"), 10_000), -_stat_mod_priority(mod)))
+    else:
+        candidates.sort(key=_stat_mod_priority, reverse=True)
     return candidates[:max_count]
 
 
-def _similar_lot_stat_group(lot: dict[str, Any], looseness: int) -> dict[str, Any]:
-    mods = _lot_key_stat_mods(lot)
+def _similar_lot_stat_group(
+    lot: dict[str, Any],
+    looseness: int,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    mods = _lot_key_stat_mods(lot, profile=profile)
     if not mods:
         return {"type": "and", "filters": []}
 
-    filters = [_stat_filter(mod["id"]) for mod in mods]
+    ranges = (profile or {}).get("stat_value_ranges") or {}
+    filters = [_stat_filter(mod["id"], value_range=ranges.get(mod["id"])) for mod in mods]
     if looseness == 0 or len(filters) == 1:
         return {"type": "and", "filters": filters}
     if looseness == 1:
@@ -615,7 +1479,12 @@ def _similar_lot_stat_group(lot: dict[str, Any], looseness: int) -> dict[str, An
     return {"type": "count", "value": {"min": max(1, min(2, len(filters)))}, "filters": filters}
 
 
-def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) -> dict[str, Any]:
+def _similar_lots_query(
+    lot: dict[str, Any],
+    status: str,
+    looseness: int = 0,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     type_filters: dict[str, Any] = {}
     rarity = _rarity_option(lot.get("rarity"))
     if rarity and looseness < 2:
@@ -632,12 +1501,12 @@ def _similar_lots_query(lot: dict[str, Any], status: str, looseness: int = 0) ->
 
     query: dict[str, Any] = {
         "status": {"option": status},
-        "stats": [_similar_lot_stat_group(lot, looseness)],
+        "stats": [_similar_lot_stat_group(lot, looseness, profile)],
         "filters": filters,
     }
     if rarity == "unique" and lot.get("name"):
         query["term"] = lot["name"]
-    else:
+    elif _profile_requires_base(profile):
         query["type"] = lot.get("base_type") or lot.get("type_line") or lot.get("display_name")
     return query
 
@@ -693,14 +1562,25 @@ def _normalize_affix_text(value: Any) -> str:
     return text.strip(" .;:,")
 
 
-def _lot_affix_keys(lot: dict[str, Any]) -> tuple[str, ...]:
+def _lot_affix_keys(
+    lot: dict[str, Any],
+    profile: dict[str, Any] | None = None,
+) -> tuple[str, ...]:
+    if (profile or {}).get("base_only"):
+        return ()
+    preferred = set((profile or {}).get("preferred_stat_ids") or ())
+    ignored = set((profile or {}).get("ignored_stat_ids") or ())
     stat_ids = {
         f"stat:{mod.get('id')}"
         for mod in lot.get("stat_mods") or []
         if mod.get("id") and mod.get("type") in COMPARABLE_STAT_TYPES
+        and (not preferred or mod.get("id") in preferred)
+        and (preferred or mod.get("id") not in ignored)
     }
     if stat_ids:
         return tuple(sorted(stat_ids))
+    if _profile_has_rules(profile):
+        return ()
     return _lot_text_affix_keys(lot)
 
 
@@ -726,9 +1606,17 @@ def _item_level_matches(source: Any, candidate: Any, tolerance: int) -> bool:
     return abs(source - candidate) <= tolerance
 
 
-def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, Any]:
-    affixes = _lot_affix_keys(lot)
-    if looseness == 0:
+def _comparable_lot_profile(
+    lot: dict[str, Any],
+    looseness: int,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    affixes = _lot_affix_keys(lot, profile)
+    if (profile or {}).get("base_only"):
+        mode = "base-only"
+        required_affixes = 0
+        level_tolerance = 5 if looseness == 0 else 10 if looseness == 1 else 15
+    elif looseness == 0:
         mode = "type-level-stat-ids"
         required_affixes = len(affixes)
         level_tolerance = 5
@@ -740,9 +1628,10 @@ def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, An
         mode = "type-level-loose-stats"
         required_affixes = max(0, min(len(affixes), 2))
         level_tolerance = 15
-    key_stats = _lot_key_stat_mods(lot)
-    return {
+    key_stats = _lot_key_stat_mods(lot, profile=profile)
+    result = {
         "mode": mode,
+        "base_mode": (profile or {}).get("base_mode") or "default",
         "base_type": lot.get("base_type") or lot.get("type_line") or lot.get("display_name"),
         "rarity": lot.get("rarity") or "",
         "item_level": lot.get("item_level"),
@@ -751,16 +1640,86 @@ def _comparable_lot_profile(lot: dict[str, Any], looseness: int) -> dict[str, An
         "required_affixes": required_affixes,
         "stat_ids": [mod["id"] for mod in key_stats],
     }
+    if _profile_has_rules(profile):
+        result["manual_profile"] = True
+        result["preferred_stat_ids"] = list((profile or {}).get("preferred_stat_ids") or ())
+        result["ignored_stat_ids"] = list((profile or {}).get("ignored_stat_ids") or ())
+        result["tier_stat_ids"] = list((profile or {}).get("tier_stat_ids") or ())
+        result["stat_value_ranges"] = dict((profile or {}).get("stat_value_ranges") or {})
+        result["base_only"] = bool((profile or {}).get("base_only"))
+    return result
 
 
-def _filter_comparable_lots(target: dict[str, Any], lots: list[dict[str, Any]], looseness: int) -> list[dict[str, Any]]:
+def _stat_mod_by_id(lot: dict[str, Any], stat_id: str) -> dict[str, Any] | None:
+    return next((mod for mod in lot.get("stat_mods") or [] if mod.get("id") == stat_id), None)
+
+
+def _stat_mod_value(mod: dict[str, Any] | None) -> float | None:
+    if not mod:
+        return None
+    max_value = _to_float(mod.get("max"))
+    min_value = _to_float(mod.get("min"))
+    return max_value if max_value is not None else min_value
+
+
+def _stat_value_in_range(mod: dict[str, Any] | None, value_range: dict[str, float | None]) -> bool:
+    value = _stat_mod_value(mod)
+    if value is None:
+        return False
+    min_value = value_range.get("min")
+    max_value = value_range.get("max")
+    if min_value is not None and value < min_value:
+        return False
+    if max_value is not None and value > max_value:
+        return False
+    return True
+
+
+def _stat_same_tier(target_mod: dict[str, Any] | None, candidate_mod: dict[str, Any] | None) -> bool:
+    if not target_mod:
+        return True
+    target_tier = str(target_mod.get("tier") or "").strip().lower()
+    target_level = _to_int(target_mod.get("level"))
+    if not target_tier and target_level is None:
+        return True
+    if not candidate_mod:
+        return False
+    candidate_tier = str(candidate_mod.get("tier") or "").strip().lower()
+    candidate_level = _to_int(candidate_mod.get("level"))
+    if target_tier:
+        return bool(candidate_tier) and candidate_tier == target_tier
+    return candidate_level is not None and candidate_level == target_level
+
+
+def _lot_matches_profile_constraints(
+    target: dict[str, Any],
+    candidate: dict[str, Any],
+    profile: dict[str, Any] | None,
+) -> bool:
+    if not profile:
+        return True
+    for stat_id in profile.get("tier_stat_ids") or ():
+        if not _stat_same_tier(_stat_mod_by_id(target, stat_id), _stat_mod_by_id(candidate, stat_id)):
+            return False
+    for stat_id, value_range in (profile.get("stat_value_ranges") or {}).items():
+        if not _stat_value_in_range(_stat_mod_by_id(candidate, stat_id), value_range):
+            return False
+    return True
+
+
+def _filter_comparable_lots(
+    target: dict[str, Any],
+    lots: list[dict[str, Any]],
+    looseness: int,
+    profile: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     target_rarity = _rarity_option(target.get("rarity"))
     target_base = _lot_base_key(target)
     target_name = _clean_trade_text(target.get("name")).lower()
-    target_affixes = set(_lot_affix_keys(target))
+    target_affixes = set(_lot_affix_keys(target, profile))
     target_uses_stat_ids = any(key.startswith("stat:") for key in target_affixes)
-    profile = _comparable_lot_profile(target, looseness)
-    required_affixes = profile["required_affixes"]
+    comparison_profile = _comparable_lot_profile(target, looseness, profile)
+    required_affixes = comparison_profile["required_affixes"]
     comparable: list[dict[str, Any]] = []
 
     for lot in lots:
@@ -771,15 +1730,17 @@ def _filter_comparable_lots(target: dict[str, Any], lots: list[dict[str, Any]], 
             candidate_name = _clean_trade_text(lot.get("name")).lower()
             if target_name and candidate_name != target_name:
                 continue
-        elif target_base and _lot_base_key(lot) != target_base:
+        elif _profile_requires_base(profile) and target_base and _lot_base_key(lot) != target_base:
             continue
-        if not _item_level_matches(target.get("item_level"), lot.get("item_level"), profile["level_tolerance"]):
+        if not _item_level_matches(target.get("item_level"), lot.get("item_level"), comparison_profile["level_tolerance"]):
             continue
         if required_affixes:
-            candidate_affixes = set(_lot_affix_keys(lot) if target_uses_stat_ids else _lot_text_affix_keys(lot))
+            candidate_affixes = set(_lot_affix_keys(lot, profile) if target_uses_stat_ids else _lot_text_affix_keys(lot))
             overlap = len(target_affixes & candidate_affixes)
             if overlap < required_affixes:
                 continue
+        if not _lot_matches_profile_constraints(target, lot, profile):
+            continue
         comparable.append(lot)
     return comparable
 
@@ -817,6 +1778,9 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
     item = entry.get("item") or {}
     price = listing.get("price") or {}
     stash = listing.get("stash") or {}
+    price_type = price.get("type") or ""
+    if price_type and price_type not in INSTANT_BUYOUT_PRICE_TYPES:
+        return None
     amount = _to_float(price.get("amount"))
     currency = price.get("currency")
     if not stash or amount is None or not currency:
@@ -832,7 +1796,7 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
         "stash_y": stash.get("y"),
         "price_amount": amount,
         "price_currency": currency,
-        "price_type": price.get("type") or "",
+        "price_type": price_type,
         "stack_size": _to_int(item.get("stackSize")) or 1,
         "display_name": _item_display_name(item),
         "name": item.get("name") or "",
@@ -897,6 +1861,12 @@ def _trim_price_outliers(values: list[float]) -> tuple[list[float], int]:
 
 def _market_confidence(count: int, comparison: dict[str, Any] | None = None) -> str:
     mode = (comparison or {}).get("mode") or ""
+    if mode == "base-only":
+        if count >= 12:
+            return "medium"
+        if count >= SELLER_MARKET_MIN_COMPARABLES:
+            return "low"
+        return "insufficient"
     if count >= 8 and mode == "type-level-stat-ids":
         return "high"
     if count >= 5 and mode in {"type-level-stat-ids", "type-level-stat-ids-minus-one"}:
@@ -1059,6 +2029,57 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
     }
 
 
+def _seller_base_summaries(lots: list[dict[str, Any]], target: str, top: int = 12) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, int | None], dict[str, Any]] = {}
+    for lot in lots:
+        base = _clean_trade_text(lot.get("base_type") or lot.get("type_line") or lot.get("display_name"))
+        price = lot.get("price_target")
+        if not base or not isinstance(price, float):
+            continue
+        key = (base.lower(), _rarity_option(lot.get("rarity")) or "", lot.get("item_level") if isinstance(lot.get("item_level"), int) else None)
+        group = groups.setdefault(
+            key,
+            {
+                "base_type": base,
+                "rarity": lot.get("rarity") or "",
+                "item_level": lot.get("item_level"),
+                "target": target,
+                "count": 0,
+                "prices": [],
+                "sample_lots": [],
+            },
+        )
+        group["count"] += 1
+        group["prices"].append(price)
+        if len(group["sample_lots"]) < 3:
+            group["sample_lots"].append(
+                {
+                    "id": lot.get("id"),
+                    "display_name": lot.get("display_name"),
+                    "price_target": price,
+                    "price_amount": lot.get("price_amount"),
+                    "price_currency": lot.get("price_currency"),
+                    "stash": lot.get("stash"),
+                }
+            )
+
+    summaries: list[dict[str, Any]] = []
+    for group in groups.values():
+        values = sorted(group.pop("prices"))
+        median = statistics.median(values)
+        summaries.append(
+            {
+                **group,
+                "avg": statistics.mean(values),
+                "median": median,
+                "min": values[0],
+                "max": values[-1],
+            }
+        )
+    summaries.sort(key=lambda item: (item["median"], item["avg"], item["max"], item["count"]), reverse=True)
+    return summaries[:top]
+
+
 def _verdict_for_lot(lot: dict[str, Any], market: dict[str, Any]) -> dict[str, Any]:
     seller_price = lot.get("price_unit_target") if market.get("unit_priced") else lot.get("price_target")
     current = market.get("current")
@@ -1122,14 +2143,15 @@ async def _fetch_similar_market(
     target: str,
     status: str,
     rates: dict[str, float],
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rarity = _rarity_option(lot.get("rarity"))
     looseness_steps = [0] if rarity == "unique" else [0, 1, 2]
     last_payload: dict[str, Any] = {}
     for looseness in looseness_steps:
-        comparison = _comparable_lot_profile(lot, looseness)
+        comparison = _comparable_lot_profile(lot, looseness, profile)
         try:
-            market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness))
+            market_search = await _post_search(league, _similar_lots_query(lot, status, looseness=looseness, profile=profile))
         except httpx.HTTPStatusError as exc:
             last_payload = _empty_market_payload(lot, f"search failed: {exc.response.status_code}", looseness)
             await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
@@ -1145,7 +2167,7 @@ async def _fetch_similar_market(
         )
         market_lots = [_normalize_item_listing(item) for item in market_items]
         market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
-        comparable_lots = _filter_comparable_lots(lot, market_lots, looseness)
+        comparable_lots = _filter_comparable_lots(lot, market_lots, looseness, profile)
         stats = _market_price_stats(comparable_lots, seller)
         stats["confidence"] = _market_confidence(stats.get("count", 0), comparison)
         last_payload = {
@@ -1171,7 +2193,9 @@ async def _get_cached_similar_market(
     target: str,
     status: str,
     rates: dict[str, float],
+    profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    profile = profile or _manual_stat_profile()
     market_key = (
         league,
         status,
@@ -1181,14 +2205,23 @@ async def _get_cached_similar_market(
         lot.get("base_type"),
         lot.get("rarity"),
         lot.get("item_level") // 5 if isinstance(lot.get("item_level"), int) else None,
-        _lot_affix_keys(lot),
+        _lot_affix_keys(lot, profile),
+        profile.get("preferred_stat_ids") or (),
+        profile.get("ignored_stat_ids") or (),
+        profile.get("base_mode") or "default",
+        bool(profile.get("base_only")),
+        profile.get("tier_stat_ids") or (),
+        tuple(
+            (stat_id, value_range.get("min"), value_range.get("max"))
+            for stat_id, value_range in sorted((profile.get("stat_value_ranges") or {}).items())
+        ),
     )
     cached = SELLER_MARKET_CACHE.get(market_key)
     if cached and time.time() - cached["created_ts"] < SELLER_MARKET_CACHE_TTL:
         payload = _cache_copy(cached["data"])
         payload["cached"] = True
         return payload
-    payload = await _fetch_similar_market(league, lot, seller, target, status, rates)
+    payload = await _fetch_similar_market(league, lot, seller, target, status, rates, profile)
     payload["cached"] = False
     SELLER_MARKET_CACHE[market_key] = {"created_ts": time.time(), "data": payload}
     return _cache_copy(payload)
@@ -1202,24 +2235,26 @@ async def get_seller_lots_analysis(
     status: str = "any",
     limit: int = 10,
     analyze: bool = True,
+    preferred_stat_ids: Any = None,
+    ignored_stat_ids: Any = None,
+    base_mode: Any = None,
+    tier_stat_ids: Any = None,
+    stat_value_ranges: Any = None,
+    base_only: Any = None,
 ) -> dict[str, Any]:
     seller = seller.strip()
     text = text.strip()
-    limit = max(1, min(limit, 20))
+    limit = max(1, min(limit, SELLER_LOTS_FETCH_LIMIT))
     if not seller:
         raise ValueError("seller is required")
+    profile = _manual_stat_profile(preferred_stat_ids, ignored_stat_ids, base_mode, tier_stat_ids, stat_value_ranges, base_only)
 
     started = time.monotonic()
     seller_snapshot = await asyncio.wait_for(
         _get_seller_lots_snapshot(league, seller, status),
         timeout=SELLER_SNAPSHOT_TIMEOUT,
     )
-    lots = list(seller_snapshot.get("lots") or [])
-    if text:
-        lowered = text.lower()
-        lots = [lot for lot in lots if lowered in _listing_text_blob(lot)]
-    matched_total = len(lots)
-    lots = lots[:limit]
+    all_lots = list(seller_snapshot.get("lots") or [])
 
     try:
         currency_rates = await asyncio.wait_for(
@@ -1235,8 +2270,16 @@ async def get_seller_lots_analysis(
     except (asyncio.TimeoutError, httpx.HTTPError):
         static_lookup = {}
     category_rate_cache: dict[str, dict[str, Any]] = {"Currency": currency_rates}
-    for lot in lots:
+    for lot in all_lots:
         _apply_target_price(lot, rates, target)
+
+    filtered_lots = all_lots
+    if text:
+        lowered = text.lower()
+        filtered_lots = [lot for lot in all_lots if lowered in _listing_text_blob(lot)]
+    matched_total = len(filtered_lots)
+    base_summary = _seller_base_summaries(filtered_lots, target)
+    lots = filtered_lots[:limit]
 
     analysis_timed_out = False
     if analyze:
@@ -1254,7 +2297,7 @@ async def get_seller_lots_analysis(
                     )
                     if market is None:
                         market = await asyncio.wait_for(
-                            _get_cached_similar_market(league, lot, seller, target, status, rates),
+                            _get_cached_similar_market(league, lot, seller, target, status, rates, profile),
                             timeout=timeout,
                         )
                 except (asyncio.TimeoutError, httpx.TimeoutException):
@@ -1294,9 +2337,10 @@ async def get_seller_lots_analysis(
         "analysis_pending": not analyze,
         "elapsed_seconds": round(time.monotonic() - started, 2),
         "lots": lots,
+        "base_summary": base_summary,
         "source": "trade2/search+fetch",
         "search_mode": "cache-filter" if text else "account-cache",
-        "basis": "priced stash listings only",
+        "basis": "instant buyout stash listings only",
     }
 
 
@@ -1306,8 +2350,15 @@ async def get_seller_lot_market(
     lot_id: str,
     target: str = "exalted",
     status: str = "any",
+    preferred_stat_ids: Any = None,
+    ignored_stat_ids: Any = None,
+    base_mode: Any = None,
+    tier_stat_ids: Any = None,
+    stat_value_ranges: Any = None,
+    base_only: Any = None,
 ) -> dict[str, Any]:
     seller = seller.strip()
+    profile = _manual_stat_profile(preferred_stat_ids, ignored_stat_ids, base_mode, tier_stat_ids, stat_value_ranges, base_only)
     seller_snapshot = await asyncio.wait_for(
         _get_seller_lots_snapshot(league, seller, status),
         timeout=SELLER_SNAPSHOT_TIMEOUT,
@@ -1343,7 +2394,7 @@ async def get_seller_lot_market(
         )
         if market is None:
             market = await asyncio.wait_for(
-                _get_cached_similar_market(league, lot, seller, target, status, rates),
+                _get_cached_similar_market(league, lot, seller, target, status, rates, profile),
                 timeout=SELLER_MARKET_PER_LOT_TIMEOUT,
             )
     except (asyncio.TimeoutError, httpx.TimeoutException):
@@ -1363,6 +2414,7 @@ async def get_seller_lot_market(
         "price_target": lot.get("price_target"),
         "market": lot_market,
         "verdict": _verdict_for_lot(lot, lot_market),
+        "sample_lots": (market.get("lots") or [])[:10],
     }
 
 

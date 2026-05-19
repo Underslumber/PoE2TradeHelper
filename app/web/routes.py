@@ -70,6 +70,8 @@ from app.trade2 import (
     build_category_meta,
     get_category_rates,
     get_exchange_offers,
+    get_item_base_catalog,
+    get_item_base_market,
     get_pasted_item_market,
     get_seller_lot_market,
     get_seller_lots_analysis,
@@ -263,6 +265,7 @@ def _user_payload(user: User | None) -> dict:
             "can_use_ai": _user_can_use_ai(user),
             "fiat_rub_enabled": _user_fiat_rub_enabled(user),
             "account_target_currency": user.account_target_currency or "exalted",
+            "default_seller_account": user.default_seller_account or "",
             "created_at": user.created_at,
         },
     }
@@ -280,6 +283,7 @@ def _admin_user_payload(user: User) -> dict:
         "effective_can_use_ai": _user_can_use_ai(user),
         "fiat_rub_enabled": _user_fiat_rub_enabled(user),
         "account_target_currency": user.account_target_currency or "exalted",
+        "default_seller_account": user.default_seller_account or "",
         "created_at": user.created_at,
     }
 
@@ -571,7 +575,7 @@ def _verification_payload(request: Request, user: User) -> dict:
 def _row_price(row: dict | None) -> float | None:
     if not row:
         return None
-    for key in ("median", "best"):
+    for key in ("low", "best", "median"):
         try:
             value = float(row.get(key))
         except (TypeError, ValueError):
@@ -1018,6 +1022,8 @@ def api_account_preferences(
         user.fiat_rub_enabled = 1 if bool(payload.get("fiat_rub_enabled")) else 0
     if "account_target_currency" in payload:
         user.account_target_currency = _text(payload, "account_target_currency", "exalted") or "exalted"
+    if "default_seller_account" in payload:
+        user.default_seller_account = ((_text(payload, "default_seller_account") or "")[:120] or None)
     db.commit()
     db.refresh(user)
     return _user_payload(user)
@@ -1667,8 +1673,14 @@ async def api_trade_seller_lots(
     q: str = Query(""),
     target: str = Query("exalted"),
     status: str = Query("any", pattern="^(online|any)$"),
-    limit: int = Query(10, ge=1, le=20),
+    limit: int = Query(200, ge=1, le=200),
     analyze: bool = Query(True),
+    important_stats: str = Query(""),
+    ignored_stats: str = Query(""),
+    base_mode: str = Query("default", pattern="^(default|required|ignored)$"),
+    tier_stats: str = Query(""),
+    stat_ranges: str = Query(""),
+    base_only: bool = Query(False),
 ):
     try:
         return await get_seller_lots_analysis(
@@ -1679,6 +1691,12 @@ async def api_trade_seller_lots(
             status=status,
             limit=limit,
             analyze=analyze,
+            preferred_stat_ids=important_stats,
+            ignored_stat_ids=ignored_stats,
+            base_mode=base_mode,
+            tier_stat_ids=tier_stats,
+            stat_value_ranges=stat_ranges,
+            base_only=base_only,
         )
     except Exception as exc:
         return trade_api_error(exc)
@@ -1691,6 +1709,12 @@ async def api_trade_seller_lot_market(
     lot_id: str = Query(..., min_length=1),
     target: str = Query("exalted"),
     status: str = Query("any", pattern="^(online|any)$"),
+    important_stats: str = Query(""),
+    ignored_stats: str = Query(""),
+    base_mode: str = Query("default", pattern="^(default|required|ignored)$"),
+    tier_stats: str = Query(""),
+    stat_ranges: str = Query(""),
+    base_only: bool = Query(False),
 ):
     try:
         return await get_seller_lot_market(
@@ -1699,11 +1723,57 @@ async def api_trade_seller_lot_market(
             lot_id=lot_id,
             target=target,
             status=status,
+            preferred_stat_ids=important_stats,
+            ignored_stat_ids=ignored_stats,
+            base_mode=base_mode,
+            tier_stat_ids=tier_stats,
+            stat_value_ranges=stat_ranges,
+            base_only=base_only,
         )
     except asyncio.TimeoutError:
         return JSONResponse(
             status_code=504,
             content={"error": "Оценка лота заняла слишком много времени."},
+        )
+    except Exception as exc:
+        return trade_api_error(exc)
+
+
+@router.get("/api/trade/item-bases")
+async def api_trade_item_bases(
+    q: str = Query(""),
+    limit: int = Query(500, ge=1, le=1000),
+):
+    try:
+        return await get_item_base_catalog(q=q, limit=limit)
+    except Exception as exc:
+        return trade_api_error(exc)
+
+
+@router.get("/api/trade/item-base-market")
+async def api_trade_item_base_market(
+    league: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    q: str = Query(""),
+    limit: int = Query(40, ge=1, le=80),
+    min_ilvl: int | None = Query(None, ge=1, le=100),
+    refresh: bool = Query(False),
+):
+    try:
+        return await get_item_base_market(
+            league=league,
+            target=target,
+            status=status,
+            q=q,
+            limit=limit,
+            min_ilvl=min_ilvl,
+            force_refresh=refresh,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Сводка по основам заняла слишком много времени."},
         )
     except Exception as exc:
         return trade_api_error(exc)

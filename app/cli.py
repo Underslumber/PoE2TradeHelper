@@ -97,7 +97,7 @@ def main():
     market_snapshots_cmd.add_argument("--league", required=True)
     market_snapshots_cmd.add_argument("--target", default="exalted")
     market_snapshots_cmd.add_argument("--status", choices=("online", "any"), default="any")
-    market_snapshots_cmd.add_argument("--categories", help="Comma-separated static category ids. Default: all stackable categories")
+    market_snapshots_cmd.add_argument("--categories", help="Comma-separated category ids. Default: all stackable categories plus ItemBases")
     market_snapshots_cmd.add_argument("--currency-targets", default="", help="Extra Currency targets, comma-separated")
     market_snapshots_cmd.add_argument("--once", action="store_true")
     market_snapshots_cmd.add_argument("--interval-minutes", type=float, default=15.0)
