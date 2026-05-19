@@ -1799,15 +1799,6 @@ body {
   font-size: 1rem;
   margin: 16px 0 10px;
 }
-.market-chain-list {
-  display: grid;
-  gap: 10px;
-}
-.market-chain-card {
-  background: rgba(255, 255, 255, 0.014);
-  border-left: 3px solid #25e7a1;
-  padding: 10px 0 10px 12px;
-}
 .chain-steps {
   display: grid;
   gap: 5px;

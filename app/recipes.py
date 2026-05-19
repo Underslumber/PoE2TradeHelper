@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.profitability import combined_execution_quality, number, row_price
+from app.profitability import combined_execution_quality, number, rank_opportunities, row_price
 
 
 EMOTION_CHAIN = [
@@ -183,7 +183,7 @@ def analyze_recipes(category: str, rows: list[dict[str, Any]], target: str, snap
         "category": category,
         "target": target,
         "known_recipes": len(recipes),
-        "opportunities": sorted(filtered_opportunities, key=lambda item: item.get("margin") or 0, reverse=True),
+        "opportunities": rank_opportunities(filtered_opportunities),
         "missing": missing,
         "coverage": {
             "rows": len(rows),

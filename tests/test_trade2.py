@@ -582,13 +582,56 @@ def test_build_trade_advice_finds_best_full_emotion_path():
 
     advice = build_trade_advice("Delirium", rows, "divine")
 
-    assert advice[0]["source"] == "diluted-liquid-ire"
-    assert advice[0]["result"] == "diluted-liquid-greed"
-    assert advice[0]["path_steps"] == 2
-    assert advice[0]["input_count"] == 9
-    assert advice[0]["profit"] == 11
-    assert advice[0]["result_sparkline"] == [10, 15, 20]
-    assert "9 x" in advice[0]["message_ru"]
+    full_path = next(item for item in advice if item["result"] == "diluted-liquid-greed")
+    assert full_path["source"] == "diluted-liquid-ire"
+    assert full_path["path_steps"] == 2
+    assert full_path["input_count"] == 9
+    assert full_path["profit"] == 11
+    assert full_path["result_sparkline"] == [10, 15, 20]
+    assert "9 x" in full_path["message_ru"]
+
+
+def test_build_trade_advice_ranks_profit_by_liquidity_and_execution():
+    rows = [
+        {
+            "id": "diluted-liquid-ire",
+            "text": "Diluted Liquid Ire",
+            "text_ru": "Разбавленный жидкий гнев",
+            "median": 1,
+            "volume": 3,
+        },
+        {
+            "id": "diluted-liquid-guilt",
+            "text": "Diluted Liquid Guilt",
+            "text_ru": "Разбавленная жидкая вина",
+            "median": 12,
+            "volume": 3,
+        },
+        {
+            "id": "liquid-paranoia",
+            "text": "Liquid Paranoia",
+            "text_ru": "Жидкая паранойя",
+            "median": 10,
+            "volume": 200,
+        },
+        {
+            "id": "liquid-envy",
+            "text": "Liquid Envy",
+            "text_ru": "Жидкая зависть",
+            "median": 37,
+            "volume": 200,
+        },
+    ]
+
+    advice = build_trade_advice("Delirium", rows, "divine")
+
+    assert advice[0]["source"] == "liquid-paranoia"
+    assert advice[0]["result"] == "liquid-envy"
+    assert advice[0]["profit"] == 7
+    assert advice[0]["min_volume"] == 200
+    assert advice[0]["rank_score"] > advice[1]["rank_score"]
+    assert advice[1]["profit"] == 9
+    assert advice[1]["min_volume"] == 3
 
 
 def test_build_trade_advice_hides_dominated_emotion_extension():

@@ -121,6 +121,31 @@ def test_recipe_analysis_finds_best_full_emotion_path():
     assert best["profit"] == 11
 
 
+def test_recipe_analysis_ranks_by_profit_liquidity_and_success():
+    payload = analyze_recipes(
+        "Delirium",
+        [
+            {"id": "diluted-liquid-ire", "text_ru": "Разбавленный жидкий гнев", "median": 1, "volume": 3},
+            {"id": "diluted-liquid-guilt", "text_ru": "Разбавленная жидкая вина", "median": 12, "volume": 3},
+            {"id": "liquid-paranoia", "text_ru": "Жидкая паранойя", "median": 10, "volume": 200},
+            {"id": "liquid-envy", "text_ru": "Жидкая зависть", "median": 37, "volume": 200},
+        ],
+        "exalted",
+        snapshot_ts=1,
+    )
+
+    best = payload["opportunities"][0]
+    second = payload["opportunities"][1]
+
+    assert best["source"] == "liquid-paranoia"
+    assert best["result"] == "liquid-envy"
+    assert best["profit"] == 7
+    assert best["min_volume"] == 200
+    assert best["rank_score"] > second["rank_score"]
+    assert second["profit"] == 9
+    assert second["min_volume"] == 3
+
+
 def test_recipe_analysis_hides_dominated_emotion_extension():
     payload = analyze_recipes(
         "Delirium",

@@ -100,7 +100,6 @@ const state = {
   crossDealsKey: '',
   isLoadingCrossDeals: false,
   activeTrades: [],
-  marketChains: [],
   activeTradesKey: '',
   isLoadingActiveTrades: false,
   historyTrends: [],
@@ -1608,6 +1607,26 @@ function aiActionLabel(action) {
   return key ? t(key) : action;
 }
 
+function riskLevelLabel(value) {
+  const key = {
+    low: 'riskLow',
+    medium: 'riskMedium',
+    high: 'riskHigh',
+  }[value || ''];
+  return key ? t(key) : (value || '-');
+}
+
+function phaseLabel(value) {
+  const key = {
+    day_0_1: 'phaseDay01',
+    day_2_7: 'phaseDay27',
+    day_8_21: 'phaseDay821',
+    late_league: 'phaseLateLeague',
+    unknown: 'phaseUnknown',
+  }[value || 'unknown'];
+  return t(key || 'phaseUnknown');
+}
+
 function renderAiNavigation() {
   const canUseAi = accountCanUseAi();
   byId('ai-nav-tab')?.classList.toggle('d-none', !canUseAi);
@@ -1643,7 +1662,7 @@ function renderAiListPanel(title, items, emptyText) {
     <section class="ai-list-panel">
       <h3>${escapeHtml(title)}</h3>
       ${list.length
-        ? `<div class="ai-list-tags">${list.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>`
+        ? `<div class="ai-list-tags">${list.map(item => `<span>${escapeHtml(riskFlagLabel(item))}</span>`).join('')}</div>`
         : `<p class="text-secondary">${escapeHtml(emptyText)}</p>`}
     </section>
   `;
@@ -1656,9 +1675,9 @@ function renderAiSummary(assessment) {
       <h3>${t('aiSummary')}</h3>
       <div class="ai-summary-grid">
         <div><span class="summary-label">${t('aiMarketRead')}</span><strong>${escapeHtml(summary.market_read || '-')}</strong></div>
-        <div><span class="summary-label">${t('aiOverallRisk')}</span><strong>${escapeHtml(summary.overall_risk || '-')}</strong></div>
-        <div><span class="summary-label">${t('aiDataQuality')}</span><strong>${escapeHtml(summary.data_quality || '-')}</strong></div>
-        <div><span class="summary-label">${t('aiTimeHorizon')}</span><strong>${escapeHtml(summary.phase || '-')}</strong></div>
+        <div><span class="summary-label">${t('aiOverallRisk')}</span><strong>${escapeHtml(riskLevelLabel(summary.overall_risk))}</strong></div>
+        <div><span class="summary-label">${t('aiDataQuality')}</span><strong>${escapeHtml(dataQualityLabel(summary.data_quality))}</strong></div>
+        <div><span class="summary-label">${t('aiTimeHorizon')}</span><strong>${escapeHtml(phaseLabel(summary.phase))}</strong></div>
       </div>
     </section>
   `;
@@ -1682,7 +1701,7 @@ function renderAiSignal(signal) {
         </div>
         <div class="ai-signal-badges">
           <span>${escapeHtml(aiActionLabel(signal.action))}</span>
-          <span>${escapeHtml(t('confidence'))}: ${escapeHtml(signal.confidence || '-')}</span>
+          <span>${escapeHtml(t('confidence'))}: ${escapeHtml(confidenceLabel(signal.confidence))}</span>
         </div>
       </div>
       <div class="ai-signal-meta">
@@ -1794,8 +1813,8 @@ function renderAiHistory() {
       </div>
       <p>${escapeHtml(item.market_read || t('aiNoSignals'))}</p>
       <div class="pin-meta">
-        <span>${t('aiOverallRisk')}: ${escapeHtml(item.overall_risk || '-')}</span>
-        <span>${t('aiDataQuality')}: ${escapeHtml(item.data_quality || '-')}</span>
+        <span>${t('aiOverallRisk')}: ${escapeHtml(riskLevelLabel(item.overall_risk))}</span>
+        <span>${t('aiDataQuality')}: ${escapeHtml(dataQualityLabel(item.data_quality))}</span>
         <span>${t('aiSignals')}: ${formatAmount(item.signals_count || 0)}</span>
       </div>
       ${item.path ? `<div class="ai-audit-path">${t('aiAuditPath')}: ${escapeHtml(item.path)}</div>` : ''}
@@ -1903,12 +1922,15 @@ function volatilityLabel(value) {
 }
 
 function dataQualityLabel(value) {
+  if (!value) return '-';
   const key = {
+    full: 'dataQualityFull',
     good: 'dataQualityGood',
     partial: 'dataQualityPartial',
     poor: 'dataQualityPoor',
-  }[value || 'poor'];
-  return t(key || 'dataQualityPoor');
+    unknown: 'dataQualityUnknown',
+  }[value];
+  return key ? t(key) : String(value).replaceAll('_', ' ');
 }
 
 function currencyChangeCards(changes = {}) {
@@ -1992,12 +2014,12 @@ function renderCurrencyAnalysisContext(context) {
       <article class="currency-chart-card">
         <h3>${t('currencyForecastChart')} · ${t('currencyExpectedChange')}: ${Number.isFinite(forecastChange) ? formatChange(forecastChange) : '-'}</h3>
         ${miniSignalChart(forecastSeries.map(point => point.value), t('currencyForecastBasis'), null, forecastChange, { series: forecastSeries, changeLabel: t('currencyExpectedChange') })}
-        <p class="currency-forecast-note">${t('currencyForecastDisclaimer')} ${t('currencyForecastConfidence')}: ${escapeHtml(forecast.confidence || '-')}.</p>
+        <p class="currency-forecast-note">${t('currencyForecastDisclaimer')} ${t('currencyForecastConfidence')}: ${escapeHtml(confidenceLabel(forecast.confidence))}.</p>
       </article>
     </section>
     <section class="ai-list-panel">
       <h3>${t('currencyRiskFlags')}</h3>
-      ${risks.length ? `<div class="currency-risk-list">${risks.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : `<p class="text-secondary">${t('currencyNoRisks')}</p>`}
+      ${risks.length ? `<div class="currency-risk-list">${risks.map(item => `<span>${escapeHtml(riskFlagLabel(item))}</span>`).join('')}</div>` : `<p class="text-secondary">${t('currencyNoRisks')}</p>`}
     </section>
   `;
 }
@@ -2664,7 +2686,6 @@ function renderCategories() {
       state.crossDealsMeta = null;
       state.crossDealsKey = '';
       state.activeTrades = [];
-      state.marketChains = [];
       state.activeTradesKey = '';
       state.historyTrends = [];
       state.historyTrendsKey = '';
@@ -4141,7 +4162,7 @@ function renderRecipeSignal(item) {
           <div class="advice-title-row"><span class="advice-badge">${t('recipeSignal')}</span><strong>${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)}</strong></div>
           <p>${item.input_count} × ${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)} · ${t('profit')}: ${formatAmount(item.profit)} ${currencyLabel(item.target)} (${formatChange(Number(item.margin || 0) * 100)})</p>
           <div class="deal-meta">
-            <span>${t('executionQuality')}: ${escapeHtml(item.execution?.quality || '-')}</span>
+            <span>${t('executionQuality')}: ${escapeHtml(executionQualityLabel(item.execution?.quality))}</span>
             <span>${t('minVolume')}: ${formatAmount(item.execution?.volume || 0)}</span>
           </div>
         </div>
@@ -4351,24 +4372,12 @@ function renderOperationSignals() {
   const list = byId('advice-list-ops');
   if (!list) return;
   const maxSteps = Number(byId('chain-max-steps')?.value || 5);
-  const operations = state.advice.filter(item => Number(item.path_steps || 1) <= maxSteps);
+  const operations = state.advice.filter(item => Number(item.path_steps || 1) <= maxSteps && Number(item.profit || 0) > 0);
   if (operations.length) {
     renderAdviceList(list, operations, t('noAdvice'));
     return;
   }
   list.innerHTML = '';
-  if (state.isLoadingActiveTrades) {
-    list.innerHTML = loadingMarkup(t('operationsLoading'));
-    return;
-  }
-  if (state.marketChains.length) {
-    list.innerHTML = state.marketChains.map(renderMarketChain).join('');
-    return;
-  }
-  if (state.activeTrades.length) {
-    list.innerHTML = `<p class="text-secondary">${t('operationWatchHint')}</p>${state.activeTrades.slice(0, 10).map(renderActiveTradeOperation).join('')}`;
-    return;
-  }
   list.innerHTML = `<p class="text-secondary">${t('noMarketChains')}</p>`;
 }
 
@@ -4434,10 +4443,37 @@ function adviceTitleMarkup(item, sourceName, resultName) {
   return itemTitleMarkup(sourceName || resultName || '', entryIcon(sourceEntry) || entryIcon(resultEntry));
 }
 
+function executionQualityLabel(quality) {
+  if (quality === 'good') return t('executionGood');
+  if (quality === 'partial') return t('executionPartial');
+  if (quality === 'poor') return t('executionPoor');
+  return quality || '-';
+}
+
+function riskFlagLabel(flag) {
+  const labels = {
+    missing_price: t('riskMissingPrice'),
+    missing_volume: t('riskMissingVolume'),
+    missing_listing_count: t('riskMissingListingCount'),
+    low_volume: t('riskLowVolume'),
+    thin_listings: t('riskThinListings'),
+    wide_spread: t('riskWideSpread'),
+    large_move_low_volume: t('riskLargeMoveLowVolume'),
+    price_fixing_risk: t('riskPriceFixing'),
+    sparkline_not_price: t('riskSparklineNotPrice'),
+    stale_snapshot: t('riskStaleSnapshot'),
+    short_history: t('riskShortHistory'),
+    high_volatility: t('riskHighVolatility'),
+  };
+  return labels[flag] || String(flag || '-').replaceAll('_', ' ');
+}
+
 function emotionRiskText(item) {
   if (item.execution?.risk_flags?.length) {
-    const flags = item.execution.risk_flags.slice(0, 3).join(', ');
-    return state.lang === 'ru' ? `Исполнимость: ${item.execution.quality}; риски: ${flags}.` : `Execution: ${item.execution.quality}; risks: ${flags}.`;
+    const flags = item.execution.risk_flags.slice(0, 3).map(riskFlagLabel).join('; ');
+    return state.lang === 'ru'
+      ? `Исполнимость: ${executionQualityLabel(item.execution.quality)}. Риски: ${flags}.`
+      : `Execution: ${executionQualityLabel(item.execution.quality)}. Risks: ${flags}.`;
   }
   if (state.lang !== 'ru') {
     if (item.severity === 'signal') return 'Volume is acceptable and margin is meaningful.';
@@ -4472,7 +4508,6 @@ function switchAdviceTab(tab) {
     byId(`advice-list-${name}`)?.classList.toggle('d-none', name !== tab);
   });
   if (tab === 'ops') renderOperationSignals();
-  if (tab === 'ops') loadActiveTrades();
   if (tab === 'active') loadActiveTrades();
   if (tab === 'cross') loadCrossCurrencyDeals();
 }
@@ -4681,51 +4716,6 @@ function renderMarketBasis(item) {
   return currencyMarkup(item.marketCurrency);
 }
 
-function buildMarketChains(activeTrades, baseTarget, maxSteps) {
-  if (!activeTrades.length) return [];
-  const profitable = activeTrades
-    .filter(item => item.profit > 0 && item.margin >= 0.005 && item.buy.target !== item.sell.target)
-    .sort((left, right) => right.margin - left.margin || right.profit - left.profit)
-    .slice(0, 12);
-  const chains = [];
-  for (const start of profitable) {
-    let amount = start.buy.baseValue;
-    const steps = [];
-    let minVolume = Infinity;
-    for (let index = 0; index < Math.max(1, maxSteps); index += 1) {
-      const candidates = profitable
-        .filter(item => !steps.some(step => step.id === item.id))
-        .map(item => {
-          const nextAmount = amount * (item.sell.baseValue / item.buy.baseValue);
-          return { item, nextAmount, gain: nextAmount - amount };
-        })
-        .sort((left, right) => right.gain - left.gain);
-      const next = candidates[0];
-      if (!next || next.gain <= 0) break;
-      steps.push(next.item);
-      amount = next.nextAmount;
-      minVolume = Math.min(minVolume, next.item.volume);
-    }
-    if (!steps.length) continue;
-    const initial = steps[0].buy.baseValue;
-    const profit = amount - initial;
-    const margin = initial ? profit / initial : 0;
-    if (profit <= 0) continue;
-    chains.push({
-      steps,
-      startValue: initial,
-      finishValue: amount,
-      profit,
-      margin,
-      baseTarget,
-      minVolume: Number.isFinite(minVolume) ? minVolume : 0,
-    });
-  }
-  return chains
-    .sort((left, right) => right.margin - left.margin || right.profit - left.profit)
-    .slice(0, 10);
-}
-
 function renderActiveTrades() {
   const panel = byId('advice-list-active');
   if (!panel) return;
@@ -4767,32 +4757,6 @@ function renderActiveTrades() {
         </tbody>
       </table>
     </div>
-    <h3 class="signals-subtitle">${t('marketChains')}</h3>
-    <div class="market-chain-list">
-      ${state.marketChains.length ? state.marketChains.map(renderMarketChain).join('') : `<p class="text-secondary">${t('noMarketChains')}</p>`}
-    </div>
-  `;
-}
-
-function renderMarketChain(chain) {
-  const route = chain.steps.map(step => itemTitleMarkup(step.name, step.image)).join('<span class="advice-arrow">→</span>');
-  const stepRows = chain.steps.map((step, index) => `
-    <div class="chain-step">
-      <strong>${t('step')} ${index + 1}</strong>
-      <span>${t('buyFor')} ${formatAmount(step.buy.value)} ${currencyLabel(step.buy.target)} → ${t('sellFor')} ${formatAmount(step.sell.value)} ${currencyLabel(step.sell.target)}</span>
-    </div>
-  `).join('');
-  return `
-    <article class="market-chain-card">
-      <div class="advice-title-row"><span class="advice-badge">${t('profit')}</span><strong>${route}</strong></div>
-      <div class="deal-meta">
-        <span>${t('start')}: ${formatAmount(chain.startValue)} ${currencyLabel(chain.baseTarget)}</span>
-        <span>${t('finish')}: ${formatAmount(chain.finishValue)} ${currencyLabel(chain.baseTarget)}</span>
-        <span>${t('profit')}: ${formatAmount(chain.profit)} ${currencyLabel(chain.baseTarget)} (${formatChange(chain.margin * 100)})</span>
-        <span>${t('minVolume')}: ${formatAmount(chain.minVolume)}</span>
-      </div>
-      <div class="chain-steps">${stepRows}</div>
-    </article>
   `;
 }
 
@@ -4806,7 +4770,6 @@ async function loadActiveTrades() {
   const targets = availableTargetIds();
   if (targets.length < 2) {
     state.activeTrades = [];
-    state.marketChains = [];
     state.activeTradesKey = key;
     renderActiveTrades();
     if (state.activeAdviceTab === 'ops') renderOperationSignals();
@@ -4821,12 +4784,9 @@ async function loadActiveTrades() {
       datasets.set(target, await ensureRatesForTarget(target));
     }
     state.activeTrades = buildActiveTradeTable(datasets, selectedTarget());
-    const maxSteps = Number(byId('chain-max-steps')?.value || 5);
-    state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), maxSteps);
     state.activeTradesKey = key;
   } catch {
     state.activeTrades = [];
-    state.marketChains = [];
     state.activeTradesKey = key;
   } finally {
     state.isLoadingActiveTrades = false;
@@ -5125,7 +5085,6 @@ async function initLiveTrade() {
         state.crossDealsKey = '';
         loadCrossCurrencyDeals();
       } else if (state.activeAdviceTab === 'active') {
-        state.marketChains = buildMarketChains(state.activeTrades, selectedTarget(), Number(byId('chain-max-steps')?.value || 5));
         renderActiveTrades();
       } else {
         switchAdviceTab('ops');
@@ -5144,7 +5103,6 @@ async function initLiveTrade() {
         state.crossDealsMeta = null;
         state.crossDealsKey = '';
         state.activeTrades = [];
-        state.marketChains = [];
         state.activeTradesKey = '';
         state.historyTrends = [];
         state.historyTrendsKey = '';

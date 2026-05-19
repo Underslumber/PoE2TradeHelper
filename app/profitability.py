@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -17,6 +18,26 @@ def number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if result > 0 else None
+
+
+def _finite_number(value: Any, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
+
+
+def _bounded_ratio(value: float, full_score_at: float) -> float:
+    if full_score_at <= 0:
+        return 0.0
+    return max(0.0, min(1.0, value / full_score_at)) * 100
+
+
+def _bounded_log_score(value: float, full_score_at: float) -> float:
+    if value <= 0 or full_score_at <= 0:
+        return 0.0
+    return max(0.0, min(1.0, math.log1p(value) / math.log1p(full_score_at))) * 100
 
 
 def row_price(row: dict[str, Any] | None) -> float | None:
@@ -137,6 +158,63 @@ def executable_severity(base_severity: str, execution: dict[str, Any]) -> str:
     if base_severity == "signal" and execution.get("quality") == "partial":
         return "weak"
     return base_severity
+
+
+def opportunity_rank_score(item: dict[str, Any]) -> float:
+    profit = max(0.0, _finite_number(item.get("profit")))
+    margin = max(0.0, _finite_number(item.get("margin")))
+    try:
+        path_steps = max(1, int(item.get("path_steps") or 1))
+    except (TypeError, ValueError):
+        path_steps = 1
+
+    execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+    execution_score = max(0.0, min(100.0, _finite_number(execution.get("score"), 50.0)))
+    volume = max(_finite_number(item.get("min_volume")), _finite_number(execution.get("volume")))
+    risk_flags = list(item.get("risk_flags") or execution.get("risk_flags") or [])
+
+    margin_score = _bounded_ratio(margin, 0.25)
+    profit_score = _bounded_log_score(profit, 100.0)
+    liquidity_score = _bounded_log_score(volume, 100.0)
+    efficiency_score = _bounded_ratio(margin / path_steps, 0.10)
+    risk_penalty = min(30.0, len(risk_flags) * 6.0)
+    if not execution.get("executable", True):
+        risk_penalty += 25.0
+    if item.get("low_volume"):
+        risk_penalty += 10.0
+    if profit <= 0:
+        risk_penalty += 50.0
+
+    score = (
+        margin_score * 0.32
+        + profit_score * 0.18
+        + liquidity_score * 0.22
+        + execution_score * 0.22
+        + efficiency_score * 0.06
+        - risk_penalty
+    )
+    return round(max(0.0, score), 4)
+
+
+def opportunity_sort_key(item: dict[str, Any]) -> tuple[float, float, float, float, int]:
+    execution = item.get("execution") if isinstance(item.get("execution"), dict) else {}
+    volume = max(_finite_number(item.get("min_volume")), _finite_number(execution.get("volume")))
+    try:
+        path_steps = max(1, int(item.get("path_steps") or 1))
+    except (TypeError, ValueError):
+        path_steps = 1
+    return (
+        -opportunity_rank_score(item),
+        -max(0.0, _finite_number(item.get("margin"))),
+        -max(0.0, _finite_number(item.get("profit"))),
+        -volume,
+        path_steps,
+    )
+
+
+def rank_opportunities(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ranked = [dict(item, rank_score=opportunity_rank_score(item)) for item in items]
+    return sorted(ranked, key=opportunity_sort_key)
 
 
 def enrich_trade_advice(
