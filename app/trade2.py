@@ -1460,6 +1460,23 @@ def _item_base_market_payload_is_error_only(payload: dict[str, Any]) -> bool:
     )
 
 
+def _item_base_market_rows_matching_min_ilvl(
+    rows: list[dict[str, Any]],
+    min_ilvl: int | None,
+) -> list[dict[str, Any]]:
+    if min_ilvl is None:
+        return list(rows)
+    matching_rows = []
+    for row in rows:
+        try:
+            row_min_ilvl = int(row.get("min_ilvl"))
+        except (TypeError, ValueError):
+            continue
+        if row_min_ilvl >= min_ilvl:
+            matching_rows.append(row)
+    return matching_rows
+
+
 async def _enrich_stored_item_base_market_rows(
     rows: list[dict[str, Any]],
     min_ilvl: int | None = None,
@@ -2049,7 +2066,6 @@ async def get_item_base_market(
     cache_key = _item_base_market_cache_key(league, target, status, q, limit, min_ilvl)
     canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
     exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, min_ilvl)
-    default_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, None)
     if not force_refresh:
         cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
         if not cached and q:
@@ -2058,8 +2074,7 @@ async def get_item_base_market(
             payload = _cache_copy(cached["data"])
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
-                if min_ilvl is not None:
-                    rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+                rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
                 payload["rows"] = rows[:limit]
                 payload["matched_total"] = len(rows)
                 payload["cached"] = True
@@ -2093,19 +2108,18 @@ async def get_item_base_market(
         cached = None
         if cache_key != canonical_cache_key:
             cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
-        if not cached and min_ilvl is not None:
-            cached = ITEM_BASE_MARKET_CACHE.get(default_cache_key)
         if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
             payload = _cache_copy(cached["data"])
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
-                if min_ilvl is not None:
-                    rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+                rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
                 payload["rows"] = rows[:limit]
                 payload["matched_total"] = len(rows)
                 payload["cached"] = True
                 return payload
-        latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+        latest = None
+        if min_ilvl is None:
+            latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
         latest_source = str((latest or {}).get("source") or "")
         if latest and ("exact" in latest_source or "overview" in latest_source):
             latest = None
@@ -2114,8 +2128,6 @@ async def get_item_base_market(
             enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
             rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
-            if min_ilvl is not None:
-                rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
             priced_total = sum(1 for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None)
             return {
                 **latest,

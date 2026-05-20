@@ -1364,6 +1364,63 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
     assert [row["id"] for row in result["rows"]] == ["base:pearl-ring"]
 
 
+def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    default_cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[default_cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "source": "trade2/search+fetch:catalog-scan",
+            "rows": [{"id": "base:amber-amulet", "text_ru": "Амулет с янтарём", "low": 1.0, "min_ilvl": None}],
+        },
+    }
+    history_calls = {"count": 0}
+
+    def fake_read_latest_rates(**kwargs):
+        history_calls["count"] += 1
+        return {
+            "created_ts": 10.0,
+            "rows": [{"id": "base:amber-amulet", "text_ru": "Амулет с янтарём", "low": 1.0}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                }
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="",
+            limit=40,
+            min_ilvl=82,
+            force_refresh=False,
+        )
+    )
+
+    assert history_calls == {"count": 0}
+    assert result["source"] == "item-base-catalog"
+    assert result["rows"][0]["text_ru"] == "Амулет с янтарём"
+    assert result["rows"][0]["min_ilvl"] == 82
+    assert result["rows"][0]["low"] is None
+
+
 def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
