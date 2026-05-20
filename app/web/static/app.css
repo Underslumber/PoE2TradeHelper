@@ -5,6 +5,12 @@ body {
 .navbar {
   border-bottom: 1px solid #22313b;
 }
+.navbar .container-fluid {
+  gap: 12px;
+}
+.navbar-brand {
+  min-width: 0;
+}
 .navbar .btn {
   min-width: 84px;
 }
@@ -15,7 +21,10 @@ body {
   gap: 8px;
 }
 .live-navbar-actions {
+  flex: 1 1 640px;
   gap: 14px;
+  justify-content: flex-end;
+  min-width: 0;
 }
 .navbar-league-field {
   align-items: center;
@@ -36,6 +45,9 @@ body {
   background: #0f171e;
   border: 1px solid #2a3a45;
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
 }
 .nav-view-tab {
   min-width: 104px;

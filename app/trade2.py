@@ -675,6 +675,10 @@ def _item_base_generated_icon_url(icon_key: str) -> str:
     return f"/icons/item-bases/generated/{safe_key}.svg"
 
 
+def _item_base_is_generated_icon_url(image: str) -> bool:
+    return image.startswith("/icons/item-bases/generated/")
+
+
 def _item_base_icon_slug(item_id: str) -> str:
     slug = str(item_id or "").removeprefix("base:").strip() or "unknown"
     return re.sub(r"[^0-9a-zа-яё_-]+", "-", slug, flags=re.IGNORECASE).strip("-") or "unknown"
@@ -737,7 +741,7 @@ def _ensure_item_base_catalog_icons(bases: list[dict[str, Any]]) -> list[dict[st
         local_image = _item_base_existing_local_icon_url(item_id)
         if local_image and (not image or image.startswith("data:") or image.startswith("/icons/item-bases/")):
             image = local_image
-        elif not image or image.startswith("data:"):
+        elif not image or image.startswith("data:") or _item_base_is_generated_icon_url(image):
             image = _item_base_generated_icon_url(icon_key)
         enriched.append({**base, "id": item_id, "icon_key": icon_key, "image": image})
     return enriched

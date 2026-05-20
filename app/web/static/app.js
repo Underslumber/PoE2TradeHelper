@@ -3341,12 +3341,21 @@ function baseMarketGroupLabel(row) {
 
 function baseMarketIconMarkup(row, extraClass = '') {
   const image = row?.image || row?.icon_url || '';
-  if (image) {
-    return `<span class="base-market-icon ${extraClass}"><img src="${escapeHtml(image)}" alt=""></span>`;
-  }
   const key = String(row?.icon_key || 'base').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'base';
+  if (image) {
+    return `<span class="base-market-icon ${extraClass}"><img src="${escapeHtml(image)}" alt="" loading="lazy" data-icon-key="${escapeHtml(key)}"></span>`;
+  }
   return `<span class="base-market-icon base-market-icon-fallback base-market-icon-${escapeHtml(key)} ${extraClass}" aria-hidden="true"></span>`;
 }
+
+document.addEventListener('error', event => {
+  const image = event.target;
+  if (!image?.matches?.('.base-market-icon img')) return;
+  const wrapper = image.closest('.base-market-icon');
+  const key = String(image.dataset.iconKey || 'base').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'base';
+  wrapper?.classList.add('base-market-icon-fallback', `base-market-icon-${key}`);
+  image.remove();
+}, true);
 
 function baseMarketPriceText(value, target) {
   return value ? lotTargetPrice(value, target) : t('baseMarketNoPrice');

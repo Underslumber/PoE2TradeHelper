@@ -665,6 +665,18 @@ def test_item_base_catalog_icons_are_local_files(tmp_path, monkeypatch):
     assert (tmp_path / "icons" / "generated" / "amulet.svg").exists()
 
 
+def test_item_base_catalog_recreates_generated_icon_from_seed_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
+
+    bases = trade2._ensure_item_base_catalog_icons(
+        [{"id": "base:unknown", "type": "Unknown", "icon_key": "base", "image": "/icons/item-bases/generated/base.svg"}]
+    )
+
+    assert bases[0]["image"] == "/icons/item-bases/generated/base.svg"
+    assert (tmp_path / "icons" / "generated" / "base.svg").exists()
+
+
 def test_item_base_catalog_prefers_existing_local_icon(tmp_path, monkeypatch):
     icon_dir = tmp_path / "icons"
     icon_dir.mkdir()
