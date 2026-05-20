@@ -938,6 +938,43 @@ body {
   font-size: 1.15rem;
   margin-top: 4px;
 }
+.trade-report-panel {
+  border-top: 1px solid #263741;
+  margin: 0 0 14px;
+  padding-top: 14px;
+}
+.trade-report-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  margin-top: 10px;
+}
+.trade-report-grid > div,
+.trade-report-strategies > article {
+  background: #17222b;
+  border: 1px solid #2d3b45;
+  border-radius: 4px;
+  min-width: 0;
+  padding: 10px;
+}
+.trade-report-grid strong,
+.trade-report-strategies strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.trade-report-strategies {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 10px;
+}
+.trade-report-strategies span,
+.trade-report-strategies small {
+  color: #91a7b7;
+  display: block;
+  margin-top: 4px;
+}
 .account-settings {
   align-items: end;
   background: #17222b;

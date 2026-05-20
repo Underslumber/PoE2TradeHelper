@@ -8,6 +8,7 @@ import secrets
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from typing import Any
 
 
 PASSWORD_ITERATIONS = 260_000
@@ -190,3 +191,119 @@ def calculate_benchmark_adjusted_pnl(
         "benchmark_currency": benchmark_currency,
         "benchmark_change_percent": (benchmark_ratio - 1) * 100,
     }
+
+
+def _add_currency_amount(bucket: dict[str, float], currency: str | None, amount: Any) -> None:
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        return
+    if not currency or value == 0:
+        return
+    bucket[currency] = bucket.get(currency, 0.0) + value
+
+
+def _strategy_report(tag: str) -> dict[str, Any]:
+    return {
+        "strategy_tag": tag,
+        "total": 0,
+        "open": 0,
+        "closed": 0,
+        "wins": 0,
+        "losses": 0,
+        "break_even": 0,
+        "fees_by_currency": {},
+        "nominal_by_currency": {},
+        "real_by_currency": {},
+        "entry_reasons": 0,
+        "exit_reasons": 0,
+    }
+
+
+def build_trade_report(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "schema_version": "poe2-trade-report/v1",
+        "total": len(trades),
+        "open": 0,
+        "closed": 0,
+        "wins": 0,
+        "losses": 0,
+        "break_even": 0,
+        "fees_by_currency": {},
+        "nominal_closed_by_currency": {},
+        "real_closed_by_currency": {},
+        "open_current_by_currency": {},
+        "open_real_current_by_currency": {},
+        "entry_reasons": 0,
+        "exit_reasons": 0,
+        "by_strategy": [],
+    }
+    by_strategy: dict[str, dict[str, Any]] = {}
+
+    for trade in trades:
+        status = str(trade.get("status") or "open")
+        strategy = str(trade.get("strategy_tag") or "Без стратегии")
+        strategy_item = by_strategy.setdefault(strategy, _strategy_report(strategy))
+        strategy_item["total"] += 1
+
+        if trade.get("entry_reason"):
+            report["entry_reasons"] += 1
+            strategy_item["entry_reasons"] += 1
+        if trade.get("exit_reason"):
+            report["exit_reasons"] += 1
+            strategy_item["exit_reasons"] += 1
+        _add_currency_amount(report["fees_by_currency"], trade.get("fee_currency"), trade.get("fee_applied"))
+        _add_currency_amount(strategy_item["fees_by_currency"], trade.get("fee_currency"), trade.get("fee_applied"))
+
+        if status == "closed":
+            report["closed"] += 1
+            strategy_item["closed"] += 1
+            if trade.get("pnl_available"):
+                amount = float(trade.get("pnl_amount") or 0)
+                _add_currency_amount(report["nominal_closed_by_currency"], trade.get("pnl_currency"), amount)
+                _add_currency_amount(strategy_item["nominal_by_currency"], trade.get("pnl_currency"), amount)
+                if amount > 0:
+                    report["wins"] += 1
+                    strategy_item["wins"] += 1
+                elif amount < 0:
+                    report["losses"] += 1
+                    strategy_item["losses"] += 1
+                else:
+                    report["break_even"] += 1
+                    strategy_item["break_even"] += 1
+            if trade.get("real_pnl_available"):
+                _add_currency_amount(
+                    report["real_closed_by_currency"],
+                    trade.get("real_pnl_currency"),
+                    trade.get("real_pnl_amount"),
+                )
+                _add_currency_amount(
+                    strategy_item["real_by_currency"],
+                    trade.get("real_pnl_currency"),
+                    trade.get("real_pnl_amount"),
+                )
+        else:
+            report["open"] += 1
+            strategy_item["open"] += 1
+            if trade.get("current_pnl_available"):
+                _add_currency_amount(
+                    report["open_current_by_currency"],
+                    trade.get("current_pnl_currency"),
+                    trade.get("current_pnl_amount"),
+                )
+            if trade.get("current_real_pnl_available"):
+                _add_currency_amount(
+                    report["open_real_current_by_currency"],
+                    trade.get("current_real_pnl_currency"),
+                    trade.get("current_real_pnl_amount"),
+                )
+
+    for item in by_strategy.values():
+        item["win_rate"] = (item["wins"] / item["closed"] * 100) if item["closed"] else None
+    report["win_rate"] = (report["wins"] / report["closed"] * 100) if report["closed"] else None
+    report["by_strategy"] = sorted(
+        by_strategy.values(),
+        key=lambda item: (item["closed"], item["total"], item["strategy_tag"]),
+        reverse=True,
+    )
+    return report

@@ -378,6 +378,22 @@ def test_filter_comparable_lots_relaxes_by_one_affix_only_after_strict_step():
 
     assert [lot["price_target"] for lot in strict] == [1.0]
     assert [lot["price_target"] for lot in relaxed] == [1.0, 2.0]
+    assert strict[0]["similarity"]["matched_stat_ids"] == ["explicit.stat_evasion", "explicit.stat_spirit"]
+
+
+def test_market_confidence_requires_multiple_official_stats_for_high_confidence():
+    comparison = {
+        "mode": "type-level-stat-ids",
+        "official_stat_count": 1,
+    }
+    stronger_comparison = {
+        "mode": "type-level-stat-ids",
+        "official_stat_count": 2,
+    }
+    stats = {"avg_similarity": 90}
+
+    assert trade2._market_confidence(10, comparison, stats) == "medium"
+    assert trade2._market_confidence(10, stronger_comparison, stats) == "high"
 
 
 def test_manual_seller_lot_profile_requires_selected_stats():

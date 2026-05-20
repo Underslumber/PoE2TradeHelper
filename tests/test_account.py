@@ -1,4 +1,5 @@
 from app.account import (
+    build_trade_report,
     calculate_benchmark_adjusted_pnl,
     calculate_trade_pnl,
     hash_password,
@@ -88,3 +89,52 @@ def test_calculate_benchmark_adjusted_pnl_requires_benchmark_snapshot():
 
     assert pnl["real_pnl_available"] is False
     assert pnl["real_pnl_amount"] is None
+
+
+def test_build_trade_report_groups_by_currency_and_strategy():
+    report = build_trade_report(
+        [
+            {
+                "status": "closed",
+                "strategy_tag": "flip",
+                "pnl_available": True,
+                "pnl_amount": 20,
+                "pnl_currency": "exalted",
+                "real_pnl_available": True,
+                "real_pnl_amount": 5,
+                "real_pnl_currency": "exalted",
+                "fee_applied": 1,
+                "fee_currency": "exalted",
+                "entry_reason": "cheap",
+                "exit_reason": "target",
+            },
+            {
+                "status": "closed",
+                "strategy_tag": "flip",
+                "pnl_available": True,
+                "pnl_amount": -3,
+                "pnl_currency": "divine",
+                "real_pnl_available": False,
+                "fee_applied": 0.1,
+                "fee_currency": "divine",
+            },
+            {
+                "status": "open",
+                "strategy_tag": "hold",
+                "current_pnl_available": True,
+                "current_pnl_amount": 4,
+                "current_pnl_currency": "exalted",
+            },
+        ]
+    )
+
+    assert report["closed"] == 2
+    assert report["open"] == 1
+    assert report["wins"] == 1
+    assert report["losses"] == 1
+    assert report["nominal_closed_by_currency"] == {"exalted": 20.0, "divine": -3.0}
+    assert report["real_closed_by_currency"] == {"exalted": 5.0}
+    assert report["fees_by_currency"] == {"exalted": 1.0, "divine": 0.1}
+    assert report["open_current_by_currency"] == {"exalted": 4.0}
+    assert report["by_strategy"][0]["strategy_tag"] == "flip"
+    assert report["by_strategy"][0]["win_rate"] == 50

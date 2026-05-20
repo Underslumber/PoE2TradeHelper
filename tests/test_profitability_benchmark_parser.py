@@ -83,6 +83,46 @@ def test_recipe_analysis_returns_known_fragment_recipe():
     assert payload["opportunities"][0]["profit"] == 100
 
 
+def test_recipe_analysis_returns_breachstone_recipe():
+    payload = analyze_recipes(
+        "Breach",
+        [
+            {"id": "breach-splinter", "text_ru": "Осколок Разлома", "median": 0.1, "volume": 1000},
+            {"id": "breachstone", "text_ru": "Камень Разлома", "median": 45, "volume": 80},
+        ],
+        "exalted",
+        snapshot_ts=1,
+    )
+
+    opportunity = payload["opportunities"][0]
+    assert opportunity["source"] == "breach-splinter"
+    assert opportunity["result"] == "breachstone"
+    assert opportunity["craft_cost"] == 30
+    assert opportunity["profit"] == 15
+
+
+def test_recipe_analysis_returns_fragment_entry_set_cost():
+    payload = analyze_recipes(
+        "Fragments",
+        [
+            {"id": "cowardly-fate", "text_ru": "Трусливый конец", "median": 8, "volume": 100},
+            {"id": "deadly-fate", "text_ru": "Смертельный конец", "median": 10, "volume": 100},
+            {"id": "victorious-fate", "text_ru": "Победный конец", "median": 12, "volume": 100},
+        ],
+        "exalted",
+        snapshot_ts=1,
+    )
+
+    set_cost = next(item for item in payload["set_costs"] if item["set_id"] == "ultimatum-fate-set")
+    assert set_cost["set_cost"] == 30
+    assert [item["source"] for item in set_cost["components"]] == [
+        "cowardly-fate",
+        "deadly-fate",
+        "victorious-fate",
+    ]
+    assert set_cost["execution"]["quality"] == "good"
+
+
 def test_recipe_analysis_returns_adjacent_delirium_recipe():
     payload = analyze_recipes(
         "Delirium",

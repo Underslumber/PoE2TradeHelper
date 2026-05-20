@@ -1606,6 +1606,74 @@ def _item_level_matches(source: Any, candidate: Any, tolerance: int) -> bool:
     return abs(source - candidate) <= tolerance
 
 
+def _official_stat_ids_from_keys(keys: set[str]) -> set[str]:
+    return {key[5:] for key in keys if key.startswith("stat:")}
+
+
+def _similarity_threshold(looseness: int, profile: dict[str, Any] | None = None) -> float:
+    if (profile or {}).get("base_only"):
+        return 45.0
+    if looseness == 0:
+        return 70.0
+    if looseness == 1:
+        return 55.0
+    return 40.0
+
+
+def _lot_similarity_details(
+    target: dict[str, Any],
+    candidate: dict[str, Any],
+    looseness: int,
+    profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    target_affixes = set(_lot_affix_keys(target, profile))
+    target_official = _official_stat_ids_from_keys(target_affixes)
+    candidate_affixes = set(_lot_affix_keys(candidate, profile) if target_official else _lot_text_affix_keys(candidate))
+    candidate_official = _official_stat_ids_from_keys(candidate_affixes)
+    matched_stat_ids = sorted(target_official & candidate_official)
+    matched_affixes = sorted(target_affixes & candidate_affixes)
+    target_base = _lot_base_key(target)
+    candidate_base = _lot_base_key(candidate)
+    base_required = _profile_requires_base(profile)
+    base_match = bool(target_base and candidate_base and target_base == candidate_base)
+    target_level = target.get("item_level")
+    candidate_level = candidate.get("item_level")
+    level_tolerance = 5 if looseness == 0 else 10 if looseness == 1 else 15
+    level_match = _item_level_matches(target_level, candidate_level, level_tolerance)
+
+    score = 0.0
+    if base_required and base_match:
+        score += 45.0 if (profile or {}).get("base_only") else 25.0
+    elif not base_required:
+        score += 10.0
+    if _rarity_option(target.get("rarity")) and _rarity_option(target.get("rarity")) == _rarity_option(candidate.get("rarity")):
+        score += 15.0
+    if level_match:
+        score += 15.0
+    if target_official:
+        official_ratio = len(matched_stat_ids) / len(target_official)
+        score += 45.0 * official_ratio
+        if len(target_official) >= 2 and len(matched_stat_ids) >= 2:
+            score += 10.0
+        preferred = set((profile or {}).get("preferred_stat_ids") or ())
+        if preferred and preferred <= candidate_official:
+            score += 10.0
+    elif target_affixes:
+        score += 35.0 * (len(matched_affixes) / len(target_affixes))
+
+    return {
+        "score": round(min(100.0, score), 2),
+        "base_match": base_match,
+        "level_match": level_match,
+        "level_tolerance": level_tolerance,
+        "matched_affixes": matched_affixes,
+        "matched_stat_ids": matched_stat_ids,
+        "missing_stat_ids": sorted(target_official - candidate_official),
+        "official_stat_overlap": len(matched_stat_ids),
+        "official_stat_total": len(target_official),
+    }
+
+
 def _comparable_lot_profile(
     lot: dict[str, Any],
     looseness: int,
@@ -1639,6 +1707,8 @@ def _comparable_lot_profile(
         "affixes": list(affixes),
         "required_affixes": required_affixes,
         "stat_ids": [mod["id"] for mod in key_stats],
+        "official_stat_count": len([mod for mod in key_stats if mod.get("id")]),
+        "similarity_threshold": _similarity_threshold(looseness, profile),
     }
     if _profile_has_rules(profile):
         result["manual_profile"] = True
@@ -1741,7 +1811,10 @@ def _filter_comparable_lots(
                 continue
         if not _lot_matches_profile_constraints(target, lot, profile):
             continue
-        comparable.append(lot)
+        similarity = _lot_similarity_details(target, lot, looseness, profile)
+        if similarity["score"] < comparison_profile["similarity_threshold"]:
+            continue
+        comparable.append({**lot, "similarity": similarity})
     return comparable
 
 
@@ -1859,17 +1932,23 @@ def _trim_price_outliers(values: list[float]) -> tuple[list[float], int]:
     return trimmed or values, len(values) - len(trimmed)
 
 
-def _market_confidence(count: int, comparison: dict[str, Any] | None = None) -> str:
+def _market_confidence(
+    count: int,
+    comparison: dict[str, Any] | None = None,
+    stats: dict[str, Any] | None = None,
+) -> str:
     mode = (comparison or {}).get("mode") or ""
+    official_stat_count = int((comparison or {}).get("official_stat_count") or 0)
+    avg_similarity = _to_float((stats or {}).get("avg_similarity")) or 0
     if mode == "base-only":
         if count >= 12:
             return "medium"
         if count >= SELLER_MARKET_MIN_COMPARABLES:
             return "low"
         return "insufficient"
-    if count >= 8 and mode == "type-level-stat-ids":
+    if count >= 8 and mode == "type-level-stat-ids" and official_stat_count >= 2 and avg_similarity >= 75:
         return "high"
-    if count >= 5 and mode in {"type-level-stat-ids", "type-level-stat-ids-minus-one"}:
+    if count >= 5 and mode in {"type-level-stat-ids", "type-level-stat-ids-minus-one"} and avg_similarity >= 60:
         return "medium"
     if count >= SELLER_MARKET_MIN_COMPARABLES:
         return "low"
@@ -1999,11 +2078,18 @@ def _empty_market_payload(
 
 def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, Any]:
     seller_key = seller.lower()
-    raw_values = sorted(
-        lot["price_target"]
+    priced_lots = [
+        lot
         for lot in lots
         if isinstance(lot.get("price_target"), float) and lot.get("seller", "").lower() != seller_key
-    )
+    ]
+    raw_values = sorted(lot["price_target"] for lot in priced_lots)
+    similarity_scores = [
+        similarity["score"]
+        for lot in priced_lots
+        for similarity in [lot.get("similarity")]
+        if isinstance(similarity, dict) and isinstance(similarity.get("score"), (int, float))
+    ]
     values, outliers = _trim_price_outliers(raw_values)
     if not values:
         return {
@@ -2015,6 +2101,8 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
             "median": None,
             "p25": None,
             "p75": None,
+            "avg_similarity": None,
+            "min_similarity": None,
         }
     median = statistics.median(values)
     return {
@@ -2026,6 +2114,8 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
         "median": median,
         "p25": _percentile(values, 0.25),
         "p75": _percentile(values, 0.75),
+        "avg_similarity": statistics.mean(similarity_scores) if similarity_scores else None,
+        "min_similarity": min(similarity_scores) if similarity_scores else None,
     }
 
 
@@ -2169,7 +2259,7 @@ async def _fetch_similar_market(
         market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
         comparable_lots = _filter_comparable_lots(lot, market_lots, looseness, profile)
         stats = _market_price_stats(comparable_lots, seller)
-        stats["confidence"] = _market_confidence(stats.get("count", 0), comparison)
+        stats["confidence"] = _market_confidence(stats.get("count", 0), comparison, stats)
         last_payload = {
             "query_id": market_search.get("id"),
             "total": market_search.get("total") or len(market_lots),

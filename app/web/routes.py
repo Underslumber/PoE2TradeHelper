@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.account import (
     SESSION_DAYS,
+    build_trade_report,
     calculate_benchmark_adjusted_pnl,
     calculate_trade_pnl,
     hash_password,
@@ -603,11 +604,40 @@ def _latest_rates_snapshot(league: str, category: str, target: str, cache: dict 
 def _latest_item_market(league: str, category: str, target: str, item_id: str, cache: dict | None = None) -> dict:
     snapshot = _latest_rates_snapshot(league, category, target, cache)
     if not snapshot:
-        return {}
-    row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
-    price = _row_price(row)
+        row = None
+        price = None
+    else:
+        row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
+        price = _row_price(row)
     if price is None:
-        return {}
+        history_key = ("latest_item_history", league, category, target, item_id)
+        if cache is not None and history_key in cache:
+            series = cache[history_key]
+        else:
+            series = read_item_history(
+                league=league,
+                category=category,
+                target=target,
+                status="any",
+                item_id=item_id,
+                metric="price",
+                limit=200,
+            )
+            if cache is not None:
+                cache[history_key] = series
+        if not series:
+            return {}
+        latest = series[-1]
+        return {
+            "target_currency": target,
+            "price": latest.get("price") or latest.get("value"),
+            "source": latest.get("source"),
+            "created_ts": latest.get("created_ts"),
+            "change": latest.get("change"),
+            "sparkline": [],
+            "sparkline_kind": "price",
+            "volume": latest.get("volume", 0),
+        }
     return {
         "target_currency": snapshot.get("target") or target,
         "price": price,
@@ -1118,7 +1148,8 @@ def api_account_trades(request: Request, db: Session = Depends(get_db)):
         .order_by(TradeJournalEntry.updated_at.desc())
     ).all()
     market_cache: dict = {}
-    return {"trades": [_trade_payload(trade, market_cache) for trade in trades]}
+    payloads = [_trade_payload(trade, market_cache) for trade in trades]
+    return {"trades": payloads, "report": build_trade_report(payloads)}
 
 
 @router.get("/api/account/trades/export.csv")
