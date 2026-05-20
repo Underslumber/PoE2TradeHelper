@@ -675,6 +675,17 @@ def test_item_base_catalog_recreates_generated_icon_from_seed_path(tmp_path, mon
 
     assert bases[0]["image"] == "/icons/item-bases/generated/base.svg"
     assert (tmp_path / "icons" / "generated" / "base.svg").exists()
+    assert "width='64' height='64'" in (tmp_path / "icons" / "generated" / "base.svg").read_text(encoding="utf-8")
+
+
+def test_item_base_generated_icon_rewrites_legacy_svg(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "icons")
+    icon_path = tmp_path / "icons" / "generated" / "base.svg"
+    icon_path.parent.mkdir(parents=True)
+    icon_path.write_text("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'></svg>", encoding="utf-8")
+
+    assert trade2._item_base_generated_icon_url("base") == "/icons/item-bases/generated/base.svg"
+    assert "width='64' height='64'" in icon_path.read_text(encoding="utf-8")
 
 
 def test_item_base_catalog_prefers_existing_local_icon(tmp_path, monkeypatch):

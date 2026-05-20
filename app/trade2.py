@@ -652,7 +652,7 @@ def _item_base_icon_key(category_id: str = "", label: str = "", base_type: str =
 def _item_base_icon_svg(icon_key: str) -> str:
     color, label = ITEM_BASE_ICON_STYLES.get(icon_key, ITEM_BASE_ICON_STYLES["base"])
     return (
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+        "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>"
         "<rect width='64' height='64' rx='10' fill='#0b1720'/>"
         f"<circle cx='32' cy='26' r='18' fill='{color}' fill-opacity='.22' stroke='{color}' stroke-width='3'/>"
         f"<text x='32' y='48' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' font-weight='700' fill='{color}'>{label}</text>"
@@ -670,8 +670,9 @@ def _item_base_generated_icon_url(icon_key: str) -> str:
     icon_dir = ITEM_BASE_ICON_DIR / "generated"
     icon_dir.mkdir(parents=True, exist_ok=True)
     icon_path = icon_dir / f"{safe_key}.svg"
-    if not icon_path.exists():
-        icon_path.write_text(_item_base_icon_svg(safe_key), encoding="utf-8")
+    expected_svg = _item_base_icon_svg(safe_key)
+    if not icon_path.exists() or icon_path.read_text(encoding="utf-8") != expected_svg:
+        icon_path.write_text(expected_svg, encoding="utf-8")
     return f"/icons/item-bases/generated/{safe_key}.svg"
 
 
