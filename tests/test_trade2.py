@@ -655,6 +655,7 @@ def test_item_base_fallback_catalog_is_russian_and_has_icons():
 
 def test_item_base_catalog_icons_are_local_files(tmp_path, monkeypatch):
     monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
 
     bases = trade2._ensure_item_base_catalog_icons(
         [{"id": "base:amber-amulet", "type": "Amber Amulet", "icon_key": "amulet", "image": "data:image/svg+xml;utf8,old"}]
@@ -677,6 +678,22 @@ def test_item_base_catalog_prefers_existing_local_icon(tmp_path, monkeypatch):
     assert bases[0]["image"] == "/icons/item-bases/amber-amulet.png"
 
 
+def test_item_base_catalog_prefers_bundled_icon_when_storage_is_empty(tmp_path, monkeypatch):
+    storage_icon_dir = tmp_path / "storage-icons"
+    bundled_icon_dir = tmp_path / "bundled-icons"
+    storage_icon_dir.mkdir()
+    bundled_icon_dir.mkdir()
+    (bundled_icon_dir / "amber-amulet.png").write_bytes(b"png")
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", storage_icon_dir)
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", bundled_icon_dir)
+
+    bases = trade2._ensure_item_base_catalog_icons(
+        [{"id": "base:amber-amulet", "type": "Amber Amulet", "icon_key": "amulet", "image": "/icons/item-bases/generated/amulet.svg"}]
+    )
+
+    assert bases[0]["image"] == "/static/item-base-icons/amber-amulet.png"
+
+
 def test_item_base_catalog_snapshot_roundtrip(tmp_path):
     payload = {
         "created_ts": 123.0,
@@ -693,6 +710,53 @@ def test_item_base_catalog_snapshot_roundtrip(tmp_path):
     assert loaded["schema_version"] == trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION
     assert loaded["created_ts"] == 123.0
     assert loaded["bases"][0]["type_ru"] == "Амулет с янтарём"
+
+
+def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, monkeypatch):
+    async def fake_fetch(_locale="en"):
+        raise RuntimeError("trade2 item catalog rate limited")
+
+    bundled_path = tmp_path / "item_base_catalog_seed.json"
+    bundled_path.write_text(
+        json.dumps(
+            {
+                "schema_version": trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION,
+                "created_ts": 456.0,
+                "source": "trade2/data/items",
+                "total": 1,
+                "bases": [
+                    {
+                        "id": "base:amber-amulet",
+                        "type": "Amber Amulet",
+                        "type_ru": "Амулет с янтарём",
+                        "query_type": "Амулет с янтарём",
+                        "icon_key": "amulet",
+                        "image": "/icons/item-bases/generated/amulet.svg",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    storage_icon_dir = tmp_path / "storage-icons"
+    bundled_icon_dir = tmp_path / "bundled-icons"
+    storage_icon_dir.mkdir()
+    bundled_icon_dir.mkdir()
+    (bundled_icon_dir / "amber-amulet.png").write_bytes(b"png")
+    monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", fake_fetch)
+    monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", tmp_path / "missing_runtime_catalog.json")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", bundled_path)
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", storage_icon_dir)
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", bundled_icon_dir)
+    monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})
+
+    result = asyncio.run(trade2.get_item_base_catalog())
+
+    assert result["source"] == "bundled:item_base_catalog_seed"
+    assert result["total"] == 1
+    assert result["bases"][0]["type_ru"] == "Амулет с янтарём"
+    assert result["bases"][0]["image"] == "/static/item-base-icons/amber-amulet.png"
 
 
 def test_item_base_market_query_uses_normal_rarity_and_priced_buyout():

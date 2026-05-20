@@ -13,6 +13,7 @@ import json
 import re
 import statistics
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -50,6 +51,8 @@ ITEM_BASE_CATALOG_SCHEMA_VERSION = "poe2-item-base-catalog/v1"
 ITEM_BASE_CATALOG_PATH = DATA_DIR / "item_base_catalog.json"
 ITEM_BASE_CATALOG_LIMIT = 1000
 ITEM_BASE_ICON_DIR = ICONS_DIR / "item-bases"
+ITEM_BASE_BUNDLED_CATALOG_PATH = Path(__file__).resolve().parent / "resources" / "item_base_catalog_seed.json"
+ITEM_BASE_BUNDLED_ICON_DIR = Path(__file__).resolve().parent / "web" / "static" / "item-base-icons"
 ITEM_BASE_MARKET_CATEGORY = "ItemBases"
 ITEM_BASE_MARKET_CACHE_TTL = 900
 ITEM_BASE_MARKET_FETCH_LIMIT = 100
@@ -683,6 +686,9 @@ def _item_base_existing_local_icon_url(item_id: str) -> str | None:
         icon_path = ITEM_BASE_ICON_DIR / f"{slug}{ext}"
         if icon_path.exists():
             return f"/icons/item-bases/{icon_path.name}"
+        bundled_path = ITEM_BASE_BUNDLED_ICON_DIR / f"{slug}{ext}"
+        if bundled_path.exists():
+            return f"/static/item-base-icons/{bundled_path.name}"
     return None
 
 
@@ -729,7 +735,7 @@ def _ensure_item_base_catalog_icons(bases: list[dict[str, Any]]) -> list[dict[st
         item_id = str(base.get("id") or _base_market_item_id(str(base.get("type") or base.get("query_type") or "")))
         image = str(base.get("image") or "")
         local_image = _item_base_existing_local_icon_url(item_id)
-        if local_image and (not image or image.startswith("data:") or image.startswith("/icons/item-bases/generated/")):
+        if local_image and (not image or image.startswith("data:") or image.startswith("/icons/item-bases/")):
             image = local_image
         elif not image or image.startswith("data:"):
             image = _item_base_generated_icon_url(icon_key)
@@ -790,7 +796,7 @@ def _item_base_fallback_catalog() -> list[dict[str, Any]]:
 
 def save_item_base_catalog_snapshot(
     payload: dict[str, Any],
-    path: Any = ITEM_BASE_CATALOG_PATH,
+    path: Any = None,
 ) -> None:
     bases = _ensure_item_base_catalog_icons(payload.get("bases") or [])
     if not isinstance(bases, list) or not bases:
@@ -803,6 +809,7 @@ def save_item_base_catalog_snapshot(
         "bases": bases,
         "errors": payload.get("errors") or [],
     }
+    path = ITEM_BASE_CATALOG_PATH if path is None else path
     path = DATA_DIR / str(path) if not hasattr(path, "parent") else path
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(f"{path.suffix}.tmp")
@@ -810,7 +817,8 @@ def save_item_base_catalog_snapshot(
     temp_path.replace(path)
 
 
-def load_item_base_catalog_snapshot(path: Any = ITEM_BASE_CATALOG_PATH) -> dict[str, Any] | None:
+def load_item_base_catalog_snapshot(path: Any = None) -> dict[str, Any] | None:
+    path = ITEM_BASE_CATALOG_PATH if path is None else path
     path = DATA_DIR / str(path) if not hasattr(path, "parent") else path
     if not path.exists():
         return None
@@ -828,6 +836,18 @@ def load_item_base_catalog_snapshot(path: Any = ITEM_BASE_CATALOG_PATH) -> dict[
         "total": int(payload.get("total") or len(bases)),
         "bases": _ensure_item_base_catalog_icons(bases),
         "errors": payload.get("errors") or [],
+    }
+
+
+def load_bundled_item_base_catalog_snapshot(path: Any = None) -> dict[str, Any] | None:
+    path = ITEM_BASE_BUNDLED_CATALOG_PATH if path is None else path
+    snapshot = load_item_base_catalog_snapshot(path=path)
+    if not snapshot:
+        return None
+    return {
+        **snapshot,
+        "source": "bundled:item_base_catalog_seed",
+        "errors": [],
     }
 
 
@@ -964,8 +984,13 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                             }
                         )
                     else:
-                        bases = _item_base_fallback_catalog()
-                        source = "fallback"
+                        bundled = load_bundled_item_base_catalog_snapshot()
+                        if bundled:
+                            bases = _ensure_item_base_catalog_icons(list(bundled.get("bases") or []))
+                            source = "bundled:item_base_catalog_seed"
+                        else:
+                            bases = _item_base_fallback_catalog()
+                            source = "fallback"
                 else:
                     bases = await _cache_item_base_catalog_icons(bases)
                 created_ts = time.time()
