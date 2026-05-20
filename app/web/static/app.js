@@ -113,6 +113,10 @@ const state = {
   historyTrends: [],
   historyTrendsKey: '',
   isLoadingHistoryTrends: false,
+  marketDiagnostics: null,
+  marketDiagnosticsKey: '',
+  marketDiagnosticsError: '',
+  isLoadingMarketDiagnostics: false,
   aiAnalysis: {
     job: null,
     isRunning: false,
@@ -165,6 +169,11 @@ const state = {
   isLoadingBaseMarket: false,
   baseMarketAbortController: null,
   baseMarketFilterTimer: null,
+  baseMarketPollTimer: null,
+  baseMarketSort: {
+    key: localStorage.getItem('poe2-base-market-sort-key') || 'low',
+    direction: localStorage.getItem('poe2-base-market-sort-direction') || 'asc',
+  },
   account: {
     authenticated: false,
     user: null,
@@ -497,6 +506,18 @@ function formatSnapshotStamp(data = {}) {
   const stamp = new Date(createdTs * 1000).toLocaleTimeString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
   const label = snapshotLabel(data);
   return label ? `${stamp} ${label}` : stamp;
+}
+
+function formatAgeSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return '-';
+  if (seconds < 90) return state.lang === 'ru' ? `${Math.round(seconds)} сек.` : `${Math.round(seconds)} sec`;
+  const minutes = seconds / 60;
+  if (minutes < 90) return state.lang === 'ru' ? `${Math.round(minutes)} мин.` : `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  if (hours < 48) return state.lang === 'ru' ? `${hours.toFixed(1).replace('.0', '')} ч.` : `${hours.toFixed(1).replace('.0', '')} h`;
+  const days = hours / 24;
+  return state.lang === 'ru' ? `${days.toFixed(1).replace('.0', '')} д.` : `${days.toFixed(1).replace('.0', '')} d`;
 }
 
 // Account, pins, and trade journal
@@ -2917,6 +2938,10 @@ function renderCategories() {
       state.historyTrends = [];
       state.historyTrendsKey = '';
       state.isLoadingHistoryTrends = false;
+      state.marketDiagnostics = null;
+      state.marketDiagnosticsKey = '';
+      state.marketDiagnosticsError = '';
+      state.isLoadingMarketDiagnostics = false;
       state.detailDemandCache = {};
       state.detailSeriesCache = {};
       setText('category-title', categoryName(category));
@@ -2989,7 +3014,12 @@ function renderMarket() {
 // Seller lots
 
 function lotNativePrice(lot) {
-  return `${formatPriceAmount(lot.price_amount)} ${currencyLabel(lot.price_currency)}`;
+  return nativePriceText(lot?.price_amount, lot?.price_currency);
+}
+
+function nativePriceText(amount, currency) {
+  if (amount === null || amount === undefined || amount === '' || !currency) return '-';
+  return `${formatPriceAmount(amount)} ${currencyLabel(currency)}`;
 }
 
 function lotTargetPrice(value, target = selectedTarget()) {
@@ -3134,9 +3164,10 @@ function baseMarketRequestParams(forceRefresh = false) {
   const params = {
     league: byId('live-league')?.value || '',
     target: selectedTarget(),
-    status: byId('live-status')?.value || 'any',
+    status: 'securable',
     q: (byId('base-market-query')?.value || '').trim(),
     limit: byId('base-market-limit')?.value || '40',
+    sample_limit: '100',
   };
   if (Number.isFinite(minIlvl) && minIlvl > 0) params.min_ilvl = String(Math.round(minIlvl));
   if (forceRefresh) params.refresh = 'true';
@@ -3149,8 +3180,98 @@ function baseMarketLowPrice(row) {
 }
 
 function baseMarketMedianPrice(row) {
-  const value = Number(row?.market_median ?? row?.p25 ?? row?.median);
+  const value = Number(row?.optimal ?? row?.market_median ?? row?.p25 ?? row?.median);
   return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function baseMarketConfidenceRank(row) {
+  const value = String(row?.confidence || '').toLowerCase();
+  if (value === 'high') return 3;
+  if (value === 'medium') return 2;
+  if (value === 'low') return 1;
+  return 0;
+}
+
+function baseMarketSortValue(row, key) {
+  if (key === 'name') return baseMarketRowName(row).toLowerCase();
+  if (key === 'group') return baseMarketGroupLabel(row).toLowerCase();
+  if (key === 'low') return baseMarketLowPrice(row);
+  if (key === 'optimal') return baseMarketMedianPrice(row);
+  if (key === 'lots') {
+    const total = baseMarketExactTotal(row);
+    if (total) return total;
+    const count = Number(row?.count ?? row?.clean_count ?? row?.offers ?? row?.volume);
+    return Number.isFinite(count) && count > 0 ? count : null;
+  }
+  if (key === 'checked') {
+    const count = Number(row?.clean_count ?? row?.count ?? 0);
+    const fetched = Number(row?.fetched_count ?? row?.raw_count ?? 0);
+    const value = Math.max(count, fetched);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (key === 'confidence') return baseMarketConfidenceRank(row);
+  return baseMarketLowPrice(row);
+}
+
+function compareBaseMarketRows(left, right) {
+  const key = state.baseMarketSort.key || 'low';
+  const direction = state.baseMarketSort.direction === 'desc' ? -1 : 1;
+  const a = baseMarketSortValue(left, key);
+  const b = baseMarketSortValue(right, key);
+  if (a === null && b === null) return baseMarketRowName(left).localeCompare(baseMarketRowName(right), state.lang === 'ru' ? 'ru' : 'en');
+  if (a === null) return 1;
+  if (b === null) return -1;
+  if (typeof a === 'string' && typeof b === 'string') {
+    const byText = a.localeCompare(b, state.lang === 'ru' ? 'ru' : 'en') * direction;
+    return byText || (baseMarketLowPrice(left) ?? Infinity) - (baseMarketLowPrice(right) ?? Infinity);
+  }
+  const byValue = (a - b) * direction;
+  return byValue || baseMarketRowName(left).localeCompare(baseMarketRowName(right), state.lang === 'ru' ? 'ru' : 'en');
+}
+
+function sortedBaseMarketRows(rows) {
+  return [...(rows || [])].sort(compareBaseMarketRows);
+}
+
+function baseMarketDefaultSortDirection(key) {
+  if (key === 'name' || key === 'group' || key === 'low' || key === 'optimal') return 'asc';
+  return 'desc';
+}
+
+function setBaseMarketSort(key) {
+  if (!key) return;
+  if (state.baseMarketSort.key === key) {
+    state.baseMarketSort.direction = state.baseMarketSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    state.baseMarketSort.key = key;
+    state.baseMarketSort.direction = baseMarketDefaultSortDirection(key);
+  }
+  localStorage.setItem('poe2-base-market-sort-key', state.baseMarketSort.key);
+  localStorage.setItem('poe2-base-market-sort-direction', state.baseMarketSort.direction);
+  renderBaseMarket();
+}
+
+function baseMarketSortButton(key, label) {
+  const active = state.baseMarketSort.key === key;
+  const icon = active ? (state.baseMarketSort.direction === 'asc' ? '↑' : '↓') : '↕';
+  return `
+    <button class="base-market-sort-button ${active ? 'active' : ''}" type="button" data-base-market-sort-key="${escapeHtml(key)}">
+      <span>${escapeHtml(label)}</span>
+      <span class="sort-icon" aria-hidden="true">${icon}</span>
+    </button>
+  `;
+}
+
+function renderBaseMarketSortHeader() {
+  return `
+    <div class="base-market-sort-row" role="row">
+      ${baseMarketSortButton('name', t('baseMarketSortBase'))}
+      ${baseMarketSortButton('low', t('baseMarketLowPrice'))}
+      ${baseMarketSortButton('optimal', t('baseMarketMedianPrice'))}
+      ${baseMarketSortButton('lots', t('baseMarketSortLots'))}
+      ${baseMarketSortButton('confidence', t('confidence'))}
+    </div>
+  `;
 }
 
 function baseMarketWarning() {
@@ -3159,6 +3280,53 @@ function baseMarketWarning() {
     return t('baseMarketRateLimited');
   }
   return errors.length ? t('baseMarketPartialError') : '';
+}
+
+function baseMarketRefreshJob() {
+  return state.baseMarket?.refresh_job || null;
+}
+
+function baseMarketJobIsActive(job = baseMarketRefreshJob()) {
+  return ['queued', 'running', 'rate_limited'].includes(String(job?.status || ''));
+}
+
+function baseMarketJobText(job = baseMarketRefreshJob()) {
+  const status = String(job?.status || '');
+  if (!status) return '';
+  const fetched = Number(job?.fetched_count || 0);
+  const clean = Number(job?.clean_count || 0);
+  const sampleLimit = Number(job?.sample_limit || 0);
+  const processed = Number(job?.processed_count || 0);
+  const baseTotal = Number(job?.base_total || 0);
+  const baseProgress = baseTotal > 0 ? `${formatAmount(processed)} / ${formatAmount(baseTotal)} ${t('baseMarketBasesProgress')}` : '';
+  const lotProgress = fetched > 0
+    ? `${formatAmount(clean)} / ${formatAmount(fetched)}${sampleLimit ? ` ${t('baseMarketSampleOf')} ${formatAmount(sampleLimit)}` : ''}`
+    : '';
+  const progress = [baseProgress, lotProgress].filter(Boolean).join(' · ');
+  if (status === 'queued') return t('baseMarketRefreshQueued');
+  if (status === 'running') return [t('baseMarketRefreshRunning'), progress].filter(Boolean).join(': ');
+  if (status === 'rate_limited') {
+    const retryAt = Number(job?.retry_at || 0);
+    const seconds = retryAt ? Math.max(0, retryAt - Date.now() / 1000) : Number(job?.retry_after || 0);
+    const retryText = Number.isFinite(seconds) && seconds > 0 ? `${t('baseMarketRetryIn')} ${formatAgeSeconds(seconds)}` : '';
+    return [t('baseMarketRefreshRateLimited'), retryText].filter(Boolean).join(' · ');
+  }
+  if (status === 'done') return [t('baseMarketRefreshDone'), progress].filter(Boolean).join(': ');
+  if (status === 'failed') return t('baseMarketRefreshFailed');
+  return '';
+}
+
+function scheduleBaseMarketPoll() {
+  if (state.baseMarketPollTimer) {
+    window.clearTimeout(state.baseMarketPollTimer);
+    state.baseMarketPollTimer = null;
+  }
+  const job = baseMarketRefreshJob();
+  if (!baseMarketJobIsActive(job)) return;
+  const retryAt = Number(job?.retry_at || 0);
+  const retryDelay = retryAt ? Math.max(5000, Math.min(60000, (retryAt * 1000) - Date.now())) : 0;
+  const delay = retryDelay || 5000;
+  state.baseMarketPollTimer = window.setTimeout(() => refreshBaseMarket(false), delay);
 }
 
 function baseMarketRowName(row) {
@@ -3184,6 +3352,39 @@ function baseMarketPriceText(value, target) {
   return value ? lotTargetPrice(value, target) : t('baseMarketNoPrice');
 }
 
+function priceStackMarkup(primary, secondary = '') {
+  return `
+    <span class="base-market-price-stack">
+      <strong>${escapeHtml(primary || t('baseMarketNoPrice'))}</strong>
+      ${secondary ? `<small>${escapeHtml(secondary)}</small>` : ''}
+    </span>
+  `;
+}
+
+function baseMarketLowPriceMarkup(row, target) {
+  const native = row?.best_native || null;
+  const low = baseMarketLowPrice(row);
+  if (native?.amount && native?.currency) {
+    const converted = native.price_target ? `${t('baseMarketConvertedToTarget')}: ${lotTargetPrice(native.price_target, target)}` : '';
+    return priceStackMarkup(nativePriceText(native.amount, native.currency), converted);
+  }
+  return priceStackMarkup(baseMarketPriceText(low, target));
+}
+
+function baseMarketTargetPriceMarkup(value, target) {
+  return priceStackMarkup(baseMarketPriceText(value, target));
+}
+
+function baseMarketOptimalPriceMarkup(row, target) {
+  const native = row?.optimal_native || null;
+  const optimal = baseMarketMedianPrice(row);
+  if (native?.amount && native?.currency) {
+    const converted = native.price_target ? `${t('baseMarketConvertedToTarget')}: ${lotTargetPrice(native.price_target, target)}` : '';
+    return priceStackMarkup(nativePriceText(native.amount, native.currency), converted);
+  }
+  return baseMarketTargetPriceMarkup(optimal, target);
+}
+
 function baseMarketRangeText(row, target) {
   const low = Number(row?.p25);
   const high = Number(row?.p75);
@@ -3193,6 +3394,55 @@ function baseMarketRangeText(row, target) {
   if (Number.isFinite(low) && low > 0) return lotTargetPrice(low, target);
   if (Number.isFinite(high) && high > 0) return lotTargetPrice(high, target);
   return t('baseMarketNoPrice');
+}
+
+function renderBaseMarketCurrencyGroups(row) {
+  const target = state.baseMarket?.target || selectedTarget();
+  const groups = row?.price_currency_groups || [];
+  if (!groups.length) return '';
+  return `
+    <div class="base-market-currency-breakdown">
+      <strong>${t('baseMarketCurrencyBreakdown')}</strong>
+      <div>
+        ${groups.map(group => {
+          const converted = group.low_target ? `${t('baseMarketConvertedToTarget')}: ${lotTargetPrice(group.low_target, target)}` : '';
+          return `
+            <span>
+              <strong>${escapeHtml(nativePriceText(group.low_amount, group.currency))}</strong>
+              <small>${escapeHtml([`${t('marketLots')}: ${formatAmount(group.count || 0)}`, converted].filter(Boolean).join(' · '))}</small>
+            </span>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function baseMarketIsExact(row) {
+  return row?.total_scope === 'exact';
+}
+
+function baseMarketExactTotal(row) {
+  const value = Number(row?.total);
+  return baseMarketIsExact(row) && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function baseMarketAnalyzedText(row) {
+  const clean = Number(row?.count || row?.clean_count || 0);
+  const fetched = Number(row?.raw_count || row?.fetched_count || 0);
+  if (fetched > 0) return `${formatAmount(clean)} / ${formatAmount(fetched)}`;
+  return formatAmount(clean);
+}
+
+function baseMarketLotsLabel(row) {
+  if (baseMarketExactTotal(row)) return t('baseMarketTotalFound');
+  if (row?.total_scope === 'stored_snapshot' || state.baseMarket?.stored) return t('baseMarketStoredLots');
+  return t('baseMarketAnalyzedLots');
+}
+
+function baseMarketLotsValue(row) {
+  const total = baseMarketExactTotal(row);
+  return total ? formatAmount(total) : baseMarketAnalyzedText(row);
 }
 
 function baseMarketErrorLabel(errorText) {
@@ -3262,7 +3512,8 @@ function renderBaseMarketSamples(row) {
     <div class="base-market-samples">
       ${lots.map(lot => `
         <div class="base-market-sample">
-          <strong>${lotTargetPrice(lot.price_target, target)}</strong>
+          <strong>${escapeHtml(lotNativePrice(lot))}</strong>
+          ${lot.price_target ? `<small>${escapeHtml(`${t('baseMarketConvertedToTarget')}: ${lotTargetPrice(lot.price_target, target)}`)}</small>` : ''}
           <small>${escapeHtml([lot.seller, lot.item_level ? `ilvl ${lot.item_level}` : '', lot.stash].filter(Boolean).join(' · '))}</small>
         </div>
       `).join('')}
@@ -3277,7 +3528,7 @@ function isBaseMarketPin(pin) {
 function renderBaseMarketDetail() {
   const panel = byId('base-market-detail');
   if (!panel) return;
-  const rows = state.baseMarket?.rows || [];
+  const rows = sortedBaseMarketRows(state.baseMarket?.rows || []);
   const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
   if (!state.baseMarket || !row) {
     panel.innerHTML = '';
@@ -3308,17 +3559,21 @@ function renderBaseMarketDetail() {
         <span class="advice-badge">${t('baseMarketPureBasis')}</span>
       </div>
       <div class="base-market-summary">
-        <div><span>${t('baseMarketLowPrice')}</span><strong>${baseMarketPriceText(baseMarketLowPrice(row), target)}</strong></div>
-        <div><span>${t('baseMarketMedianPrice')}</span><strong>${baseMarketPriceText(baseMarketMedianPrice(row), target)}</strong></div>
+        <div><span>${t('baseMarketLowPrice')}</span>${baseMarketLowPriceMarkup(row, target)}</div>
+        <div><span>${t('baseMarketMedianPrice')}</span>${baseMarketOptimalPriceMarkup(row, target)}</div>
         <div><span>${t('marketRange')}</span><strong>${baseMarketRangeText(row, target)}</strong></div>
-        <div><span>${t('marketLots')}</span><strong>${formatAmount(row.count || 0)} / ${formatAmount(row.raw_count || row.total || 0)}</strong></div>
+        <div><span>${baseMarketLotsLabel(row)}</span><strong>${baseMarketLotsValue(row)}</strong></div>
+        <div><span>${t('baseMarketAnalyzedLots')}</span><strong>${baseMarketAnalyzedText(row)}</strong></div>
       </div>
+      ${!baseMarketIsExact(row) ? `<p class="base-market-context-note">${t('baseMarketOverviewSampleHint')}</p>` : ''}
+      ${renderBaseMarketCurrencyGroups(row)}
       ${chart}
       <div class="lot-profile-similar">
         <strong>${t('nearestPrices')}</strong>
         ${renderBaseMarketSamples(row)}
       </div>
       <div class="pin-trade-row">
+        ${!baseMarketIsExact(row) ? `<button class="btn btn-primary btn-sm" type="button" data-base-refine="${escapeHtml(row.id || '')}">${t('refineBaseMarket')}</button>` : ''}
         <button class="btn btn-outline-light btn-sm" type="button" data-base-track="${escapeHtml(row.id || '')}">${t('trackBaseMarket')}</button>
       </div>
     </article>
@@ -3333,7 +3588,7 @@ async function trackFocusedBaseMarket() {
     if (status) status.textContent = t('loginRequiredForPin');
     return;
   }
-  const rows = state.baseMarket?.rows || [];
+  const rows = sortedBaseMarketRows(state.baseMarket?.rows || []);
   const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
   if (!row) return;
   const target = state.baseMarket?.target || selectedTarget();
@@ -3359,11 +3614,18 @@ async function trackFocusedBaseMarket() {
   }
 }
 
+async function refineFocusedBaseMarket() {
+  const rows = sortedBaseMarketRows(state.baseMarket?.rows || []);
+  const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
+  const input = byId('base-market-query');
+  if (!row || !input) return;
+  input.value = row.query_type || row.text_ru || row.text || baseMarketRowName(row);
+  await refreshBaseMarket(true);
+}
+
 function renderBaseMarketRow(row) {
   const target = state.baseMarket?.target || selectedTarget();
   const active = row.id && row.id === state.focusedBaseMarketId;
-  const low = baseMarketLowPrice(row);
-  const median = baseMarketMedianPrice(row);
   return `
     <button class="base-market-row ${active ? 'active' : ''}" type="button" data-base-market-focus="${escapeHtml(row.id || '')}">
       <div class="base-market-main">
@@ -3374,9 +3636,9 @@ function renderBaseMarketRow(row) {
         <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : '', t('baseMarketPureBasis')].filter(Boolean).join(' · '))}</small>
         <small>${escapeHtml(baseMarketRowState(row))}</small>
       </div>
-      <div><small class="base-market-label">${t('baseMarketLowPrice')}</small><span>${baseMarketPriceText(low, target)}</span></div>
-      <div><small class="base-market-label">${t('baseMarketMedianPrice')}</small><span>${baseMarketPriceText(median, target)}</span></div>
-      <div><small class="base-market-label">${t('marketLots')}</small><span>${formatAmount(row.count || 0)}</span></div>
+      <div><small class="base-market-label">${t('baseMarketLowPrice')}</small>${baseMarketLowPriceMarkup(row, target)}</div>
+      <div><small class="base-market-label">${t('baseMarketMedianPrice')}</small>${baseMarketOptimalPriceMarkup(row, target)}</div>
+      <div><small class="base-market-label">${baseMarketLotsLabel(row)}</small><span>${baseMarketLotsValue(row)}</span></div>
       <div><small class="base-market-label">${t('confidence')}</small><span>${confidenceLabel(row.confidence)}</span></div>
     </button>
   `;
@@ -3399,13 +3661,14 @@ function renderBaseMarket() {
     if (status) status.textContent = state.baseMarketError || '';
     return;
   }
-  const rows = state.baseMarket.rows || [];
+  const rows = sortedBaseMarketRows(state.baseMarket.rows || []);
   if (status) {
     const cached = state.baseMarket.cached || state.baseMarket.stored ? ` · ${t('cacheLabel')}` : '';
     const priced = state.baseMarket.priced_total ?? rows.filter(row => baseMarketLowPrice(row)).length;
     const warning = baseMarketWarning();
+    const jobText = baseMarketJobText();
     const pending = !priced && warning ? ` · ${t('baseMarketPricesPending')}` : '';
-    status.textContent = state.baseMarketError || `${t('baseMarketShown')}: ${formatAmount(rows.length)} / ${formatAmount(state.baseMarket.matched_total || rows.length)} · ${t('baseMarketPriced')}: ${formatAmount(priced)}${cached}${warning ? ` · ${warning}` : ''}${pending}`;
+    status.textContent = state.baseMarketError || `${t('baseMarketInstantOnly')} · ${t('baseMarketShown')}: ${formatAmount(rows.length)} / ${formatAmount(state.baseMarket.matched_total || rows.length)} · ${t('baseMarketPriced')}: ${formatAmount(priced)}${cached}${warning ? ` · ${warning}` : ''}${pending}${jobText ? ` · ${jobText}` : ''}`;
   }
   if (!rows.length) {
     const emptyKey = state.baseMarket.stored === false ? 'baseMarketEmpty' : 'baseMarketNoResults';
@@ -3416,7 +3679,7 @@ function renderBaseMarket() {
   if (!state.focusedBaseMarketId || !rows.some(row => row.id === state.focusedBaseMarketId)) {
     state.focusedBaseMarketId = rows[0]?.id || '';
   }
-  list.innerHTML = rows.map(renderBaseMarketRow).join('');
+  list.innerHTML = `${renderBaseMarketSortHeader()}${rows.map(renderBaseMarketRow).join('')}`;
   renderBaseMarketDetail();
 }
 
@@ -3433,6 +3696,7 @@ async function refreshBaseMarket(forceRefresh = true) {
   if (!forceRefresh && state.baseMarketCache[cacheKey] && state.baseMarketCache[cacheKey].stored !== false) {
     state.baseMarket = state.baseMarketCache[cacheKey];
     renderBaseMarket();
+    scheduleBaseMarketPoll();
     return;
   }
   if (state.baseMarketAbortController) {
@@ -3466,6 +3730,7 @@ async function refreshBaseMarket(forceRefresh = true) {
     state.baseMarketAbortController = null;
     if (button) button.disabled = false;
     renderBaseMarket();
+    scheduleBaseMarketPoll();
   }
 }
 
@@ -4975,7 +5240,7 @@ function currentSignalRows(options = {}) {
       const volume = Number(row?.volume || 0);
       const value = rateValue(row);
       if (!row || !Number.isFinite(change) || !value || volume < minVolume) return null;
-      return { entry, row, change, volume, value, target: categoryRates.target || selectedTarget() };
+      return { entry, row, change, volume, value, target: categoryRates.target || selectedTarget(), execution: row.execution || null };
     })
     .filter(Boolean);
 }
@@ -5149,6 +5414,7 @@ function renderMarketSignals() {
   panel.innerHTML = `
     <p class="text-secondary market-signal-hint">${t('marketSignalsHint')}</p>
     ${renderMarketHealthSection(rows)}
+    ${renderMarketDiagnosticsSection()}
     ${renderDealCandidateSection(dealCandidates(rows))}
     ${renderRecipeSignalSection()}
     ${renderHistoryTrendSection()}
@@ -5262,6 +5528,117 @@ function renderMarketHealthSection(rows) {
         <span class="summary-label">${t('strongMoves')}</span>
         <strong>${formatAmount(strong)}</strong>
       </div>
+    </section>
+  `;
+}
+
+function freshnessLabel(value) {
+  const key = {
+    fresh: 'freshnessFresh',
+    aging: 'freshnessAging',
+    stale: 'freshnessStale',
+    missing: 'freshnessMissing',
+  }[value || 'missing'];
+  return t(key || 'freshnessMissing');
+}
+
+function diagnosticWarningLabel(value) {
+  const key = {
+    stale_snapshot: 'diagnosticStaleSnapshot',
+    low_coverage: 'diagnosticLowCoverage',
+    source_errors: 'diagnosticSourceErrors',
+    many_risky_rows: 'diagnosticManyRiskyRows',
+    short_history: 'diagnosticShortHistory',
+  }[value || ''];
+  return key ? t(key) : riskFlagLabel(value);
+}
+
+function backtestActionLabel(value) {
+  const key = {
+    buy_dip: 'signalBuyDip',
+    sell_momentum: 'signalSellMomentum',
+  }[value || ''];
+  return key ? t(key) : (value || '-');
+}
+
+function renderMarketDiagnosticsSamples(samples = []) {
+  const items = Array.isArray(samples) ? samples.slice(0, 4) : [];
+  if (!items.length) return '';
+  return `
+    <div class="diagnostic-samples">
+      ${items.map(item => {
+        const outcomeClass = Number(item.outcome_pct || 0) >= 0 ? 'change-up' : 'change-down';
+        return `
+          <span>
+            ${escapeHtml(item.item_name || item.item_id || '-')}
+            · ${escapeHtml(backtestActionLabel(item.action))}
+            · <strong class="${outcomeClass}">${formatChange(item.outcome_pct)}</strong>
+          </span>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderMarketDiagnosticsSection() {
+  const currentData = state.rates[state.selectedCategory] || {};
+  const key = marketDiagnosticsKey(currentData);
+  if (state.isLoadingMarketDiagnostics && state.marketDiagnosticsKey === key) {
+    return `<section class="market-diagnostics-section">${loadingMarkup(t('marketDiagnosticsLoading'))}</section>`;
+  }
+  if (state.marketDiagnosticsError && state.marketDiagnosticsKey === key) {
+    return `<section class="market-diagnostics-section"><p class="text-secondary">${escapeHtml(state.marketDiagnosticsError)}</p></section>`;
+  }
+  const diagnostics = state.marketDiagnosticsKey === key ? state.marketDiagnostics : null;
+  if (!diagnostics) return '';
+  const health = diagnostics.health || {};
+  const backtest = diagnostics.backtest || {};
+  const warnings = Array.isArray(health.warnings) ? health.warnings : [];
+  const successRate = backtest.success_rate === null || backtest.success_rate === undefined ? '-' : `${formatAmount(backtest.success_rate)}%`;
+  const averageOutcome = backtest.average_outcome_pct === null || backtest.average_outcome_pct === undefined
+    ? '-'
+    : formatChange(backtest.average_outcome_pct);
+  return `
+    <section class="market-diagnostics-section">
+      <div class="diagnostics-header">
+        <h3>${t('marketDiagnostics')}</h3>
+        <small>${t('marketBacktest')}: ${formatAmount(backtest.horizon_hours || 24)} ${t('hoursShort')}</small>
+      </div>
+      <div class="market-health-grid diagnostics-grid">
+        <div>
+          <span class="summary-label">${t('marketDataQuality')}</span>
+          <strong>${escapeHtml(dataQualityLabel(health.data_quality))}</strong>
+        </div>
+        <div>
+          <span class="summary-label">${t('marketDataAge')}</span>
+          <strong>${escapeHtml(formatAgeSeconds(health.age_seconds))}</strong>
+          <small>${escapeHtml(freshnessLabel(health.freshness))}</small>
+        </div>
+        <div>
+          <span class="summary-label">${t('marketCoverage')}</span>
+          <strong>${formatAmount(health.priced || 0)} / ${formatAmount(health.expected || 0)}</strong>
+          <small>${formatAmount(health.coverage_pct || 0)}%</small>
+        </div>
+        <div>
+          <span class="summary-label">${t('marketBacktestEvaluated')}</span>
+          <strong>${formatAmount(backtest.evaluated || 0)}</strong>
+          <small>${t('marketBacktestPending')}: ${formatAmount(backtest.pending || 0)}</small>
+        </div>
+        <div>
+          <span class="summary-label">${t('marketBacktestSuccess')}</span>
+          <strong>${successRate}</strong>
+          <small>${formatAmount(backtest.successful || 0)} / ${formatAmount(backtest.evaluated || 0)}</small>
+        </div>
+        <div>
+          <span class="summary-label">${t('marketBacktestOutcome')}</span>
+          <strong>${averageOutcome}</strong>
+          <small>${t('marketBacktest')}</small>
+        </div>
+      </div>
+      ${warnings.length
+        ? `<div class="diagnostic-warning-list"><span>${t('marketDiagnosticsWarnings')}:</span>${warnings.map(item => `<strong>${escapeHtml(diagnosticWarningLabel(item))}</strong>`).join('')}</div>`
+        : ''}
+      ${Number(backtest.evaluated || 0) ? renderMarketDiagnosticsSamples(backtest.samples || []) : `<p class="text-secondary">${t('backtestNoSignals')}</p>`}
     </section>
   `;
 }
@@ -5953,6 +6330,50 @@ async function loadHistoryTrends(currentData) {
   }
 }
 
+function marketDiagnosticsKey(data = state.rates[state.selectedCategory] || {}) {
+  return [
+    data.league || byId('live-league')?.value || '',
+    data.category || state.selectedCategory,
+    data.target || selectedTarget(),
+    data.status || byId('live-status')?.value || 'any',
+    data.created_ts || '',
+  ].join('|');
+}
+
+async function loadMarketDiagnostics(currentData) {
+  const key = marketDiagnosticsKey(currentData);
+  if (!currentData?.created_ts || state.marketDiagnosticsKey === key || state.isLoadingMarketDiagnostics) return;
+  state.marketDiagnosticsKey = key;
+  state.marketDiagnostics = null;
+  state.marketDiagnosticsError = '';
+  state.isLoadingMarketDiagnostics = true;
+  renderMarketSignals();
+  const expectedItems = (state.categories[state.selectedCategory] || []).length;
+  const params = new URLSearchParams({
+    league: currentData.league || byId('live-league')?.value || '',
+    category: currentData.category || state.selectedCategory,
+    target: currentData.target || selectedTarget(),
+    status: currentData.status || byId('live-status')?.value || 'any',
+    expected_items: String(expectedItems),
+    history_limit: '160',
+    horizon_hours: '24',
+  });
+  try {
+    const response = await fetch(`/api/trade/market-diagnostics?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+    if (state.marketDiagnosticsKey !== key) return;
+    state.marketDiagnostics = data;
+  } catch (error) {
+    if (state.marketDiagnosticsKey === key) state.marketDiagnosticsError = error.message || String(error);
+  } finally {
+    if (state.marketDiagnosticsKey === key) {
+      state.isLoadingMarketDiagnostics = false;
+      renderMarketSignals();
+    }
+  }
+}
+
 function applyRatesData(data) {
   const category = data.category || state.selectedCategory;
   const previousTs = Number((state.rates[category] || {}).created_ts || 0);
@@ -5974,6 +6395,7 @@ function applyRatesData(data) {
   renderAdvice(data.advice || []);
   renderSelectedItemDetail();
   loadHistoryTrends(data);
+  loadMarketDiagnostics(data);
   if (state.account.authenticated) {
     refreshAccountData().catch(() => {});
   }
@@ -6111,12 +6533,24 @@ async function initLiveTrade() {
     });
     byId('refresh-base-market')?.addEventListener('click', () => refreshBaseMarket(true));
     byId('base-market-results')?.addEventListener('click', event => {
+      const sortTarget = event.target.closest('[data-base-market-sort-key]');
+      if (sortTarget) {
+        event.preventDefault();
+        setBaseMarketSort(sortTarget.dataset.baseMarketSortKey || '');
+        return;
+      }
       const target = event.target.closest('[data-base-market-focus]');
       if (!target) return;
       event.preventDefault();
       focusBaseMarketRow(target.dataset.baseMarketFocus || '');
     });
     byId('base-market-detail')?.addEventListener('click', event => {
+      const refineTarget = event.target.closest('[data-base-refine]');
+      if (refineTarget) {
+        event.preventDefault();
+        refineFocusedBaseMarket();
+        return;
+      }
       const target = event.target.closest('[data-base-track]');
       if (!target) return;
       event.preventDefault();
@@ -6195,7 +6629,7 @@ async function initLiveTrade() {
     });
     ['base-market-query', 'base-market-min-ilvl'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
-        if (event.key === 'Enter') refreshBaseMarket(false);
+        if (event.key === 'Enter') refreshBaseMarket(true);
       });
     });
     byId('base-market-limit')?.addEventListener('change', () => refreshBaseMarket(false));
@@ -6246,6 +6680,10 @@ async function initLiveTrade() {
         state.historyTrends = [];
         state.historyTrendsKey = '';
         state.isLoadingHistoryTrends = false;
+        state.marketDiagnostics = null;
+        state.marketDiagnosticsKey = '';
+        state.marketDiagnosticsError = '';
+        state.isLoadingMarketDiagnostics = false;
         state.currencyAnalysis.context = null;
         state.currencyAnalysis.error = '';
         state.currencyAnalysis.aiJob = null;

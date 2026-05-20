@@ -148,7 +148,7 @@ def test_collect_market_snapshots_uses_base_market_collector(monkeypatch):
         {
             "league": "Fate",
             "target": "exalted",
-            "status": "any",
+            "status": "securable",
             "limit": market_snapshots.ITEM_BASE_MARKET_MAX_BASES,
             "force_refresh": True,
         },

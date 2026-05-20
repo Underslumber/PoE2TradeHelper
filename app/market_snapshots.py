@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from app.config import DEFAULT_RATE_LIMIT_DELAY
 from app.trade2 import (
+    ITEM_BASE_MARKET_DEFAULT_STATUS,
     ITEM_BASE_MARKET_CATEGORY,
     ITEM_BASE_MARKET_MAX_BASES,
     POE_NINJA_CATEGORY_TYPES,
@@ -144,7 +145,7 @@ async def collect_market_snapshots(
                 snapshot = await get_item_base_market(
                     league=job.league,
                     target=job.target,
-                    status=job.status,
+                    status=ITEM_BASE_MARKET_DEFAULT_STATUS,
                     limit=ITEM_BASE_MARKET_MAX_BASES,
                     force_refresh=force_refresh,
                 )

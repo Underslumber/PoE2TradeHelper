@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, USER_AGENT
+from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, ICONS_DIR, USER_AGENT
 from app.item_parser import parse_item_text
 from app.profitability import enrich_trade_advice, execution_quality, rank_opportunities
 from app.recipes import analyze_recipes, filter_dominated_emotion_paths
@@ -46,14 +46,38 @@ SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 INSTANT_BUYOUT_PRICE_TYPES = {"~price", "~b/o"}
 ITEM_BASES_CACHE_TTL = 3600
+ITEM_BASE_CATALOG_SCHEMA_VERSION = "poe2-item-base-catalog/v1"
+ITEM_BASE_CATALOG_PATH = DATA_DIR / "item_base_catalog.json"
+ITEM_BASE_CATALOG_LIMIT = 1000
+ITEM_BASE_ICON_DIR = ICONS_DIR / "item-bases"
 ITEM_BASE_MARKET_CATEGORY = "ItemBases"
 ITEM_BASE_MARKET_CACHE_TTL = 900
-ITEM_BASE_MARKET_FETCH_LIMIT = 40
+ITEM_BASE_MARKET_FETCH_LIMIT = 100
+ITEM_BASE_MARKET_DEFAULT_STATUS = "securable"
+ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT = 100
+ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT = 500
+ITEM_BASE_MARKET_JOB_TTL = 3600
 ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
+ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = 80
+ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
 ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+ITEM_BASE_MARKET_JOBS: dict[tuple[Any, ...], dict[str, Any]] = {}
+CURRENCY_ID_ALIASES = {
+    "alchemy": "alch",
+    "orb-of-alchemy": "alch",
+    "transmutation": "transmute",
+    "orb-of-transmutation": "transmute",
+    "augmentation": "aug",
+    "orb-of-augmentation": "aug",
+    "exalt": "exalted",
+    "exalted-orb": "exalted",
+    "div": "divine",
+    "divine-orb": "divine",
+    "regal-orb": "regal",
+}
 
 ITEM_BASE_FALLBACKS = [
     {"type": "Waxed Jacket", "type_ru": "Вощеная куртка", "category": "body-armour", "category_ru": "Нательная броня", "icon_key": "armour"},
@@ -229,6 +253,22 @@ def _image_url(path: str | None) -> str | None:
     if path.startswith("http://") or path.startswith("https://"):
         return path
     return f"{POE_SITE_BASE}{path}"
+
+
+def _currency_id(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    return CURRENCY_ID_ALIASES.get(normalized, normalized)
+
+
+def _currency_rate_value(row: dict[str, Any]) -> float | None:
+    for key in ("best", "median"):
+        value = _to_float(row.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
 
 
 def _localized_entry_texts(payload: dict[str, Any] | None) -> dict[str, dict[str, str]]:
@@ -520,6 +560,10 @@ async def _post_search(
             wait = _retry_after_wait(response, "trade2 search")
             await asyncio.sleep(wait)
             response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            suffix = f"; retry after {retry_after}s" if retry_after else ""
+            raise RuntimeError(f"trade2 search rate limited{suffix}")
         response.raise_for_status()
     return response.json()
 
@@ -538,6 +582,10 @@ async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> 
                 wait = _retry_after_wait(response, "trade2 fetch")
                 await asyncio.sleep(wait)
                 response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                suffix = f"; retry after {retry_after}s" if retry_after else ""
+                raise RuntimeError(f"trade2 fetch rate limited{suffix}")
             response.raise_for_status()
             results.extend(response.json().get("result") or [])
             if index < len(chunks) - 1:
@@ -598,16 +646,117 @@ def _item_base_icon_key(category_id: str = "", label: str = "", base_type: str =
     return "base"
 
 
-def _item_base_icon_data_url(icon_key: str) -> str:
+def _item_base_icon_svg(icon_key: str) -> str:
     color, label = ITEM_BASE_ICON_STYLES.get(icon_key, ITEM_BASE_ICON_STYLES["base"])
-    svg = (
+    return (
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
         "<rect width='64' height='64' rx='10' fill='#0b1720'/>"
         f"<circle cx='32' cy='26' r='18' fill='{color}' fill-opacity='.22' stroke='{color}' stroke-width='3'/>"
         f"<text x='32' y='48' text-anchor='middle' font-family='Arial,sans-serif' font-size='13' font-weight='700' fill='{color}'>{label}</text>"
         "</svg>"
     )
+
+
+def _item_base_icon_data_url(icon_key: str) -> str:
+    svg = _item_base_icon_svg(icon_key)
     return f"data:image/svg+xml;utf8,{quote(svg, safe='')}"
+
+
+def _item_base_generated_icon_url(icon_key: str) -> str:
+    safe_key = re.sub(r"[^a-z0-9_-]+", "-", str(icon_key or "base").lower()).strip("-") or "base"
+    icon_dir = ITEM_BASE_ICON_DIR / "generated"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    icon_path = icon_dir / f"{safe_key}.svg"
+    if not icon_path.exists():
+        icon_path.write_text(_item_base_icon_svg(safe_key), encoding="utf-8")
+    return f"/icons/item-bases/generated/{safe_key}.svg"
+
+
+def _item_base_icon_slug(item_id: str) -> str:
+    slug = str(item_id or "").removeprefix("base:").strip() or "unknown"
+    return re.sub(r"[^0-9a-zа-яё_-]+", "-", slug, flags=re.IGNORECASE).strip("-") or "unknown"
+
+
+def _item_base_existing_local_icon_url(item_id: str) -> str | None:
+    slug = _item_base_icon_slug(item_id)
+    for ext in (".png", ".webp", ".jpg", ".jpeg", ".gif", ".svg"):
+        icon_path = ITEM_BASE_ICON_DIR / f"{slug}{ext}"
+        if icon_path.exists():
+            return f"/icons/item-bases/{icon_path.name}"
+    return None
+
+
+def _item_base_local_icon_path(item_id: str, source_url: str, content_type: str | None = None) -> tuple[Any, str]:
+    slug = _item_base_icon_slug(item_id)
+    ext = ".png"
+    source_ext_match = re.search(r"\.(png|jpg|jpeg|webp|gif)(?:[?#].*)?$", source_url, flags=re.IGNORECASE)
+    if content_type and "svg" in content_type.lower():
+        ext = ".svg"
+    elif source_ext_match:
+        ext = "." + source_ext_match.group(1).lower().replace("jpeg", "jpg")
+    icon_path = ITEM_BASE_ICON_DIR / f"{slug}{ext}"
+    return icon_path, f"/icons/item-bases/{icon_path.name}"
+
+
+async def _cache_item_base_remote_icon(item_id: str, source_url: str | None) -> str | None:
+    if not source_url or source_url.startswith("data:") or source_url.startswith("/icons/"):
+        return source_url
+    url = _image_url(source_url)
+    if not url:
+        return None
+    icon_path, local_url = _item_base_local_icon_path(item_id, url)
+    if icon_path.exists():
+        return local_url
+    ITEM_BASE_ICON_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        async with httpx.AsyncClient(headers=_headers({"Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*"}), timeout=20) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        content_type = response.headers.get("Content-Type") or ""
+        if "image" not in content_type.lower() and not response.content.startswith(b"<svg"):
+            return source_url
+        icon_path, local_url = _item_base_local_icon_path(item_id, url, content_type)
+        icon_path.write_bytes(response.content)
+        return local_url
+    except Exception:
+        return source_url
+
+
+def _ensure_item_base_catalog_icons(bases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched = []
+    for base in bases:
+        icon_key = str(base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), str(base.get("type") or "")))
+        item_id = str(base.get("id") or _base_market_item_id(str(base.get("type") or base.get("query_type") or "")))
+        image = str(base.get("image") or "")
+        local_image = _item_base_existing_local_icon_url(item_id)
+        if local_image and (not image or image.startswith("data:") or image.startswith("/icons/item-bases/generated/")):
+            image = local_image
+        elif not image or image.startswith("data:"):
+            image = _item_base_generated_icon_url(icon_key)
+        enriched.append({**base, "id": item_id, "icon_key": icon_key, "image": image})
+    return enriched
+
+
+async def _cache_item_base_catalog_icons(bases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bases = _ensure_item_base_catalog_icons(bases)
+    semaphore = asyncio.Semaphore(6)
+
+    async def enrich(base: dict[str, Any]) -> dict[str, Any]:
+        image = str(base.get("image") or "")
+        if not image or image.startswith("data:") or image.startswith("/icons/"):
+            return base
+        async with semaphore:
+            local_image = await _cache_item_base_remote_icon(str(base.get("id") or ""), image)
+        return {**base, "image": local_image or image}
+
+    return await asyncio.gather(*(enrich(base) for base in bases))
+
+
+async def _cache_item_base_listing_icon(row: dict[str, Any], clean_lots: list[dict[str, Any]]) -> str | None:
+    icon = next((str(lot.get("icon") or "") for lot in clean_lots if lot.get("icon")), "")
+    if not icon:
+        return None
+    return await _cache_item_base_remote_icon(str(row.get("id") or ""), icon)
 
 
 def _item_base_category_ru(category_id: str, label: str) -> str:
@@ -633,10 +782,53 @@ def _item_base_fallback_catalog() -> list[dict[str, Any]]:
                 "category_label": "Fallback",
                 "category_label_ru": str(item.get("category_ru") or "Резервный каталог"),
                 "icon_key": icon_key,
-                "image": _item_base_icon_data_url(icon_key),
+                "image": _item_base_generated_icon_url(icon_key),
             }
         )
     return bases
+
+
+def save_item_base_catalog_snapshot(
+    payload: dict[str, Any],
+    path: Any = ITEM_BASE_CATALOG_PATH,
+) -> None:
+    bases = _ensure_item_base_catalog_icons(payload.get("bases") or [])
+    if not isinstance(bases, list) or not bases:
+        return
+    snapshot = {
+        "schema_version": ITEM_BASE_CATALOG_SCHEMA_VERSION,
+        "created_ts": payload.get("created_ts") or time.time(),
+        "source": payload.get("source") or "trade2/data/items",
+        "total": payload.get("total") or len(bases),
+        "bases": bases,
+        "errors": payload.get("errors") or [],
+    }
+    path = DATA_DIR / str(path) if not hasattr(path, "parent") else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp_path.replace(path)
+
+
+def load_item_base_catalog_snapshot(path: Any = ITEM_BASE_CATALOG_PATH) -> dict[str, Any] | None:
+    path = DATA_DIR / str(path) if not hasattr(path, "parent") else path
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    bases = payload.get("bases")
+    if payload.get("schema_version") != ITEM_BASE_CATALOG_SCHEMA_VERSION or not isinstance(bases, list) or not bases:
+        return None
+    return {
+        "schema_version": ITEM_BASE_CATALOG_SCHEMA_VERSION,
+        "created_ts": _to_float(payload.get("created_ts")) or 0.0,
+        "source": payload.get("source") or "stored:item_base_catalog",
+        "total": int(payload.get("total") or len(bases)),
+        "bases": _ensure_item_base_catalog_icons(bases),
+        "errors": payload.get("errors") or [],
+    }
 
 
 def _entry_text(entry: dict[str, Any]) -> str:
@@ -705,7 +897,7 @@ def normalize_item_base_catalog(
                     "category_label": category_label,
                     "category_label_ru": str((localized_categories.get(category_id) or {}).get("label") or _item_base_category_ru(category_id, category_label)),
                     "icon_key": icon_key,
-                    "image": image or _item_base_icon_data_url(icon_key),
+                    "image": image or _item_base_generated_icon_url(icon_key),
                 }
             )
     bases.sort(key=lambda item: (_lookup_text_key(item.get("category_label")), _lookup_text_key(item.get("type"))))
@@ -726,17 +918,21 @@ async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]
 
 async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]:
     q = q.strip()
-    limit = max(1, min(limit, 1000))
+    limit = max(1, min(limit, ITEM_BASE_CATALOG_LIMIT))
     cached = ITEM_BASES_CACHE.get("data")
     if cached and time.time() - float(ITEM_BASES_CACHE.get("created_ts") or 0) < ITEM_BASES_CACHE_TTL:
-        bases = list(cached)
+        bases = _ensure_item_base_catalog_icons(list(cached))
         errors = list(ITEM_BASES_CACHE.get("errors") or [])
+        source = str(ITEM_BASES_CACHE.get("source") or "trade2/data/items")
+        created_ts = float(ITEM_BASES_CACHE.get("created_ts") or time.time())
     else:
         async with ITEM_BASES_LOCK:
             cached = ITEM_BASES_CACHE.get("data")
             if cached and time.time() - float(ITEM_BASES_CACHE.get("created_ts") or 0) < ITEM_BASES_CACHE_TTL:
-                bases = list(cached)
+                bases = _ensure_item_base_catalog_icons(list(cached))
                 errors = list(ITEM_BASES_CACHE.get("errors") or [])
+                source = str(ITEM_BASES_CACHE.get("source") or "trade2/data/items")
+                created_ts = float(ITEM_BASES_CACHE.get("created_ts") or time.time())
             else:
                 errors = []
                 en_payload = None
@@ -753,16 +949,45 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                 bases = normalize_item_base_catalog(en_payload, ru_payload)
                 source = "trade2/data/items"
                 if not bases:
-                    bases = _item_base_fallback_catalog()
-                    source = "fallback"
-                ITEM_BASES_CACHE["created_ts"] = time.time()
+                    stored = load_item_base_catalog_snapshot()
+                    if stored:
+                        bases = _ensure_item_base_catalog_icons(list(stored.get("bases") or []))
+                        source = "stored:item_base_catalog"
+                        errors = [*errors, *list(stored.get("errors") or [])]
+                        save_item_base_catalog_snapshot(
+                            {
+                                "created_ts": stored.get("created_ts") or time.time(),
+                                "source": stored.get("source") or source,
+                                "total": stored.get("total") or len(bases),
+                                "bases": bases,
+                                "errors": errors,
+                            }
+                        )
+                    else:
+                        bases = _item_base_fallback_catalog()
+                        source = "fallback"
+                else:
+                    bases = await _cache_item_base_catalog_icons(bases)
+                created_ts = time.time()
                 ITEM_BASES_CACHE["data"] = bases
                 ITEM_BASES_CACHE["errors"] = errors
                 ITEM_BASES_CACHE["source"] = source
+                ITEM_BASES_CACHE["created_ts"] = created_ts
+                if bases and source == "trade2/data/items":
+                    save_item_base_catalog_snapshot(
+                        {
+                            "created_ts": created_ts,
+                            "source": source,
+                            "total": len(bases),
+                            "bases": bases,
+                            "errors": errors,
+                        }
+                    )
     filtered = _filter_item_bases(bases, q)
     return {
-        "schema_version": "poe2-item-base-catalog/v1",
-        "source": ITEM_BASES_CACHE.get("source") or "trade2/data/items",
+        "schema_version": ITEM_BASE_CATALOG_SCHEMA_VERSION,
+        "created_ts": created_ts,
+        "source": source,
         "total": len(bases),
         "matched_total": len(filtered),
         "bases": filtered[:limit],
@@ -825,6 +1050,8 @@ def _is_clean_item_base_lot(lot: dict[str, Any]) -> bool:
 
 
 def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, Any]:
+    native_groups = _base_market_currency_groups(lots)
+    best_native = _base_market_best_native(lots)
     raw_values = sorted(lot["price_target"] for lot in lots if isinstance(lot.get("price_target"), float))
     values, outliers = _trim_price_outliers(raw_values)
     if not values:
@@ -844,7 +1071,11 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, 
             "offers": len(lots),
             "volume": len(lots),
             "confidence": "insufficient",
+            "best_native": best_native,
+            "optimal_native": None,
+            "price_currency_groups": native_groups,
         }
+    optimal = statistics.median(values)
     return {
         "count": len(values),
         "raw_count": raw_count,
@@ -853,7 +1084,8 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, 
         "low": values[0],
         "best": values[0],
         "median": values[0],
-        "market_median": statistics.median(values),
+        "market_median": optimal,
+        "optimal": optimal,
         "avg": statistics.mean(values),
         "p25": _percentile(values, 0.25),
         "p75": _percentile(values, 0.75),
@@ -861,7 +1093,94 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, 
         "offers": len(lots),
         "volume": len(lots),
         "confidence": "medium" if len(values) >= 8 else "low" if len(values) >= 3 else "insufficient",
+        "best_native": best_native,
+        "optimal_native": _base_market_nearest_native(lots, optimal),
+        "price_currency_groups": native_groups,
     }
+
+
+def _base_market_lot_sort_key(lot: dict[str, Any]) -> tuple[int, float, float, str]:
+    price_target = _to_float(lot.get("price_target"))
+    price_amount = _to_float(lot.get("price_amount"))
+    return (
+        0 if price_target is not None else 1,
+        price_target if price_target is not None else float("inf"),
+        price_amount if price_amount is not None else float("inf"),
+        str(lot.get("indexed") or ""),
+    )
+
+
+def _base_market_best_native(lots: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for lot in sorted(lots, key=_base_market_lot_sort_key):
+        amount = _to_float(lot.get("price_amount"))
+        currency = str(lot.get("price_currency") or "").strip()
+        if amount is None or not currency:
+            continue
+        return {
+            "amount": amount,
+            "currency": currency,
+            "price_target": _to_float(lot.get("price_target")),
+        }
+    return None
+
+
+def _base_market_nearest_native(lots: list[dict[str, Any]], target_value: float | None) -> dict[str, Any] | None:
+    if target_value is None:
+        return None
+    candidates = []
+    for lot in lots:
+        amount = _to_float(lot.get("price_amount"))
+        currency = str(lot.get("price_currency") or "").strip()
+        price_target = _to_float(lot.get("price_target"))
+        if amount is None or not currency or price_target is None:
+            continue
+        candidates.append((abs(price_target - target_value), price_target, amount, currency))
+    if not candidates:
+        return None
+    _, price_target, amount, currency = min(candidates, key=lambda item: (item[0], item[1], item[2], item[3]))
+    return {
+        "amount": amount,
+        "currency": currency,
+        "price_target": price_target,
+    }
+
+
+def _base_market_currency_groups(lots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for lot in lots:
+        amount = _to_float(lot.get("price_amount"))
+        currency = str(lot.get("price_currency") or "").strip()
+        if amount is None or not currency:
+            continue
+        group = grouped.setdefault(currency, {"currency": currency, "amounts": [], "targets": []})
+        group["amounts"].append(amount)
+        target_value = _to_float(lot.get("price_target"))
+        if target_value is not None:
+            group["targets"].append(target_value)
+
+    rows: list[dict[str, Any]] = []
+    for group in grouped.values():
+        amounts = sorted(group["amounts"])
+        targets = sorted(group["targets"])
+        rows.append(
+            {
+                "currency": group["currency"],
+                "count": len(amounts),
+                "low_amount": amounts[0],
+                "median_amount": statistics.median(amounts),
+                "low_target": targets[0] if targets else None,
+                "median_target": statistics.median(targets) if targets else None,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            0 if row.get("low_target") is not None else 1,
+            row.get("low_target") if row.get("low_target") is not None else float("inf"),
+            -int(row.get("count") or 0),
+            str(row.get("currency") or ""),
+        )
+    )
+    return rows[:8]
 
 
 def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -876,12 +1195,13 @@ def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str,
             "price_currency": lot.get("price_currency"),
             "price_target": lot.get("price_target"),
         }
-        for lot in clean_lots[:6]
+        for lot in sorted(clean_lots, key=_base_market_lot_sort_key)[:6]
     ]
 
 
 def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None) -> dict[str, Any]:
     query_type = str(base.get("query_type") or base.get("type") or base.get("type_ru") or "").strip()
+    icon_key = base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), query_type)
     return {
         "id": base.get("id") or _base_market_item_id(query_type),
         "text": base.get("type") or query_type,
@@ -890,11 +1210,46 @@ def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None
         "category": base.get("category") or "",
         "category_label": base.get("category_label") or "",
         "category_label_ru": base.get("category_label_ru") or _item_base_category_ru(str(base.get("category") or ""), str(base.get("category_label") or "")),
-        "icon_key": base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), query_type),
-        "image": base.get("image") or "",
+        "icon_key": icon_key,
+        "image": base.get("image") or _item_base_generated_icon_url(str(icon_key)),
         "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
         "basis_ru": "обычная чистая основа без явных, рунных и оскверненных свойств",
         "min_ilvl": min_ilvl,
+    }
+
+
+def _manual_item_base_market_base(q: str) -> dict[str, Any]:
+    query_type = q.strip()
+    return {
+        "id": _base_market_item_id(query_type),
+        "type": query_type,
+        "type_ru": query_type,
+        "query_type": query_type,
+        "category": "manual",
+        "category_label": "Manual search",
+        "category_label_ru": "Ручной поиск",
+        "icon_key": "base",
+        "image": _item_base_generated_icon_url("base"),
+    }
+
+
+def _base_market_row_from_stored_id(item_id: str, min_ilvl: int | None = None) -> dict[str, Any]:
+    slug = str(item_id or "").removeprefix("base:").strip()
+    label = slug.replace("-", " ").strip() or slug or "unknown"
+    return {
+        "id": item_id or _base_market_item_id(label),
+        "text": label.title() if label.isascii() else label,
+        "text_ru": label,
+        "query_type": label,
+        "category": "stored",
+        "category_label": "Stored snapshot",
+        "category_label_ru": "Сохраненный снимок",
+        "icon_key": "base",
+        "image": _item_base_generated_icon_url("base"),
+        "basis": "stored clean normal bases, price chart uses low market",
+        "basis_ru": "сохраненные чистые обычные основы, график использует низ рынка",
+        "min_ilvl": min_ilvl,
+        "total_scope": "stored_snapshot",
     }
 
 
@@ -908,6 +1263,207 @@ def _base_market_row_keys(row: dict[str, Any]) -> set[str]:
         )
         if key
     }
+
+
+def _base_market_catalog_rows(catalog: dict[str, Any], min_ilvl: int | None = None) -> list[dict[str, Any]]:
+    rows = []
+    for base in catalog.get("bases") or []:
+        rows.append(
+            {
+                **_base_market_row_from_base(base, min_ilvl=min_ilvl),
+                **_base_market_stats([], 0),
+                "total_scope": "catalog",
+                "fetched_count": 0,
+                "sample_lots": [],
+            }
+        )
+    return rows
+
+
+def _sort_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    priced_rows = [row for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
+    unpriced_rows = [row for row in rows if row not in priced_rows]
+    priced_rows.sort(key=lambda row: _to_float(row.get("low")) or _to_float(row.get("best")) or float("inf"))
+    unpriced_rows.sort(key=lambda row: _lookup_text_key(row.get("text_ru") or row.get("text")))
+    return priced_rows + unpriced_rows
+
+
+def _merge_item_base_market_rows(
+    catalog: dict[str, Any],
+    market_rows: list[dict[str, Any]],
+    min_ilvl: int | None = None,
+) -> list[dict[str, Any]]:
+    market_by_key: dict[str, dict[str, Any]] = {}
+    for row in market_rows:
+        keys = _base_market_row_keys(row)
+        item_id = str(row.get("id") or "")
+        if item_id:
+            keys.add(item_id)
+        for key in keys:
+            market_by_key.setdefault(key, row)
+
+    merged: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    for base_row in _base_market_catalog_rows(catalog, min_ilvl=min_ilvl):
+        keys = _base_market_row_keys(base_row)
+        item_id = str(base_row.get("id") or "")
+        if item_id:
+            keys.add(item_id)
+        market_row = next((market_by_key[key] for key in keys if key in market_by_key), None)
+        if market_row:
+            consumed.add(id(market_row))
+            merged.append(
+                {
+                    **base_row,
+                    **{key: value for key, value in market_row.items() if value not in (None, "", [])},
+                    "id": base_row.get("id") or market_row.get("id"),
+                    "text": base_row.get("text") or market_row.get("text"),
+                    "text_ru": base_row.get("text_ru") or market_row.get("text_ru"),
+                    "query_type": base_row.get("query_type") or market_row.get("query_type"),
+                    "category": base_row.get("category") or market_row.get("category"),
+                    "category_label": base_row.get("category_label") or market_row.get("category_label"),
+                    "category_label_ru": base_row.get("category_label_ru") or market_row.get("category_label_ru"),
+                    "icon_key": base_row.get("icon_key") or market_row.get("icon_key"),
+                    "image": market_row.get("image") or base_row.get("image"),
+                }
+            )
+        else:
+            merged.append(base_row)
+
+    for row in market_rows:
+        if id(row) not in consumed:
+            merged.append(row)
+    return _sort_item_base_market_rows(merged)
+
+
+def _bounded_item_base_sample_limit(sample_limit: int | None = None) -> int:
+    value = sample_limit if isinstance(sample_limit, int) and sample_limit > 0 else ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT
+    return max(ITEM_BASE_MARKET_FETCH_LIMIT, min(value, ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT))
+
+
+def _item_base_market_cache_key(
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    limit: int,
+    min_ilvl: int | None,
+) -> tuple[Any, ...]:
+    return (league, target, status, q.strip().lower(), limit, min_ilvl)
+
+
+def _item_base_market_exact_cache_key(
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    min_ilvl: int | None,
+) -> tuple[Any, ...]:
+    return _item_base_market_cache_key(league, target, status, q, ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
+
+
+def _item_base_market_job_key(
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    min_ilvl: int | None,
+    sample_limit: int | None = None,
+) -> tuple[Any, ...]:
+    return (
+        league,
+        target,
+        status,
+        q.strip().lower(),
+        min_ilvl,
+        _bounded_item_base_sample_limit(sample_limit),
+    )
+
+
+def _retry_after_from_error(error_text: str | None) -> int | None:
+    text = str(error_text or "")
+    match = re.search(r"retry after\s+(\d+)s", text, flags=re.IGNORECASE)
+    if not match:
+        return 60 if "429" in text or "too many requests" in text.lower() or "rate limited" in text.lower() else None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return 60
+
+
+def _item_base_market_job_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not job:
+        return None
+    allowed = {
+        "id",
+        "status",
+        "created_ts",
+        "updated_ts",
+        "retry_at",
+        "retry_after",
+        "attempts",
+        "sample_limit",
+        "total",
+        "base_total",
+        "processed_count",
+        "fetched_count",
+        "clean_count",
+        "error",
+    }
+    return {key: value for key, value in job.items() if key in allowed}
+
+
+def _item_base_market_payload_has_prices(payload: dict[str, Any]) -> bool:
+    return any(
+        _to_float(row.get("low")) is not None
+        or _to_float(row.get("best")) is not None
+        or bool(row.get("best_native"))
+        for row in payload.get("rows") or []
+    )
+
+
+def _item_base_market_payload_is_error_only(payload: dict[str, Any]) -> bool:
+    rows = payload.get("rows") or []
+    errors = payload.get("errors") or []
+    return bool(rows or errors) and not _item_base_market_payload_has_prices(payload) and any(
+        row.get("error") for row in rows
+    )
+
+
+async def _enrich_stored_item_base_market_rows(
+    rows: list[dict[str, Any]],
+    min_ilvl: int | None = None,
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    try:
+        catalog = await asyncio.wait_for(get_item_base_catalog(q="", limit=1000), timeout=5)
+        bases = catalog.get("bases") or []
+    except Exception:
+        bases = _item_base_fallback_catalog()
+
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for base in bases:
+        base_row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+        if base_row.get("id"):
+            rows_by_id[str(base_row["id"])] = base_row
+
+    enriched_rows = []
+    for row in rows:
+        item_id = str(row.get("id") or "")
+        base_row = rows_by_id.get(item_id) or _base_market_row_from_stored_id(item_id, min_ilvl=min_ilvl)
+        enriched = {**base_row, **row}
+        enriched.setdefault("total_scope", "stored_snapshot")
+        if _to_float(enriched.get("low")) is None:
+            low = _to_float(row.get("best")) or _to_float(row.get("median"))
+            if low is not None:
+                enriched["low"] = low
+        if _to_float(enriched.get("market_median")) is None:
+            median = _to_float(row.get("median")) or _to_float(row.get("best"))
+            if median is not None:
+                enriched["market_median"] = median
+        enriched_rows.append(enriched)
+    return enriched_rows
 
 
 async def _fetch_item_base_market_overview(
@@ -941,8 +1497,7 @@ async def _fetch_item_base_market_overview(
             group_icons.setdefault(key, lot["icon"])
         if _is_clean_item_base_lot(lot):
             priced_lot = _apply_target_price(lot, rates, target)
-            if isinstance(priced_lot.get("price_target"), float):
-                grouped_clean.setdefault(key, []).append(priced_lot)
+            grouped_clean.setdefault(key, []).append(priced_lot)
 
     rows_by_key = {}
     for key, clean_lots in grouped_clean.items():
@@ -957,10 +1512,12 @@ async def _fetch_item_base_market_overview(
             "category_label": "Market overview",
             "category_label_ru": "С рынка",
             "icon_key": icon_key,
-            "image": group_icons.get(key) or _item_base_icon_data_url(icon_key),
+            "image": group_icons.get(key) or _item_base_generated_icon_url(icon_key),
             "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
             "basis_ru": "обычная чистая основа без явных, рунных и оскверненных свойств",
             "min_ilvl": min_ilvl,
+            "total_scope": "overview_sample",
+            "overview_total": market_search.get("total") or len(lots),
             **_base_market_stats(clean_lots, raw_count=len(grouped_raw.get(key) or [])),
             "query_id": market_search.get("id"),
             "total": market_search.get("total") or len(lots),
@@ -981,23 +1538,50 @@ async def _fetch_item_base_market_row(
     status: str,
     rates: dict[str, float],
     min_ilvl: int | None = None,
+    fetch_limit: int | None = None,
 ) -> dict[str, Any]:
     row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
     query_type = str(row.get("query_type") or "").strip()
     if not query_type:
-        return {**row, **_base_market_stats([], 0), "sample_lots": [], "error": "base type is empty"}
+        return {
+            **row,
+            **_base_market_stats([], 0),
+            "sample_lots": [],
+            "error": "base type is empty",
+            "total_scope": "exact",
+            "fetched_count": 0,
+        }
     try:
         market_search = await _post_search(
             league,
             _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
         )
+    except Exception as exc:
+        return {
+            **row,
+            **_base_market_stats([], 0),
+            "sample_lots": [],
+            "error": str(exc),
+            "total_scope": "exact",
+            "fetched_count": 0,
+        }
+    try:
         market_items = await _fetch_trade_items(
             market_search.get("result") or [],
             market_search.get("id") or "",
-            limit=ITEM_BASE_MARKET_FETCH_LIMIT,
+            limit=_bounded_item_base_sample_limit(fetch_limit),
         )
     except Exception as exc:
-        return {**row, **_base_market_stats([], 0), "sample_lots": [], "error": str(exc)}
+        return {
+            **row,
+            **_base_market_stats([], 0),
+            "query_id": market_search.get("id"),
+            "total": market_search.get("total") or len(market_search.get("result") or []),
+            "total_scope": "exact",
+            "fetched_count": 0,
+            "sample_lots": [],
+            "error": str(exc),
+        }
 
     lots = [_normalize_item_listing(item) for item in market_items]
     clean_lots = [
@@ -1005,15 +1589,417 @@ async def _fetch_item_base_market_row(
         for lot in lots
         if lot and _is_clean_item_base_lot(lot)
     ]
-    clean_lots = [lot for lot in clean_lots if isinstance(lot.get("price_target"), float)]
+    local_icon = await _cache_item_base_listing_icon(row, clean_lots)
     stats = _base_market_stats(clean_lots, raw_count=len(lots))
     return {
         **row,
         **stats,
+        "image": local_icon or row.get("image"),
         "query_id": market_search.get("id"),
         "total": market_search.get("total") or len(lots),
+        "total_scope": "exact",
+        "fetched_count": len(lots),
         "sample_lots": _base_market_sample_lots(clean_lots),
     }
+
+
+def _base_market_row_from_search(
+    base: dict[str, Any],
+    market_search: dict[str, Any],
+    min_ilvl: int | None = None,
+) -> dict[str, Any]:
+    row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+    return {
+        **row,
+        **_base_market_stats([], 0),
+        "query_id": market_search.get("id"),
+        "total": market_search.get("total") or len(market_search.get("result") or []),
+        "total_scope": "exact",
+        "fetched_count": 0,
+        "sample_lots": [],
+    }
+
+
+async def _fetch_item_base_market_row_from_search(
+    base: dict[str, Any],
+    market_search: dict[str, Any],
+    target: str,
+    rates: dict[str, float],
+    min_ilvl: int | None = None,
+    fetch_limit: int | None = None,
+) -> dict[str, Any]:
+    row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+    try:
+        market_items = await _fetch_trade_items(
+            market_search.get("result") or [],
+            market_search.get("id") or "",
+            limit=_bounded_item_base_sample_limit(fetch_limit),
+        )
+    except Exception as exc:
+        return {
+            **row,
+            **_base_market_stats([], 0),
+            "query_id": market_search.get("id"),
+            "total": market_search.get("total") or len(market_search.get("result") or []),
+            "total_scope": "exact",
+            "fetched_count": 0,
+            "sample_lots": [],
+            "error": str(exc),
+        }
+
+    lots = [_normalize_item_listing(item) for item in market_items]
+    clean_lots = [
+        _apply_target_price(lot, rates, target)
+        for lot in lots
+        if lot and _is_clean_item_base_lot(lot)
+    ]
+    local_icon = await _cache_item_base_listing_icon(row, clean_lots)
+    stats = _base_market_stats(clean_lots, raw_count=len(lots))
+    return {
+        **row,
+        **stats,
+        "image": local_icon or row.get("image"),
+        "query_id": market_search.get("id"),
+        "total": market_search.get("total") or len(lots),
+        "total_scope": "exact",
+        "fetched_count": len(lots),
+        "sample_lots": _base_market_sample_lots(clean_lots),
+    }
+
+
+def _item_base_market_exact_result(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    limit: int,
+    min_ilvl: int | None,
+    catalog: dict[str, Any],
+    rows: list[dict[str, Any]],
+    errors: list[dict[str, Any]] | None = None,
+    cached: bool = False,
+    refresh_job: dict[str, Any] | None = None,
+    source: str = "trade2/search+fetch:exact",
+    stored: bool = False,
+) -> dict[str, Any]:
+    priced_rows = [row for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
+    query_ids = [row.get("query_id") for row in rows if row.get("query_id")]
+    return {
+        "schema_version": "poe2-item-base-market/v1",
+        "created_ts": time.time(),
+        "league": league,
+        "category": ITEM_BASE_MARKET_CATEGORY,
+        "target": target,
+        "status": status,
+        "rows": rows[:limit],
+        "matched_total": len(rows),
+        "catalog_total": catalog.get("total") or len(rows),
+        "priced_total": len(priced_rows),
+        "basis": "normal rarity, clean item bases without explicit/rune/desecrated affixes; chart stores low market",
+        "source": source,
+        "catalog_source": catalog.get("source"),
+        "query_ids": query_ids,
+        "errors": errors or [],
+        "cached": cached,
+        "stored": stored,
+        "refresh_job": _item_base_market_job_view(refresh_job),
+    }
+
+
+async def _item_base_market_exact_catalog(q: str) -> dict[str, Any]:
+    catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_MARKET_MAX_BASES)
+    if q and not catalog.get("bases"):
+        catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
+    return catalog
+
+
+def _item_base_market_pending_result(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    limit: int,
+    min_ilvl: int | None,
+    job: dict[str, Any],
+    catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    bases = (catalog or {}).get("bases") or [_manual_item_base_market_base(q)]
+    rows = []
+    for base in bases[:limit]:
+        row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
+        row.update(
+            {
+                **_base_market_stats([], 0),
+                "total_scope": "exact" if q else "catalog",
+                "total": job.get("total"),
+                "fetched_count": job.get("fetched_count") or 0,
+                "sample_lots": [],
+                "refresh_status": job.get("status"),
+                "error": job.get("error"),
+            }
+        )
+        rows.append(row)
+    return _item_base_market_exact_result(
+        league=league,
+        target=target,
+        status=status,
+        q=q,
+        limit=limit,
+        min_ilvl=min_ilvl,
+        catalog=catalog or {"total": len(rows), "source": "pending"},
+        rows=rows,
+        errors=[],
+        cached=False,
+        refresh_job=job,
+        source="trade2/search+fetch:exact" if q else "item-base-catalog:pending",
+        stored=not bool(q),
+    )
+
+
+async def run_item_base_market_refresh_job(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    limit: int = ITEM_BASE_MARKET_MAX_BASES,
+    min_ilvl: int | None = None,
+    sample_limit: int | None = None,
+) -> dict[str, Any]:
+    q = q.strip()
+    bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+    key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
+    job = ITEM_BASE_MARKET_JOBS.get(key)
+    if not job:
+        now = time.time()
+        job = {
+            "id": "|".join(str(part) for part in key),
+            "status": "queued",
+            "created_ts": now,
+            "updated_ts": now,
+            "attempts": 0,
+            "sample_limit": bounded_sample_limit,
+            "total": None,
+            "base_total": 0,
+            "processed_count": 0,
+            "fetched_count": 0,
+            "clean_count": 0,
+            "error": None,
+        }
+        ITEM_BASE_MARKET_JOBS[key] = job
+    job["status"] = "running"
+    job["updated_ts"] = time.time()
+    catalog = await get_item_base_catalog(q=q if q else "", limit=ITEM_BASE_CATALOG_LIMIT)
+    if q and not catalog.get("bases"):
+        catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
+    bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
+    if q:
+        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
+    else:
+        selected_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
+    errors = list(catalog.get("errors") or [])
+    job["base_total"] = len(selected_bases)
+    job["total"] = len(selected_bases) if not q else None
+
+    _, rates = await _currency_rates_for_target(league, target, status="any")
+
+    rows: list[dict[str, Any]] = []
+    exact_query_ids: list[str] = []
+    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:catalog-scan"
+
+    def publish_result(extra_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        combined_rows = [*rows, *(extra_rows or [])]
+        if q:
+            result_rows = _sort_item_base_market_rows(combined_rows)
+        else:
+            result_rows = _merge_item_base_market_rows(catalog, combined_rows, min_ilvl=min_ilvl)
+        result = _item_base_market_exact_result(
+            league=league,
+            target=target,
+            status=status,
+            q=q,
+            limit=len(result_rows) or limit,
+            min_ilvl=min_ilvl,
+            catalog=catalog,
+            rows=result_rows,
+            errors=errors,
+            cached=False,
+            refresh_job=job,
+            source=source,
+            stored=not bool(q),
+        )
+        result["query_ids"] = exact_query_ids
+        job["result"] = result
+        has_collected_rows = any(
+            row.get("query_id")
+            or row.get("total") is not None
+            or int(row.get("fetched_count") or row.get("raw_count") or 0) > 0
+            for row in combined_rows
+        )
+        if (not q or has_collected_rows) and not _item_base_market_payload_is_error_only(result):
+            cache_created_ts = time.time()
+            ITEM_BASE_MARKET_CACHE[_item_base_market_cache_key(league, target, status, q, ITEM_BASE_MARKET_MAX_BASES, min_ilvl)] = {
+                "created_ts": cache_created_ts,
+                "data": result,
+            }
+            if q:
+                ITEM_BASE_MARKET_CACHE[_item_base_market_exact_cache_key(league, target, status, q, min_ilvl)] = {
+                    "created_ts": cache_created_ts,
+                    "data": result,
+                }
+        return result
+
+    publish_result()
+    base_index = 0
+    attempts = 0
+    while base_index < len(selected_bases):
+        base = selected_bases[base_index]
+        query_type = str(_base_market_row_from_base(base, min_ilvl=min_ilvl).get("query_type") or "").strip()
+        if not query_type:
+            rows.append(
+                {
+                    **_base_market_row_from_base(base, min_ilvl=min_ilvl),
+                    **_base_market_stats([], 0),
+                    "sample_lots": [],
+                    "error": "base type is empty",
+                    "total_scope": "exact",
+                    "fetched_count": 0,
+                }
+            )
+            base_index += 1
+            job["processed_count"] = base_index
+            job["updated_ts"] = time.time()
+            publish_result()
+            continue
+        try:
+            market_search = await _post_search(
+                league,
+                _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
+            )
+            if market_search.get("id"):
+                exact_query_ids.append(market_search["id"])
+            row = await _fetch_item_base_market_row_from_search(
+                base,
+                market_search,
+                target,
+                rates,
+                min_ilvl=min_ilvl,
+                fetch_limit=bounded_sample_limit,
+            )
+            retry_after = _retry_after_from_error(row.get("error"))
+            if retry_after is not None:
+                attempts += 1
+                rows.append(row)
+                base_index += 1
+                job["attempts"] = attempts
+                job["status"] = "rate_limited"
+                job["retry_after"] = retry_after
+                job["retry_at"] = time.time() + retry_after
+                job["error"] = str(row.get("error"))
+                job["processed_count"] = base_index
+                if row.get("total") is not None:
+                    job["total"] = row.get("total")
+                job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
+                job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
+                job["updated_ts"] = time.time()
+                return _cache_copy(publish_result())
+        except Exception as exc:
+            error_text = str(exc)
+            retry_after = _retry_after_from_error(error_text)
+            error_row = {
+                **_base_market_row_from_base(base, min_ilvl=min_ilvl),
+                **_base_market_stats([], 0),
+                "sample_lots": [],
+                "error": error_text,
+                "total_scope": "exact",
+                "fetched_count": 0,
+            }
+            if retry_after is not None:
+                attempts += 1
+                job["attempts"] = attempts
+                job["status"] = "rate_limited"
+                job["retry_after"] = retry_after
+                job["retry_at"] = time.time() + retry_after
+                job["error"] = error_text
+                job["updated_ts"] = time.time()
+                return _cache_copy(publish_result([error_row]))
+            row = error_row
+
+        attempts = 0
+        job["attempts"] = max(int(job.get("attempts") or 0), 1)
+        rows.append(row)
+        base_index += 1
+        job["processed_count"] = base_index
+        if q and row.get("total") is not None:
+            job["total"] = row.get("total")
+        job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
+        job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
+        job["status"] = "running"
+        job["error"] = None
+        job["updated_ts"] = time.time()
+        publish_result()
+        if base_index < len(selected_bases):
+            await asyncio.sleep(DEFAULT_RATE_LIMIT_DELAY)
+
+    job["status"] = "done"
+    job["updated_ts"] = time.time()
+    job["error"] = None
+    result = publish_result()
+    priced_rows = [row for row in result.get("rows") or [] if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
+    if priced_rows:
+        log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
+    return _cache_copy(result)
+
+
+def start_item_base_market_refresh_job(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    q: str,
+    limit: int = ITEM_BASE_MARKET_MAX_BASES,
+    min_ilvl: int | None = None,
+    sample_limit: int | None = None,
+) -> tuple[dict[str, Any], Any | None]:
+    q = q.strip()
+    bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+    key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
+    now = time.time()
+    existing = ITEM_BASE_MARKET_JOBS.get(key)
+    if existing and now - float(existing.get("created_ts") or now) < ITEM_BASE_MARKET_JOB_TTL:
+        if existing.get("status") in {"queued", "running"}:
+            return existing, None
+        if existing.get("status") == "rate_limited":
+            retry_at = _to_float(existing.get("retry_at")) or 0.0
+            if retry_at > now:
+                return existing, None
+    job = {
+        "id": "|".join(str(part) for part in key),
+        "status": "queued",
+        "created_ts": now,
+        "updated_ts": now,
+        "attempts": 0,
+        "sample_limit": bounded_sample_limit,
+        "total": None,
+        "base_total": 0,
+        "processed_count": 0,
+        "fetched_count": 0,
+        "clean_count": 0,
+        "error": None,
+    }
+    ITEM_BASE_MARKET_JOBS[key] = job
+    coroutine = run_item_base_market_refresh_job(
+        league=league,
+        target=target,
+        status=status,
+        q=q,
+        limit=limit,
+        min_ilvl=min_ilvl,
+        sample_limit=bounded_sample_limit,
+    )
+    return job, coroutine
 
 
 async def get_item_base_market(
@@ -1024,164 +2010,145 @@ async def get_item_base_market(
     limit: int = 40,
     min_ilvl: int | None = None,
     force_refresh: bool = False,
+    sample_limit: int | None = None,
 ) -> dict[str, Any]:
     q = q.strip()
     limit = max(1, min(limit, ITEM_BASE_MARKET_MAX_BASES))
     min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
-    cache_key = (league, target, status, q.lower(), limit, min_ilvl)
-    canonical_cache_key = (league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
-    default_cache_key = (league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, None)
+    bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+    cache_key = _item_base_market_cache_key(league, target, status, q, limit, min_ilvl)
+    canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
+    exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, min_ilvl)
+    default_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, None)
     if not force_refresh:
         cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
-        if not cached and cache_key != canonical_cache_key:
+        if not cached and q:
+            cached = ITEM_BASE_MARKET_CACHE.get(exact_cache_key)
+        if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
+            payload = _cache_copy(cached["data"])
+            if not _item_base_market_payload_is_error_only(payload):
+                rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
+                if min_ilvl is not None:
+                    rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+                payload["rows"] = rows[:limit]
+                payload["matched_total"] = len(rows)
+                payload["cached"] = True
+                return payload
+        job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit))
+        if job and time.time() - float(job.get("created_ts") or 0) < ITEM_BASE_MARKET_JOB_TTL:
+            result = _cache_copy(job.get("result") or {})
+            if result:
+                rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+                result["rows"] = rows[:limit]
+                result["matched_total"] = len(rows)
+                result["refresh_job"] = _item_base_market_job_view(job)
+                result["cached"] = False
+                return result
+            try:
+                catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
+                if q and not catalog.get("bases"):
+                    catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
+            except Exception:
+                catalog = {"bases": [_manual_item_base_market_base(q)], "source": "manual", "total": 1}
+            return _item_base_market_pending_result(
+                league=league,
+                target=target,
+                status=status,
+                q=q,
+                limit=limit,
+                min_ilvl=min_ilvl,
+                job=job,
+                catalog=catalog,
+            )
+        cached = None
+        if cache_key != canonical_cache_key:
             cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
         if not cached and min_ilvl is not None:
             cached = ITEM_BASE_MARKET_CACHE.get(default_cache_key)
         if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
             payload = _cache_copy(cached["data"])
-            rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
-            if min_ilvl is not None:
-                rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
-            payload["rows"] = rows[:limit]
-            payload["matched_total"] = len(rows)
-            payload["cached"] = True
-            return payload
+            if not _item_base_market_payload_is_error_only(payload):
+                rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
+                if min_ilvl is not None:
+                    rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
+                payload["rows"] = rows[:limit]
+                payload["matched_total"] = len(rows)
+                payload["cached"] = True
+                return payload
         latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+        latest_source = str((latest or {}).get("source") or "")
+        if latest and ("exact" in latest_source or "overview" in latest_source):
+            latest = None
         if latest:
-            rows = _filter_item_base_market_rows(latest.get("rows") or [], q)
+            catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)
+            enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
+            rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=min_ilvl)
+            rows = _filter_item_base_market_rows(rows, q)
             if min_ilvl is not None:
                 rows = [row for row in rows if not row.get("min_ilvl") or int(row.get("min_ilvl") or 0) >= min_ilvl]
-            rows = sorted(rows, key=lambda row: _to_float(row.get("low")) or _to_float(row.get("best")) or 0, reverse=True)
+            priced_total = sum(1 for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None)
             return {
                 **latest,
                 "schema_version": "poe2-item-base-market/v1",
                 "category": ITEM_BASE_MARKET_CATEGORY,
                 "rows": rows[:limit],
                 "matched_total": len(rows),
-                "catalog_total": len(rows),
+                "catalog_total": catalog.get("total") or len(rows),
+                "priced_total": priced_total,
                 "basis": "stored clean normal bases, price chart uses low market",
                 "cached": True,
                 "stored": True,
             }
-        return {
-            "schema_version": "poe2-item-base-market/v1",
-            "created_ts": None,
-            "league": league,
-            "category": ITEM_BASE_MARKET_CATEGORY,
-            "target": target,
-            "status": status,
-            "rows": [],
-            "matched_total": 0,
-            "catalog_total": 0,
-            "priced_total": 0,
-            "basis": "stored clean normal bases, price chart uses low market",
-            "source": "stored",
-            "errors": [],
-            "cached": False,
-            "stored": False,
-        }
-
-    catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_MARKET_MAX_BASES)
-    bases = catalog.get("bases") or []
-    selected_bases = bases[:ITEM_BASE_MARKET_MAX_BASES]
-    catalog_errors = list(catalog.get("errors") or [])
-    try:
-        currency_rates = await asyncio.wait_for(
-            get_category_rates(league=league, category="Currency", target=target, status="any"),
-            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
+        if q and not catalog.get("bases"):
+            catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
+        rows = _sort_item_base_market_rows(_base_market_catalog_rows(catalog, min_ilvl=min_ilvl))
+        return _item_base_market_exact_result(
+            league=league,
+            target=target,
+            status=status,
+            q=q,
+            limit=limit,
+            min_ilvl=min_ilvl,
+            catalog=catalog,
+            rows=rows,
+            errors=list(catalog.get("errors") or []),
+            cached=False,
+            source="item-base-catalog",
+            stored=True,
         )
-        rates = _currency_rates_by_id(currency_rates, target)
-    except Exception:
-        rates = {target: 1.0}
 
-    errors = catalog_errors
-    overview_rows: dict[str, dict[str, Any]] = {}
-    overview_query_id = None
-    try:
-        overview = await _fetch_item_base_market_overview(league, target, status, rates, min_ilvl=min_ilvl)
-        overview_rows = dict(overview.get("rows_by_key") or {})
-        overview_query_id = overview.get("query_id")
-    except Exception as exc:
-        errors.append({"source": "trade2/search", "error": str(exc)})
-
-    rows: list[dict[str, Any]] = []
-    consumed_overview_keys: set[str] = set()
-    overview_error = next((item.get("error") for item in errors if item.get("source") == "trade2/search"), None)
-    for base in selected_bases:
-        row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
-        overview_row = next((overview_rows[key] for key in _base_market_row_keys(row) if key in overview_rows), None)
-        if overview_row:
-            consumed_overview_keys.update(_base_market_row_keys(overview_row))
-            row = {
-                **row,
-                **{key: value for key, value in overview_row.items() if value not in (None, "", [])},
-                "id": row.get("id") or overview_row.get("id"),
-                "text": row.get("text") or overview_row.get("text"),
-                "text_ru": row.get("text_ru") or overview_row.get("text_ru"),
-                "category": row.get("category") or overview_row.get("category"),
-                "category_label": row.get("category_label") or overview_row.get("category_label"),
-                "category_label_ru": row.get("category_label_ru") or overview_row.get("category_label_ru"),
-                "icon_key": row.get("icon_key") or overview_row.get("icon_key"),
-                "image": overview_row.get("image") or row.get("image"),
-            }
-        else:
-            row = {**row, **_base_market_stats([], 0), "sample_lots": []}
-            if overview_error:
-                row["error"] = overview_error
-        rows.append(row)
-
-    for key, overview_row in overview_rows.items():
-        if key in consumed_overview_keys:
-            continue
-        rows.append(overview_row)
-
-    priced_rows = [row for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
-    unpriced_rows = [row for row in rows if row not in priced_rows]
-    priced_rows.sort(key=lambda row: _to_float(row.get("low")) or _to_float(row.get("best")) or 0, reverse=True)
-    unpriced_rows.sort(key=lambda row: _lookup_text_key(row.get("text_ru") or row.get("text")))
-    rows = priced_rows + unpriced_rows
-    created_ts = time.time()
-    snapshot_rows = priced_rows
-    snapshot = {
-        "created_ts": created_ts,
-        "league": league,
-        "category": ITEM_BASE_MARKET_CATEGORY,
-        "target": target,
-        "status": status,
-        "source": "trade2/search+fetch:overview",
-        "query_ids": [item for item in [overview_query_id] if item],
-        "errors": errors,
-        "rows": snapshot_rows,
-    }
-    if snapshot_rows:
-        log_market_history(snapshot, history_path=HISTORY_PATH)
-    full_result = {
-        "schema_version": "poe2-item-base-market/v1",
-        "created_ts": created_ts,
-        "league": league,
-        "category": ITEM_BASE_MARKET_CATEGORY,
-        "target": target,
-        "status": status,
-        "rows": rows,
-        "matched_total": len(rows),
-        "catalog_total": catalog.get("total") or len(rows),
-        "priced_total": len(snapshot_rows),
-        "basis": "normal rarity, clean item bases without explicit/rune/desecrated affixes; chart stores low market",
-        "source": "trade2/search+fetch:overview",
-        "catalog_source": catalog.get("source"),
-        "errors": errors,
-        "cached": False,
-    }
-    cache_created_ts = time.time()
-    ITEM_BASE_MARKET_CACHE[canonical_cache_key] = {"created_ts": cache_created_ts, "data": full_result}
-    filtered_rows = _filter_item_base_market_rows(rows, q)
-    matched_total = len(filtered_rows)
-    result = {
-        **full_result,
-        "rows": filtered_rows[:limit],
-        "matched_total": matched_total,
-    }
-    ITEM_BASE_MARKET_CACHE[cache_key] = {"created_ts": cache_created_ts, "data": result}
+    job, coroutine = start_item_base_market_refresh_job(
+        league=league,
+        target=target,
+        status=status,
+        q=q,
+        limit=ITEM_BASE_MARKET_SCAN_LIMIT if not q else limit,
+        min_ilvl=min_ilvl,
+        sample_limit=bounded_sample_limit,
+    )
+    if coroutine is None:
+        result = _cache_copy(job.get("result") or {})
+        if not result:
+            catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
+            if q and not catalog.get("bases"):
+                catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
+            result = _item_base_market_pending_result(
+                league=league,
+                target=target,
+                status=status,
+                q=q,
+                limit=limit,
+                min_ilvl=min_ilvl,
+                job=job,
+                catalog=catalog,
+            )
+    else:
+        result = await coroutine
+    rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+    result["rows"] = rows[:limit]
+    result["matched_total"] = len(rows)
+    result["refresh_job"] = _item_base_market_job_view(job)
     return _cache_copy(result)
 
 
@@ -1890,18 +2857,73 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _currency_rates_by_id(currency_rates: dict[str, Any], target: str) -> dict[str, float]:
-    rates = {target: 1.0}
+    target_id = _currency_id(target)
+    snapshot_target = _currency_id(currency_rates.get("target") or target)
+    raw_rates: dict[str, float] = {}
+    if snapshot_target:
+        raw_rates[snapshot_target] = 1.0
     for row in currency_rates.get("rows") or []:
-        value = _to_float(row.get("median") if row.get("median") is not None else row.get("best"))
-        if row.get("id") and value:
-            rates[row["id"]] = value
+        item_id = _currency_id(row.get("id"))
+        value = _currency_rate_value(row)
+        if item_id and value:
+            raw_rates[item_id] = value
+            raw_rates[str(row.get("id"))] = value
+    target_value = raw_rates.get(target_id)
+    if target_id == snapshot_target:
+        target_value = 1.0
+    if not target_value:
+        return {target: 1.0, target_id: 1.0}
+
+    rates = {target: 1.0, target_id: 1.0}
+    for item_id, value in raw_rates.items():
+        if value > 0:
+            rates[item_id] = value / target_value
+    rates[target] = 1.0
+    rates[target_id] = 1.0
     return rates
+
+
+def _stored_currency_rates_for_target(league: str, target: str, status: str = "any") -> dict[str, Any] | None:
+    snapshots = [
+        _read_history_latest_rates(
+            league=league,
+            category="Currency",
+            target=target,
+            status=status,
+            history_path=HISTORY_PATH,
+        ),
+        _read_history_latest_rates(
+            league=league,
+            category="Currency",
+            target="exalted",
+            status=status,
+            history_path=HISTORY_PATH,
+        ),
+    ]
+    for snapshot in snapshots:
+        if snapshot and snapshot.get("rows"):
+            return snapshot
+    return None
+
+
+async def _currency_rates_for_target(league: str, target: str, status: str = "any") -> tuple[dict[str, Any], dict[str, float]]:
+    stored = _stored_currency_rates_for_target(league, target, status=status)
+    if stored:
+        return stored, _currency_rates_by_id(stored, target)
+    try:
+        currency_rates = await asyncio.wait_for(
+            get_category_rates(league=league, category="Currency", target=target, status=status),
+            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
+        )
+        return currency_rates, _currency_rates_by_id(currency_rates, target)
+    except Exception:
+        return {"rows": [], "cached": False, "target": target}, {_currency_id(target): 1.0, target: 1.0}
 
 
 def _apply_target_price(lot: dict[str, Any], rates: dict[str, float], target: str) -> dict[str, Any]:
     currency = lot.get("price_currency")
     amount = _to_float(lot.get("price_amount"))
-    factor = rates.get(currency)
+    factor = rates.get(_currency_id(currency)) or rates.get(str(currency or ""))
     lot["target"] = target
     lot["price_target"] = amount * factor if amount and factor else None
     stack_size = _to_int(lot.get("stack_size")) or 1
@@ -2346,15 +3368,7 @@ async def get_seller_lots_analysis(
     )
     all_lots = list(seller_snapshot.get("lots") or [])
 
-    try:
-        currency_rates = await asyncio.wait_for(
-            get_category_rates(league=league, category="Currency", target=target, status="any"),
-            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
-        )
-        rates = _currency_rates_by_id(currency_rates, target)
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        currency_rates = {"rows": [], "cached": False}
-        rates = {target: 1.0}
+    currency_rates, rates = await _currency_rates_for_target(league, target, status="any")
     try:
         static_lookup = _static_entry_lookup(await asyncio.wait_for(get_trade_static(), timeout=SELLER_CURRENCY_RATES_TIMEOUT))
     except (asyncio.TimeoutError, httpx.HTTPError):
@@ -2456,15 +3470,7 @@ async def get_seller_lot_market(
     lot = next((item for item in seller_snapshot.get("lots") or [] if item.get("id") == lot_id), None)
     if not lot:
         raise ValueError("lot not found in seller cache")
-    try:
-        currency_rates = await asyncio.wait_for(
-            get_category_rates(league=league, category="Currency", target=target, status="any"),
-            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
-        )
-        rates = _currency_rates_by_id(currency_rates, target)
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        currency_rates = {"rows": [], "cached": False}
-        rates = {target: 1.0}
+    currency_rates, rates = await _currency_rates_for_target(league, target, status="any")
     _apply_target_price(lot, rates, target)
     try:
         try:
@@ -2529,14 +3535,7 @@ async def get_pasted_item_market(
             "source": "pasted-text",
         }
 
-    try:
-        currency_rates = await asyncio.wait_for(
-            get_category_rates(league=league, category="Currency", target=target, status="any"),
-            timeout=SELLER_CURRENCY_RATES_TIMEOUT,
-        )
-        rates = _currency_rates_by_id(currency_rates, target)
-    except (asyncio.TimeoutError, httpx.HTTPError):
-        rates = {target: 1.0}
+    _, rates = await _currency_rates_for_target(league, target, status="any")
 
     try:
         market = await asyncio.wait_for(

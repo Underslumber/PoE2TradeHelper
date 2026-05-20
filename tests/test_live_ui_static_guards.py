@@ -73,6 +73,30 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "trackFocusedBaseMarket" in app_js
     assert "baseMarketIconMarkup" in app_js
     assert "baseMarketPriceText" in app_js
+    assert "nativePriceText(lot?.price_amount, lot?.price_currency)" in app_js
+    assert "baseMarketLowPriceMarkup" in app_js
+    assert "renderBaseMarketCurrencyGroups" in app_js
+    assert "baseMarketExactTotal" in app_js
+    assert "refineFocusedBaseMarket" in app_js
+    assert "data-base-refine" in app_js
+    assert "status: 'securable'" in app_js
+    assert "sample_limit: '100'" in app_js
+    assert "scheduleBaseMarketPoll" in app_js
+    assert "baseMarketRefreshJob" in app_js
+    assert "baseMarketSort: {" in app_js
+    assert "function setBaseMarketSort" in app_js
+    assert "data-base-market-sort-key" in app_js
+    assert "sortedBaseMarketRows(state.baseMarket.rows || [])" in app_js
+    assert "baseMarketSortBase: 'Основа'" in i18n_js
+    assert "baseMarketSortLots: 'Лотов'" in i18n_js
+    assert "baseMarketConvertedToTarget: 'в валюте оценки'" in i18n_js
+    assert "baseMarketCurrencyBreakdown: 'Разбивка по валютам лотов'" in i18n_js
+    assert "baseMarketOverviewSampleHint: 'Список основ берется из сохраненного каталога" in i18n_js
+    assert "baseMarketRefreshRunning: 'точный сбор идет в фоне'" in i18n_js
+    assert "baseMarketRefreshRateLimited: 'trade2 ограничил точный сбор'" in i18n_js
+    assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
+    assert "refineBaseMarket: 'Уточнить рынок этой основы'" in i18n_js
+    assert "if (event.key === 'Enter') refreshBaseMarket(true);" in app_js
     assert "base-market-title-line" in app_js
     assert "if (state.mainView === 'lots') {\n    renderLotSubtabs();" in app_js
     assert "state.lotSubtab === 'bases'" in app_js
@@ -95,6 +119,8 @@ def test_russian_ui_translates_internal_risk_flags() -> None:
 
     assert "riskFlagLabel" in app_js
     assert "executionQualityLabel" in app_js
+    assert "/api/trade/market-diagnostics" in app_js
+    assert "renderMarketDiagnosticsSection" in app_js
     assert "item.execution.risk_flags.slice(0, 3).join(', ')" not in app_js
     assert "large_move_low_volume: t('riskLargeMoveLowVolume')" in app_js
     assert "low_volume: t('riskLowVolume')" in app_js

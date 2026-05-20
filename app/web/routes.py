@@ -57,6 +57,7 @@ from app.export.export_jsonl import export_rows_jsonl
 from app.funpay_market import load_funpay_rub_context
 from app.history_compaction import compact_market_history
 from app.item_parser import parse_item_text
+from app.market_diagnostics import build_market_diagnostics
 from app.market_service import market_snapshot_service
 from app.notifications import (
     normalize_event_type,
@@ -71,6 +72,7 @@ from app.trade2 import (
     build_category_meta,
     get_category_rates,
     get_exchange_offers,
+    ITEM_BASE_MARKET_DEFAULT_STATUS,
     get_item_base_catalog,
     get_item_base_market,
     get_pasted_item_market,
@@ -81,6 +83,7 @@ from app.trade2 import (
     read_item_history,
     read_history,
     read_latest_rates,
+    start_item_base_market_refresh_job,
 )
 from app.version import APP_VERSION
 
@@ -98,6 +101,43 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Strong references to fire-and-forget tasks so the event loop does not
 # garbage-collect them mid-execution.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+REFERENCE_BOOTSTRAP_TIMEOUT_SECONDS = 4.0
+FALLBACK_TRADE_LEAGUES = [
+    {"id": "Fate of the Vaal", "text": "Fate of the Vaal", "realm": "poe2"},
+    {"id": "Standard", "text": "Standard", "realm": "poe2"},
+]
+FALLBACK_STATIC_CATEGORIES = {
+    "Currency": [
+        {"id": "transmute", "text": "Orb of Transmutation", "text_ru": "Сфера превращения", "image": None},
+        {"id": "aug", "text": "Orb of Augmentation", "text_ru": "Сфера усиления", "image": None},
+        {"id": "alch", "text": "Orb of Alchemy", "text_ru": "Сфера алхимии", "image": None},
+        {"id": "regal", "text": "Regal Orb", "text_ru": "Сфера царей", "image": None},
+        {"id": "chaos", "text": "Chaos Orb", "text_ru": "Сфера хаоса", "image": None},
+        {"id": "exalted", "text": "Exalted Orb", "text_ru": "Сфера возвышения", "image": None},
+        {"id": "divine", "text": "Divine Orb", "text_ru": "Божественная сфера", "image": None},
+        {"id": "annul", "text": "Orb of Annulment", "text_ru": "Сфера отмены", "image": None},
+        {"id": "artificers", "text": "Artificer's Orb", "text_ru": "Сфера астромантии", "image": None},
+        {"id": "lesser-jewellers-orb", "text": "Lesser Jeweller's Orb", "text_ru": "Малая сфера златокузнеца", "image": None},
+        {"id": "greater-jewellers-orb", "text": "Greater Jeweller's Orb", "text_ru": "Большая сфера златокузнеца", "image": None},
+        {"id": "perfect-jewellers-orb", "text": "Perfect Jeweller's Orb", "text_ru": "Совершенная сфера златокузнеца", "image": None},
+    ],
+    "Delirium": [
+        {"id": "diluted-liquid-ire", "text": "Diluted Liquid Ire", "text_ru": "Разбавленный жидкий гнев", "image": None},
+        {"id": "diluted-liquid-guilt", "text": "Diluted Liquid Guilt", "text_ru": "Разбавленная жидкая вина", "image": None},
+        {"id": "diluted-liquid-greed", "text": "Diluted Liquid Greed", "text_ru": "Разбавленная жидкая жадность", "image": None},
+        {"id": "liquid-paranoia", "text": "Liquid Paranoia", "text_ru": "Жидкая паранойя", "image": None},
+        {"id": "liquid-envy", "text": "Liquid Envy", "text_ru": "Жидкая зависть", "image": None},
+        {"id": "liquid-disgust", "text": "Liquid Disgust", "text_ru": "Жидкое отвращение", "image": None},
+        {"id": "liquid-despair", "text": "Liquid Despair", "text_ru": "Жидкое отчаяние", "image": None},
+    ],
+    "Fragments": [
+        {"id": "simulacrum-splinter", "text": "Simulacrum Splinter", "text_ru": "Осколок Симулякра", "image": None},
+        {"id": "simulacrum", "text": "Simulacrum", "text_ru": "Симулякр", "image": None},
+    ],
+    "Essences": [],
+    "Runes": [],
+    "Waystones": [],
+}
 # Serializes the AI daily-quota check and slot reservation so concurrent
 # requests cannot both pass a stale remaining-count check.
 _AI_QUOTA_LOCK = asyncio.Lock()
@@ -1502,23 +1542,28 @@ async def api_account_funpay_rub(
 @router.get("/api/trade/leagues")
 async def api_trade_leagues():
     try:
-        return {"leagues": await get_trade_leagues()}
-    except asyncio.TimeoutError:
-        return JSONResponse(
-            status_code=504,
-            content={"error": "Поиск лотов занял слишком много времени. Попробуйте уменьшить число лотов или уточнить фильтр."},
-        )
+        leagues = await asyncio.wait_for(get_trade_leagues(), timeout=REFERENCE_BOOTSTRAP_TIMEOUT_SECONDS)
+        if leagues:
+            return {"leagues": leagues}
+        raise RuntimeError("empty trade league list")
     except Exception as exc:
-        return trade_api_error(exc)
+        return {"leagues": FALLBACK_TRADE_LEAGUES, "fallback": True, "warning": str(exc)}
 
 
 @router.get("/api/trade/static")
 async def api_trade_static():
     try:
-        categories = await get_trade_static()
-        return {"categories": categories, "category_meta": build_category_meta(categories)}
+        categories = await asyncio.wait_for(get_trade_static(), timeout=REFERENCE_BOOTSTRAP_TIMEOUT_SECONDS)
+        if categories:
+            return {"categories": categories, "category_meta": build_category_meta(categories)}
+        raise RuntimeError("empty trade static data")
     except Exception as exc:
-        return trade_api_error(exc)
+        return {
+            "categories": FALLBACK_STATIC_CATEGORIES,
+            "category_meta": build_category_meta(FALLBACK_STATIC_CATEGORIES),
+            "fallback": True,
+            "warning": str(exc),
+        }
 
 
 @router.get("/api/trade/exchange")
@@ -1603,6 +1648,28 @@ def api_trade_profitability(
     payload = build_profitability_snapshot(snapshot)
     payload["stored"] = True
     return payload
+
+
+@router.get("/api/trade/market-diagnostics")
+def api_trade_market_diagnostics(
+    league: str = Query(...),
+    category: str = Query(...),
+    target: str = Query("exalted"),
+    status: str = Query("any", pattern="^(online|any)$"),
+    expected_items: Annotated[int, Query(ge=0)] = 0,
+    history_limit: Annotated[int, Query(ge=2, le=2000)] = 96,
+    horizon_hours: Annotated[float, Query(ge=1, le=168)] = 24,
+):
+    snapshot = read_latest_rates(league=league, category=category, target=target, status=status)
+    history = read_history(limit=history_limit, league=league, category=category, target=target, status=status)
+    if snapshot and not any(float(item.get("created_ts") or 0) == float(snapshot.get("created_ts") or 0) for item in history):
+        history.append(snapshot)
+    return build_market_diagnostics(
+        snapshot,
+        history,
+        expected_items=expected_items,
+        horizon_hours=horizon_hours,
+    )
 
 
 @router.get("/api/trade/recipes")
@@ -1785,13 +1852,39 @@ async def api_trade_item_bases(
 async def api_trade_item_base_market(
     league: str = Query(...),
     target: str = Query("exalted"),
-    status: str = Query("any", pattern="^(online|any)$"),
+    status: str = Query(ITEM_BASE_MARKET_DEFAULT_STATUS, pattern="^(securable|available|onlineleague|online|any)$"),
     q: str = Query(""),
     limit: int = Query(40, ge=1, le=80),
     min_ilvl: int | None = Query(None, ge=1, le=100),
+    sample_limit: int = Query(100, ge=100, le=500),
     refresh: bool = Query(False),
 ):
     try:
+        if refresh:
+            _, coroutine = start_item_base_market_refresh_job(
+                league=league,
+                target=target,
+                status=status,
+                q=q,
+                limit=limit,
+                min_ilvl=min_ilvl,
+                sample_limit=sample_limit,
+            )
+            if coroutine is not None:
+                task = asyncio.create_task(coroutine)
+                _BACKGROUND_TASKS.add(task)
+                task.add_done_callback(_BACKGROUND_TASKS.discard)
+                await asyncio.wait({task}, timeout=4)
+            return await get_item_base_market(
+                league=league,
+                target=target,
+                status=status,
+                q=q,
+                limit=limit,
+                min_ilvl=min_ilvl,
+                force_refresh=False,
+                sample_limit=sample_limit,
+            )
         return await get_item_base_market(
             league=league,
             target=target,
@@ -1800,6 +1893,7 @@ async def api_trade_item_base_market(
             limit=limit,
             min_ilvl=min_ilvl,
             force_refresh=refresh,
+            sample_limit=sample_limit,
         )
     except asyncio.TimeoutError:
         return JSONResponse(
@@ -1835,7 +1929,7 @@ def api_trade_item_history(
     category: str = Query(...),
     item_id: str = Query(...),
     target: str = Query("exalted"),
-    status: str = Query("any", pattern="^(online|any)$"),
+    status: str = Query("any", pattern="^(securable|available|onlineleague|online|any)$"),
     metric: str = Query("price", pattern="^(price|demand|offers)$"),
     limit: int = Query(1000, ge=1, le=2000),
 ):

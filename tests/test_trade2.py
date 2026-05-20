@@ -648,9 +648,51 @@ def test_item_base_fallback_catalog_is_russian_and_has_icons():
     assert first["type"] == "Waxed Jacket"
     assert first["type_ru"] == "Вощеная куртка"
     assert first["category_label_ru"] == "Нательная броня"
-    assert first["image"].startswith("data:image/svg+xml")
+    assert first["image"].startswith("/icons/item-bases/generated/")
     assert first["icon_key"] == "armour"
     assert all(base["category_label_ru"] != "Fallback" for base in bases)
+
+
+def test_item_base_catalog_icons_are_local_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "icons")
+
+    bases = trade2._ensure_item_base_catalog_icons(
+        [{"id": "base:amber-amulet", "type": "Amber Amulet", "icon_key": "amulet", "image": "data:image/svg+xml;utf8,old"}]
+    )
+
+    assert bases[0]["image"] == "/icons/item-bases/generated/amulet.svg"
+    assert (tmp_path / "icons" / "generated" / "amulet.svg").exists()
+
+
+def test_item_base_catalog_prefers_existing_local_icon(tmp_path, monkeypatch):
+    icon_dir = tmp_path / "icons"
+    icon_dir.mkdir()
+    (icon_dir / "amber-amulet.png").write_bytes(b"png")
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", icon_dir)
+
+    bases = trade2._ensure_item_base_catalog_icons(
+        [{"id": "base:amber-amulet", "type": "Amber Amulet", "icon_key": "amulet", "image": "/icons/item-bases/generated/amulet.svg"}]
+    )
+
+    assert bases[0]["image"] == "/icons/item-bases/amber-amulet.png"
+
+
+def test_item_base_catalog_snapshot_roundtrip(tmp_path):
+    payload = {
+        "created_ts": 123.0,
+        "source": "trade2/data/items",
+        "bases": [{"id": "base:amber-amulet", "type": "Amber Amulet", "type_ru": "Амулет с янтарём"}],
+        "errors": [],
+    }
+    path = tmp_path / "item_base_catalog.json"
+
+    trade2.save_item_base_catalog_snapshot(payload, path=path)
+    loaded = trade2.load_item_base_catalog_snapshot(path=path)
+
+    assert loaded is not None
+    assert loaded["schema_version"] == trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION
+    assert loaded["created_ts"] == 123.0
+    assert loaded["bases"][0]["type_ru"] == "Амулет с янтарём"
 
 
 def test_item_base_market_query_uses_normal_rarity_and_priced_buyout():
@@ -695,9 +737,9 @@ def test_clean_item_base_lot_requires_normal_item_without_affixes():
 
 def test_base_market_stats_store_low_market_as_chart_price():
     lots = [
-        {"price_target": 5.0},
-        {"price_target": 10.0},
-        {"price_target": 30.0},
+        {"price_target": 5.0, "price_amount": 1.0, "price_currency": "transmutation"},
+        {"price_target": 10.0, "price_amount": 2.0, "price_currency": "transmutation"},
+        {"price_target": 30.0, "price_amount": 1.0, "price_currency": "exalted"},
     ]
 
     stats = trade2._base_market_stats(lots, raw_count=5)
@@ -708,6 +750,615 @@ def test_base_market_stats_store_low_market_as_chart_price():
     assert stats["market_median"] == 10.0
     assert stats["raw_count"] == 5
     assert stats["clean_count"] == 3
+    assert stats["best_native"] == {"amount": 1.0, "currency": "transmutation", "price_target": 5.0}
+    assert stats["optimal"] == 10.0
+    assert stats["optimal_native"] == {"amount": 2.0, "currency": "transmutation", "price_target": 10.0}
+    assert stats["price_currency_groups"][0]["currency"] == "transmutation"
+    assert stats["price_currency_groups"][0]["count"] == 2
+    assert stats["price_currency_groups"][0]["low_amount"] == 1.0
+
+
+def test_currency_rates_by_id_convert_from_stored_exalted_snapshot():
+    snapshot = {
+        "target": "exalted",
+        "rows": [
+            {"id": "alch", "best": 1.2, "median": 1.5},
+            {"id": "regal", "best": 0.13},
+            {"id": "divine", "best": 170.0},
+        ],
+    }
+
+    exalted_rates = trade2._currency_rates_by_id(snapshot, "exalted")
+    divine_rates = trade2._currency_rates_by_id(snapshot, "divine")
+
+    assert exalted_rates["alch"] == 1.2
+    assert exalted_rates["regal"] == 0.13
+    assert exalted_rates["exalted"] == 1.0
+    assert divine_rates["alch"] == 1.2 / 170.0
+    assert divine_rates["divine"] == 1.0
+
+
+def test_apply_target_price_uses_currency_aliases():
+    lot = {"price_amount": 1.0, "price_currency": "alchemy"}
+
+    priced = trade2._apply_target_price(lot, {"alch": 1.2, "exalted": 1.0}, "exalted")
+
+    assert priced["price_target"] == 1.2
+
+
+def test_base_market_stats_keep_native_prices_without_target_conversion():
+    lots = [
+        {"price_amount": 1.0, "price_currency": "transmutation", "price_target": None},
+        {"price_amount": 2.0, "price_currency": "transmutation", "price_target": None},
+    ]
+
+    stats = trade2._base_market_stats(lots, raw_count=2)
+
+    assert stats["low"] is None
+    assert stats["best_native"] == {"amount": 1.0, "currency": "transmutation", "price_target": None}
+    assert stats["optimal_native"] is None
+    assert stats["price_currency_groups"] == [
+        {
+            "currency": "transmutation",
+            "count": 2,
+            "low_amount": 1.0,
+            "median_amount": 1.5,
+            "low_target": None,
+            "median_target": None,
+        }
+    ]
+
+
+def test_item_base_market_text_filter_uses_exact_base_search(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    calls = {"search": 0, "fetch": 0, "overview": 0}
+
+    async def fake_catalog(q="", limit=500):
+        assert q == "Жемчужное кольцо"
+        return {
+            "source": "fake",
+            "total": 1,
+            "matched_total": 1,
+            "errors": [],
+            "bases": [
+                {
+                    "id": "base:pearl-ring",
+                    "type": "Pearl Ring",
+                    "type_ru": "Жемчужное кольцо",
+                    "query_type": "Жемчужное кольцо",
+                    "category": "accessory",
+                    "category_label": "Jewellery",
+                    "category_label_ru": "Бижутерия",
+                }
+            ],
+        }
+
+    async def fake_rates(**kwargs):
+        return {"rows": [{"id": "transmutation", "median": 0.005}]}
+
+    async def fake_search(league, query, sort=None):
+        calls["search"] += 1
+        assert query["type"] == "Жемчужное кольцо"
+        assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
+        return {"id": "exact-query", "total": 100, "result": ["lot1"]}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        calls["fetch"] += 1
+        assert fetch_limit == trade2.ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT
+        assert fetch_limit == 100
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        stats = trade2._base_market_stats(
+            [{"price_amount": 1.0, "price_currency": "transmutation", "price_target": 0.005}],
+            raw_count=100,
+        )
+        return {**row, **stats, "query_id": "exact-query", "total": 100, "total_scope": "exact", "sample_lots": []}
+
+    async def fake_overview(*args, **kwargs):
+        calls["overview"] += 1
+        return {"rows_by_key": {}}
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "get_category_rates", fake_rates)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_overview", fake_overview)
+    monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Жемчужное кольцо",
+            limit=40,
+            force_refresh=True,
+        )
+    )
+
+    assert calls == {"search": 1, "fetch": 1, "overview": 0}
+    assert result["source"] == "trade2/search+fetch:exact"
+    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
+    assert result["rows"][0]["best_native"]["currency"] == "transmutation"
+    assert result["rows"][0]["total_scope"] == "exact"
+
+
+def test_item_base_market_background_job_collects_limited_exact_sample(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    calls = {"exact": 0}
+
+    async def fake_catalog(q="", limit=500):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                    "category": "amulet",
+                    "category_label": "Accessories",
+                    "category_label_ru": "Бижутерия",
+                }
+            ],
+        }
+
+    async def fake_rates(**kwargs):
+        return {"rows": [{"id": "regal", "median": 0.17}]}
+
+    async def fake_search(league, query, sort=None):
+        return {"id": "exact-query", "total": 9484, "result": ["item1"]}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        calls["exact"] += 1
+        assert fetch_limit == 100
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        stats = trade2._base_market_stats(
+            [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.17}],
+            raw_count=100,
+        )
+        return {
+            **row,
+            **stats,
+            "query_id": "exact-query",
+            "total": 9484,
+            "total_scope": "exact",
+            "fetched_count": 100,
+            "sample_lots": [],
+        }
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "get_category_rates", fake_rates)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+    monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
+
+    job, coroutine = trade2.start_item_base_market_refresh_job(
+        league="PoE2 - Test",
+        target="exalted",
+        status="any",
+        q="Амулет с янтарём",
+        limit=40,
+        sample_limit=100,
+    )
+    trade2.ITEM_BASE_MARKET_CACHE[("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)] = {
+        "created_ts": 9999999999,
+        "data": {"source": "trade2/search+fetch:overview", "rows": [{"id": "base:other", "text": "Other"}]},
+    }
+    pending = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Амулет с янтарём",
+            limit=40,
+            force_refresh=False,
+            sample_limit=100,
+        )
+    )
+    result = asyncio.run(coroutine)
+    cached = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Амулет с янтарём",
+            limit=40,
+            force_refresh=False,
+            sample_limit=100,
+        )
+    )
+
+    assert pending["refresh_job"]["status"] == "queued"
+    assert job["status"] == "done"
+    assert calls == {"exact": 1}
+    assert result["rows"][0]["total"] == 9484
+    assert result["rows"][0]["fetched_count"] == 100
+    assert cached["rows"][0]["total"] == 9484
+    assert cached["cached"] is True
+
+
+def test_item_base_market_blank_refresh_scans_saved_catalog_before_display_limit(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    searched_types = []
+
+    async def fake_catalog(q="", limit=500):
+        assert q == ""
+        return {
+            "source": "stored:item_base_catalog",
+            "total": 2,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                },
+                {
+                    "id": "base:pearl-ring",
+                    "type": "Pearl Ring",
+                    "type_ru": "Жемчужное кольцо",
+                    "query_type": "Жемчужное кольцо",
+                },
+            ],
+            "errors": [],
+        }
+
+    async def fake_rates(**kwargs):
+        return {"rows": [{"id": "regal", "median": 0.25}]}
+
+    async def fake_search(league, query, sort=None):
+        searched_types.append(query["type"])
+        total = 500 if query["type"] == "Амулет с янтарём" else 9000
+        return {"id": f"query-{len(searched_types)}", "total": total, "result": ["lot1"]}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        assert fetch_limit == 100
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        low = 1.0 if row["text_ru"] == "Амулет с янтарём" else 2.0
+        stats = trade2._base_market_stats(
+            [{"price_amount": low, "price_currency": "regal", "price_target": low * 0.25}],
+            raw_count=100,
+        )
+        return {
+            **row,
+            **stats,
+            "query_id": market_search["id"],
+            "total": market_search["total"],
+            "total_scope": "exact",
+            "fetched_count": 100,
+            "sample_lots": [],
+        }
+
+    async def fake_sleep(seconds):
+        return None
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "get_category_rates", fake_rates)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+    monkeypatch.setattr(trade2.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=1,
+            force_refresh=True,
+            sample_limit=100,
+        )
+    )
+
+    assert searched_types == ["Амулет с янтарём", "Жемчужное кольцо"]
+    assert result["source"] == "trade2/search+fetch:catalog-scan"
+    assert result["matched_total"] == 2
+    assert len(result["rows"]) == 1
+    assert result["refresh_job"]["processed_count"] == 2
+
+
+def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    async def fake_catalog(q="", limit=500):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:crossbow",
+                    "type": "Crossbow",
+                    "type_ru": "Арбалет",
+                    "query_type": "Арбалет",
+                }
+            ],
+        }
+
+    async def fake_search(league, query, sort=None):
+        raise RuntimeError("Client error '429 Too Many Requests'")
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+
+    job, coroutine = trade2.start_item_base_market_refresh_job(
+        league="PoE2 - Test",
+        target="exalted",
+        status="securable",
+        q="Crossbow",
+        limit=40,
+        sample_limit=100,
+    )
+    result = asyncio.run(coroutine)
+
+    assert job["status"] == "rate_limited"
+    assert job["retry_after"] == 60
+    assert result["rows"][0]["error"] == "Client error '429 Too Many Requests'"
+    assert not trade2.ITEM_BASE_MARKET_CACHE
+
+
+def test_item_base_market_fetch_rate_limit_preserves_search_total(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    async def fake_catalog(q="", limit=500):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                }
+            ],
+        }
+
+    async def fake_search(league, query, sort=None):
+        return {"id": "search-id", "total": 3423, "result": ["a", "b"]}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        return {
+            **row,
+            **trade2._base_market_stats([], 0),
+            "query_id": market_search["id"],
+            "total": market_search["total"],
+            "total_scope": "exact",
+            "fetched_count": 0,
+            "sample_lots": [],
+            "error": "trade2 fetch rate limited; retry after 299s",
+        }
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+
+    job, coroutine = trade2.start_item_base_market_refresh_job(
+        league="PoE2 - Test",
+        target="exalted",
+        status="securable",
+        q="Амулет с янтарём",
+        limit=40,
+        sample_limit=100,
+    )
+    result = asyncio.run(coroutine)
+
+    assert job["status"] == "rate_limited"
+    assert job["retry_after"] == 299
+    assert job["total"] == 3423
+    assert result["rows"][0]["query_id"] == "search-id"
+    assert result["rows"][0]["total"] == 3423
+    assert result["rows"][0]["error"] == "trade2 fetch rate limited; retry after 299s"
+
+
+def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "source": "trade2/search+fetch:exact",
+            "rows": [{"id": "base:crossbow", "text": "Crossbow", "text_ru": "Арбалет", "low": 1.0}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:crossbow",
+                    "type": "Crossbow",
+                    "type_ru": "Арбалет",
+                    "query_type": "Арбалет",
+                }
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["stored"] is True
+    assert result["source"] == "item-base-catalog"
+    assert result["rows"][0]["text_ru"] == "Арбалет"
+    assert result["rows"][0]["low"] is None
+
+
+def test_item_base_market_blank_query_skips_legacy_overview_snapshot(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "source": "trade2/search+fetch:overview",
+            "rows": [{"id": "base:crossbow", "text": "Crossbow", "text_ru": "Арбалет", "low": 1.0}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:crossbow",
+                    "type": "Crossbow",
+                    "type_ru": "Арбалет",
+                    "query_type": "Арбалет",
+                }
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["source"] == "item-base-catalog"
+    assert result["rows"][0]["low"] is None
+
+
+def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "rows": [
+                {"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01},
+                {"id": "base:robe", "text": "Silk Robe", "text_ru": "Шелковая роба", "low": 2.0},
+            ]
+        },
+    }
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Жемчужное",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["cached"] is True
+    assert [row["id"] for row in result["rows"]] == ["base:pearl-ring"]
+
+
+def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "rows": [
+                {"id": "base:pearl-ring", "text": "Pearl Ring", "error": "trade2 search rate limited; retry after 600s"}
+            ],
+            "errors": [{"source": "trade2/search", "error": "rate limited"}],
+        },
+    }
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "rows": [{"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {"bases": []}
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Pearl",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["stored"] is True
+    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
+    assert result["rows"][0]["total_scope"] == "stored_snapshot"
+
+
+def test_item_base_market_enriches_stored_rows_from_catalog(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "rows": [{"id": "base:pearl-ring", "median": 0.01, "best": 0.01}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "bases": [
+                {
+                    "id": "base:pearl-ring",
+                    "type": "Pearl Ring",
+                    "type_ru": "Жемчужное кольцо",
+                    "query_type": "Жемчужное кольцо",
+                    "category": "accessory",
+                    "category_label": "Accessories",
+                    "category_label_ru": "Бижутерия",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Жемчужное",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["stored"] is True
+    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
+    assert result["rows"][0]["low"] == 0.01
 
 
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():
