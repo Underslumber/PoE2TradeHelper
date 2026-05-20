@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import app.trade2 as trade2
 from app.trade2 import build_trade_advice, normalize_exchange_result, normalize_poe_ninja_overview, normalize_static_entries
@@ -1187,6 +1188,34 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
     assert job["retry_after"] == 60
     assert result["rows"][0]["error"] == "Client error '429 Too Many Requests'"
     assert not trade2.ITEM_BASE_MARKET_CACHE
+
+
+def test_item_base_market_refresh_restarts_stale_running_job():
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    now = time.time()
+    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", 82, 100)
+    stale_job = {
+        "id": "old",
+        "status": "running",
+        "created_ts": now - 300,
+        "updated_ts": now - trade2.ITEM_BASE_MARKET_STALE_JOB_SECONDS - 1,
+        "sample_limit": 100,
+    }
+    trade2.ITEM_BASE_MARKET_JOBS[key] = stale_job
+
+    job, coroutine = trade2.start_item_base_market_refresh_job(
+        league="PoE2 - Test",
+        target="exalted",
+        status="securable",
+        q="",
+        min_ilvl=82,
+        sample_limit=100,
+    )
+
+    assert job is not stale_job
+    assert job["status"] == "queued"
+    assert coroutine is not None
+    coroutine.close()
 
 
 def test_item_base_market_fetch_rate_limit_preserves_search_total(monkeypatch):

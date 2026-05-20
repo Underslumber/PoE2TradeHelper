@@ -60,6 +60,7 @@ ITEM_BASE_MARKET_DEFAULT_STATUS = "securable"
 ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT = 100
 ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT = 500
 ITEM_BASE_MARKET_JOB_TTL = 3600
+ITEM_BASE_MARKET_STALE_JOB_SECONDS = 120
 ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
 ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = 80
@@ -1410,6 +1411,13 @@ def _item_base_market_job_key(
     )
 
 
+def _item_base_market_job_is_stale(job: dict[str, Any], now: float) -> bool:
+    if job.get("status") not in {"queued", "running"}:
+        return False
+    updated_ts = _to_float(job.get("updated_ts")) or _to_float(job.get("created_ts")) or now
+    return now - updated_ts > ITEM_BASE_MARKET_STALE_JOB_SECONDS
+
+
 def _retry_after_from_error(error_text: str | None) -> int | None:
     text = str(error_text or "")
     match = re.search(r"retry after\s+(\d+)s", text, flags=re.IGNORECASE)
@@ -2017,7 +2025,8 @@ def start_item_base_market_refresh_job(
     existing = ITEM_BASE_MARKET_JOBS.get(key)
     if existing and now - float(existing.get("created_ts") or now) < ITEM_BASE_MARKET_JOB_TTL:
         if existing.get("status") in {"queued", "running"}:
-            return existing, None
+            if not _item_base_market_job_is_stale(existing, now):
+                return existing, None
         if existing.get("status") == "rate_limited":
             retry_at = _to_float(existing.get("retry_at")) or 0.0
             if retry_at > now:
