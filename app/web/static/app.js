@@ -170,6 +170,7 @@ const state = {
     user: null,
     pins: [],
     trades: [],
+    tradeReport: null,
     notifications: [],
     adminUsers: [],
     adminMetrics: null,
@@ -313,16 +314,45 @@ function formatAmount(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+function roundedPriceValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const rounded = Math.round(number * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function formatPriceAmount(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  if (number > 0 && number < 0.01) return '<0.01';
+  const rounded = roundedPriceValue(number);
+  if (rounded === null) return String(value);
+  if (Math.abs(rounded) >= 1000) {
+    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 2, notation: 'compact' }).format(rounded);
+  }
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function priceInputValue(value) {
+  const number = Number(value);
+  const rounded = roundedPriceValue(value);
+  if (rounded === null) return '';
+  if (number > 0 && rounded === 0) return '0.01';
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 function formatChartAmount(value) {
   if (value === null || value === undefined || value === '') return '-';
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value);
+  if (number > 0 && number < 0.01) return '<0.01';
   if (Math.abs(number) >= 1000) {
-    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
+    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 2, notation: 'compact' }).format(number);
   }
   if (Number.isInteger(number)) return String(number);
   const abs = Math.abs(number);
-  const decimals = abs >= 100 ? 1 : abs >= 10 ? 2 : abs >= 1 ? 3 : abs >= 0.1 ? 4 : 6;
+  const decimals = abs >= 0.01 ? 2 : 6;
   return number.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '');
 }
 
@@ -342,12 +372,14 @@ function formatChartAmountWithDecimals(value, decimals) {
   if (value === null || value === undefined || value === '') return '-';
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value);
+  if (number > 0 && number < 0.01) return '<0.01';
   if (Math.abs(number) >= 1000) {
-    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(number);
+    return Intl.NumberFormat(state.lang === 'ru' ? 'ru-RU' : 'en-US', { maximumFractionDigits: 2, notation: 'compact' }).format(number);
   }
   if (decimals === null || decimals === undefined) return formatChartAmount(number);
-  if (Number.isInteger(number) && decimals <= 0) return String(number);
-  return number.toFixed(Math.max(0, Math.min(6, decimals))).replace(/0+$/, '').replace(/\.$/, '');
+  const cappedDecimals = Math.max(0, Math.min(2, decimals));
+  if (Number.isInteger(number) && cappedDecimals <= 0) return String(number);
+  return number.toFixed(cappedDecimals).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function chartAmountFormatter(minValue, maxValue, tickCount = 6) {
@@ -596,6 +628,7 @@ async function loadAccountCollections() {
   ]);
   state.account.pins = pinsData.pins || [];
   state.account.trades = tradesData.trades || [];
+  state.account.tradeReport = tradesData.report || null;
   const notificationsData = await fetchAccountJson('/api/account/notifications');
   state.account.notifications = notificationsData.notifications || [];
   state.account.telegramConfigured = Boolean(notificationsData.telegram_configured);
@@ -621,6 +654,7 @@ async function loadAccountState() {
     applyAccountUserPreferences(state.account.user);
     state.account.pins = [];
     state.account.trades = [];
+    state.account.tradeReport = null;
     state.account.notifications = [];
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
@@ -636,6 +670,7 @@ async function loadAccountState() {
     state.account.user = null;
     state.account.pins = [];
     state.account.trades = [];
+    state.account.tradeReport = null;
     state.account.notifications = [];
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
@@ -765,6 +800,7 @@ async function logoutAccount() {
     state.account.user = null;
     state.account.pins = [];
     state.account.trades = [];
+    state.account.tradeReport = null;
     state.account.notifications = [];
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
@@ -1194,7 +1230,7 @@ function renderAccountTabs() {
 }
 
 function priceWithCurrency(value, currency) {
-  return value === null || value === undefined || value === '' ? t('priceUnknown') : `${formatAmount(value)} ${currencyLabel(currency)}`;
+  return value === null || value === undefined || value === '' ? t('priceUnknown') : `${formatPriceAmount(value)} ${currencyLabel(currency)}`;
 }
 
 function accountMarketForItem(item) {
@@ -1257,16 +1293,29 @@ function renderAccountMarketMeta(item) {
 
 function renderAccountChart(item) {
   const market = accountMarketForItem(item);
+  const request = accountChartRequest(item);
   const cachedSeries = accountChartCachedSeries(item);
   const visibleCachedSeries = hourlyTimedSeries(visibleTimedSeries(cachedSeries));
   const cachedValues = visibleCachedSeries.map(point => point.value);
   const sparklineValues = limitedChartValues(chartValuesForCurrent(market.sparkline || [], market.price, market.change));
-  const usesHistory = timedSeriesCoversDays(visibleCachedSeries, selectedChartDays()) && cachedValues.length > sparklineValues.length;
+  const hasHistory = cachedValues.length >= 2;
+  const historyCoversSelection = timedSeriesCoversDays(visibleCachedSeries, selectedChartDays());
+  const usesHistory = hasHistory && (
+    isBaseMarketPin(item)
+    || historyCoversSelection
+    || !sparklineValues.length
+    || cachedValues.length > sparklineValues.length
+  );
   const values = usesHistory ? cachedValues : sparklineValues;
   if (values.length < 2) {
+    if (request.itemId && state.accountChartSeriesLoading[request.key]) {
+      return `<div class="account-market-chart empty">${loadingMarkup(t('loading'), 'inline')}</div>`;
+    }
     return `<div class="account-market-chart empty">${t('chartNoData')}</div>`;
   }
-  return `<div class="account-market-chart">${miniSignalChart(values, usesHistory ? chartBasisText(selectedChartDays()) : chartBasisText(values.length), market.price, market.change, {
+  const historyCurrent = usesHistory ? values[values.length - 1] : market.price;
+  const historyDays = usesHistory ? Math.max(1, Math.ceil(timedSeriesSpanDays(visibleCachedSeries))) : values.length;
+  return `<div class="account-market-chart">${miniSignalChart(values, usesHistory ? chartBasisText(historyDays) : chartBasisText(values.length), historyCurrent, market.change, {
     series: usesHistory ? visibleCachedSeries : [],
   })}</div>`;
 }
@@ -1281,6 +1330,69 @@ function pnlClass(value) {
 function pnlBadge(available, amount, percent, currency, unavailableText) {
   if (!available) return `<span class="trade-pnl neutral">${unavailableText}</span>`;
   return `<span class="trade-pnl ${pnlClass(amount)}">${priceWithCurrency(amount, currency)} (${formatChange(percent)})</span>`;
+}
+
+function currencyBucketText(bucket, emptyText = '0') {
+  const entries = Object.entries(bucket || {})
+    .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) !== 0)
+    .sort((left, right) => Math.abs(Number(right[1])) - Math.abs(Number(left[1])));
+  if (!entries.length) return emptyText;
+  return entries.map(([currency, value]) => priceWithCurrency(value, currency)).join(' · ');
+}
+
+function renderStrategyReport(item) {
+  return `
+    <article>
+      <strong>${escapeHtml(item.strategy_tag || t('tradeReportNoStrategy'))}</strong>
+      <span>${t('closedTradesCount')}: ${formatAmount(item.closed || 0)} · ${t('tradeReportWinRate')}: ${item.win_rate === null || item.win_rate === undefined ? '-' : formatChange(item.win_rate)}</span>
+      <small>${t('tradeReportNominal')}: ${currencyBucketText(item.nominal_by_currency, '-')}</small>
+      <small>${t('tradeReportReal')}: ${currencyBucketText(item.real_by_currency, '-')}</small>
+    </article>
+  `;
+}
+
+function renderTradeReportSummary() {
+  const container = byId('trade-report-summary');
+  if (!container) return;
+  const report = state.account.tradeReport;
+  if (!report || !report.total) {
+    container.innerHTML = '';
+    return;
+  }
+  const strategies = (report.by_strategy || []).slice(0, 4);
+  container.innerHTML = `
+    <section class="trade-report-panel">
+      <div class="cabinet-section-head">
+        <div>
+          <h3>${t('tradeReportTitle')}</h3>
+          <p class="panel-hint">${t('tradeReportHint')}</p>
+        </div>
+      </div>
+      <div class="trade-report-grid">
+        <div>
+          <span class="summary-label">${t('tradeReportNominal')}</span>
+          <strong>${currencyBucketText(report.nominal_closed_by_currency)}</strong>
+        </div>
+        <div>
+          <span class="summary-label">${t('tradeReportReal')}</span>
+          <strong>${currencyBucketText(report.real_closed_by_currency)}</strong>
+        </div>
+        <div>
+          <span class="summary-label">${t('tradeReportOpenNow')}</span>
+          <strong>${currencyBucketText(report.open_current_by_currency)}</strong>
+        </div>
+        <div>
+          <span class="summary-label">${t('tradeReportFees')}</span>
+          <strong>${currencyBucketText(report.fees_by_currency)}</strong>
+        </div>
+        <div>
+          <span class="summary-label">${t('tradeReportWinRate')}</span>
+          <strong>${report.win_rate === null || report.win_rate === undefined ? '-' : formatChange(report.win_rate)}</strong>
+        </div>
+      </div>
+      ${strategies.length ? `<div class="trade-report-strategies">${strategies.map(renderStrategyReport).join('')}</div>` : ''}
+    </section>
+  `;
 }
 
 function openTradeCurrentPnl(trade, market) {
@@ -1404,7 +1516,7 @@ function renderPinCard(pin) {
       <div class="pin-trade-row">
         <label class="compact-field">
           <span>${t('entryPrice')}</span>
-          <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(priceValue)}" data-pin-entry-price="${pin.id}">
+          <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(priceInputValue(priceValue))}" data-pin-entry-price="${pin.id}">
         </label>
         <label class="compact-field">
           <span>${t('quantity')}</span>
@@ -1503,7 +1615,7 @@ function renderTradeCard(trade) {
         <div class="pin-trade-row">
           <label class="compact-field">
             <span>${t('exitPrice')}</span>
-            <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(exitPriceValue)}" data-trade-exit-price="${trade.id}">
+            <input class="form-control form-control-sm" type="number" min="0" step="any" value="${escapeHtml(priceInputValue(exitPriceValue))}" data-trade-exit-price="${trade.id}">
           </label>
           <label class="compact-field">
             <span>${t('tradeFee')}</span>
@@ -2099,7 +2211,7 @@ function renderCurrencyAnalysisContext(context) {
     <section class="ai-summary-card">
       <h3>${t('currencyTrendSummary')}</h3>
       <div class="currency-summary-grid">
-        <div><span class="summary-label">${t('currencyLatestPrice')}</span><strong>${currency.latest_price ? `${formatAmount(currency.latest_price)} ${currencyLabel(currency.target)}` : '-'}</strong></div>
+        <div><span class="summary-label">${t('currencyLatestPrice')}</span><strong>${currency.latest_price ? `${formatPriceAmount(currency.latest_price)} ${currencyLabel(currency.target)}` : '-'}</strong></div>
         <div><span class="summary-label">${t('currencyTrendDirection')}</span><strong>${escapeHtml(currencyTrendLabel(trend.direction))}</strong></div>
         <div><span class="summary-label">${t('currencyVolatility')}</span><strong>${escapeHtml(volatilityLabel(trend.volatility))}</strong></div>
         <div><span class="summary-label">${t('currencyDataQuality')}</span><strong>${escapeHtml(dataQualityLabel(trend.data_quality))}</strong></div>
@@ -2548,6 +2660,7 @@ function renderCabinet() {
     setText('pinned-count', '0');
     setText('open-trades-count', '0');
     setText('closed-trades-count', '0');
+    renderTradeReportSummary();
     renderAccountTabs();
     renderRubMarketPanel();
     return;
@@ -2568,6 +2681,7 @@ function renderCabinet() {
   setText('pinned-count', state.account.pins.length);
   setText('open-trades-count', openTrades.length);
   setText('closed-trades-count', closedTrades.length);
+  renderTradeReportSummary();
   const pinsList = byId('pins-list');
   if (pinsList) {
     pinsList.innerHTML = regularPins.length
@@ -2861,8 +2975,8 @@ function renderMarket() {
     tr.innerHTML = `
       <td class="name-cell">${entry.image ? `<img src="${entry.image}" alt="">` : ''}<span>${entryName(entry)}</span></td>
       <td class="muted-id">${entry.id}</td>
-      <td>${formatAmount(priced.best)}</td>
-      <td>${formatAmount(priced.median)}</td>
+      <td>${formatPriceAmount(priced.best)}</td>
+      <td>${formatPriceAmount(priced.median)}</td>
       <td class="${changeClass}">${formatChange(priced.change)}</td>
       <td>${formatAmount(priced.offers || 0)}</td>
       <td>${formatAmount(priced.volume || 0)}</td>
@@ -2875,11 +2989,11 @@ function renderMarket() {
 // Seller lots
 
 function lotNativePrice(lot) {
-  return `${formatAmount(lot.price_amount)} ${currencyLabel(lot.price_currency)}`;
+  return `${formatPriceAmount(lot.price_amount)} ${currencyLabel(lot.price_currency)}`;
 }
 
 function lotTargetPrice(value, target = selectedTarget()) {
-  return value === null || value === undefined ? '-' : `${formatAmount(value)} ${currencyLabel(target)}`;
+  return value === null || value === undefined ? '-' : `${formatPriceAmount(value)} ${currencyLabel(target)}`;
 }
 
 function verdictLabel(kind) {
@@ -4709,8 +4823,8 @@ async function renderSelectedItemDetail() {
     const data = await ensureRatesForTarget(target);
     if (state.selectedItemId !== requestItemId) return;
     const row = rowsById(data).get(entry.id) || entry;
-    setText('detail-value', `${formatAmount(row.best)} ${currencyLabel(target)}`);
-    setText('detail-median', `${formatAmount(row.median)} ${currencyLabel(target)}`);
+    setText('detail-value', `${formatPriceAmount(row.best)} ${currencyLabel(target)}`);
+    setText('detail-median', `${formatPriceAmount(row.median)} ${currencyLabel(target)}`);
     setText('detail-volume', formatAmount(row.volume || 0));
     const detailChange = byId('detail-change');
     if (detailChange) {
@@ -5049,13 +5163,17 @@ function renderMarketSignals() {
 function renderRecipeSignalSection() {
   const recipes = (state.rates[state.selectedCategory] || {}).recipes || {};
   const opportunities = recipes.opportunities || [];
-  if (!opportunities.length && !recipes.known_recipes) return '';
+  const setCosts = recipes.set_costs || [];
+  if (!opportunities.length && !setCosts.length && !recipes.known_recipes && !recipes.known_sets) return '';
   return `
     <section class="recipe-signal-section">
       <h3>${t('recipeSignals')}</h3>
       ${opportunities.length
         ? `<div class="recipe-signal-list">${opportunities.slice(0, 8).map(renderRecipeSignal).join('')}</div>`
         : `<p class="text-secondary">${t('noRecipeSignals')}</p>`}
+      ${setCosts.length
+        ? `<div class="recipe-signal-list">${setCosts.slice(0, 6).map(renderRecipeSetCost).join('')}</div>`
+        : ''}
     </section>
   `;
 }
@@ -5071,7 +5189,30 @@ function renderRecipeSignal(item) {
       <div class="advice-card-layout">
         <div class="advice-card-content">
           <div class="advice-title-row"><span class="advice-badge">${t('recipeSignal')}</span><strong>${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)}</strong></div>
-          <p>${item.input_count} × ${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)} · ${t('profit')}: ${formatAmount(item.profit)} ${currencyLabel(item.target)} (${formatChange(Number(item.margin || 0) * 100)})</p>
+          <p>${item.input_count} × ${escapeHtml(sourceName || item.source)} → ${escapeHtml(resultName || item.result)} · ${t('profit')}: ${formatPriceAmount(item.profit)} ${currencyLabel(item.target)} (${formatChange(Number(item.margin || 0) * 100)})</p>
+          <div class="deal-meta">
+            <span>${t('executionQuality')}: ${escapeHtml(executionQualityLabel(item.execution?.quality))}</span>
+            <span>${t('minVolume')}: ${formatAmount(item.execution?.volume || 0)}</span>
+          </div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderRecipeSetCost(item) {
+  const label = state.lang === 'ru' ? item.label_ru : item.label_en;
+  const components = (item.components || []).map(component => {
+    const rawName = state.lang === 'ru' ? component.source_name_ru : component.source_name_en;
+    const name = adviceEntryName(component.source, rawName);
+    return `${component.input_count} × ${name || component.source}`;
+  });
+  return `
+    <article class="advice-card watch">
+      <div class="advice-card-layout">
+        <div class="advice-card-content">
+          <div class="advice-title-row"><span class="advice-badge">${t('recipeEntrySet')}</span><strong>${escapeHtml(label || item.set_id || '-')}</strong></div>
+          <p>${t('entrySetCost')}: ${formatPriceAmount(item.set_cost)} ${currencyLabel(item.target)} · ${escapeHtml(components.join(' + '))}</p>
           <div class="deal-meta">
             <span>${t('executionQuality')}: ${escapeHtml(executionQualityLabel(item.execution?.quality))}</span>
             <span>${t('minVolume')}: ${formatAmount(item.execution?.volume || 0)}</span>
@@ -5167,7 +5308,7 @@ function renderHistoryTrendItem(item) {
     <article class="history-trend-item">
       <strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong>
       <span class="${changeClass}">${formatChange(item.deltaPct)}</span>
-      <small>${formatAmount(item.previousValue)} → ${formatAmount(item.currentValue)} ${currencyLabel(item.target)}</small>
+      <small>${formatPriceAmount(item.previousValue)} → ${formatPriceAmount(item.currentValue)} ${currencyLabel(item.target)}</small>
     </article>
   `;
 }
@@ -5199,7 +5340,7 @@ function renderDealCandidate(item) {
           <div class="advice-title-row"><span class="advice-badge">${item.action.label}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
           <p>${item.action.reason}</p>
           <div class="deal-meta">
-            <span>${t('value')}: ${formatAmount(item.value)} ${currencyLabel(item.target)}</span>
+            <span>${t('value')}: ${formatPriceAmount(item.value)} ${currencyLabel(item.target)}</span>
             <span>${t('last7days')}: <span class="${changeClass}">${formatChange(item.change)}</span></span>
             <span>${t('volume')}: ${formatAmount(item.volume)}</span>
             <span>${t('riskLabel')}: ${riskLabel(item)}</span>
@@ -5232,7 +5373,7 @@ function renderMarketSignalItem(item, direction) {
       <div class="advice-card-layout compact">
         <div class="advice-card-content">
           <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
-          <p>${formatAmount(item.value)} ${currencyLabel(item.target)} · <span class="${changeClass}">${formatChange(item.change)}</span></p>
+          <p>${formatPriceAmount(item.value)} ${currencyLabel(item.target)} · <span class="${changeClass}">${formatChange(item.change)}</span></p>
           <div class="deal-meta">
             <span>${t('volume')}: ${formatAmount(item.volume)}</span>
             <span>${t('liquidity')}: ${liquidityLabel(item.volume)}</span>
@@ -5272,7 +5413,7 @@ function renderTrendSignalList(list, signals, direction) {
     const action = direction === 'buy' ? t('buySignals') : t('sellSignals');
     renderAdviceCard(card, `
       <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong>${itemTitleMarkup(entryName(item.entry), entryIcon(item.entry))}</strong></div>
-      <p>${action}: ${formatAmount(item.value)} ${currencyLabel(item.target)} (${formatChange(item.change)})</p>
+      <p>${action}: ${formatPriceAmount(item.value)} ${currencyLabel(item.target)} (${formatChange(item.change)})</p>
       <div class="deal-meta"><span>${t('volume')}: ${formatAmount(item.volume)}</span><span>${t('offers')}: ${formatAmount(item.row.offers || 0)}</span></div>
     `, miniSignalChart(item.row.sparkline || [], t('priceChartBasis'), item.value, item.change));
     list.appendChild(card);
@@ -5298,9 +5439,9 @@ function renderActiveTradeOperation(item) {
       <div class="advice-card-layout">
         <div class="advice-card-content">
           <div class="advice-title-row"><span class="advice-badge">${t('watchLabel')}</span><strong>${itemTitleMarkup(item.name, item.image)}</strong></div>
-          <p>${t('buyFor')} ${formatAmount(item.buy.value)} ${currencyLabel(item.buy.target)} → ${t('sellFor')} ${formatAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</p>
+          <p>${t('buyFor')} ${formatPriceAmount(item.buy.value)} ${currencyLabel(item.buy.target)} → ${t('sellFor')} ${formatPriceAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</p>
           <div class="deal-meta">
-            <span>${t('spread')}: ${formatAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</span>
+            <span>${t('spread')}: ${formatPriceAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</span>
             <span>${t('demandVolume')}: ${formatAmount(item.volume)}</span>
           </div>
         </div>
@@ -5402,10 +5543,10 @@ function adviceMessage(item, sourceName, resultName) {
   if (item.kind === 'emotion_path' && sourceName && resultName) {
     const target = currencyLabel(item.target);
     if (state.lang === 'ru') {
-      return `${item.input_count} × ${sourceName} → ${resultName} (${item.path_steps} шаг.): прибыль ${formatAmount(item.profit)} ${target}, маржа ${formatChange(item.margin * 100)}, минимальный объем ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
+      return `${item.input_count} × ${sourceName} → ${resultName} (${item.path_steps} шаг.): прибыль ${formatPriceAmount(item.profit)} ${target}, маржа ${formatChange(item.margin * 100)}, минимальный объем ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
     }
     const stepLabel = item.path_steps === 1 ? 'step' : 'steps';
-    return `${item.input_count} x ${sourceName} -> ${resultName} (${item.path_steps} ${stepLabel}): profit ${formatAmount(item.profit)} ${target}, margin ${formatChange(item.margin * 100)}, minimum volume ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
+    return `${item.input_count} x ${sourceName} -> ${resultName} (${item.path_steps} ${stepLabel}): profit ${formatPriceAmount(item.profit)} ${target}, margin ${formatChange(item.margin * 100)}, minimum volume ${formatAmount(item.min_volume)}. ${emotionRiskText(item)}`;
   }
   return state.lang === 'ru' ? item.message_ru : item.message_en;
 }
@@ -5456,16 +5597,16 @@ function renderCrossDeals() {
     const stepRows = (cycle.steps || []).map((step, index) => `
       <div class="chain-step">
         <strong>${t('step')} ${index + 1}</strong>
-        <span>${currencyMarkup(step.from)} → ${currencyMarkup(step.to)} · ${t('exchangeRate')}: ${formatAmount(step.effective_rate || step.rate)}</span>
+        <span>${currencyMarkup(step.from)} → ${currencyMarkup(step.to)} · ${t('exchangeRate')}: ${formatPriceAmount(step.effective_rate || step.rate)}</span>
         <small>${t('volume')}: ${formatAmount(step.available_from || 0)} ${currencyLabel(step.from)} · ${t('offers')}: ${formatAmount(step.offer_count || 0)}</small>
       </div>
     `).join('');
     renderAdviceCard(card, `
       <div class="advice-title-row"><span class="advice-badge">${badge}</span><strong class="advice-path">${route}</strong></div>
       <div class="deal-meta">
-        <span>${t('start')}: ${formatAmount(cycle.start_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
-        <span>${t('finish')}: ${formatAmount(cycle.finish_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
-        <span>${t('profit')}: ${formatAmount(cycle.profit)} ${currencyLabel(cycle.route?.[0] || selectedTarget())} (${formatChange(cycle.margin * 100)})</span>
+        <span>${t('start')}: ${formatPriceAmount(cycle.start_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
+        <span>${t('finish')}: ${formatPriceAmount(cycle.finish_amount)} ${currencyLabel(cycle.route?.[0] || selectedTarget())}</span>
+        <span>${t('profit')}: ${formatPriceAmount(cycle.profit)} ${currencyLabel(cycle.route?.[0] || selectedTarget())} (${formatChange(cycle.margin * 100)})</span>
         <span>${t('minVolume')}: ${formatAmount(cycle.min_volume || 0)}</span>
       </div>
       <div class="chain-steps">${stepRows}</div>
@@ -5658,11 +5799,11 @@ function renderActiveTrades() {
             <tr>
               <td>${itemTitleMarkup(item.name, item.image)}</td>
               <td>${formatAmount(item.activity)}</td>
-              <td>${formatAmount(item.buy.value)} ${currencyLabel(item.buy.target)}</td>
-              <td>${formatAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</td>
+              <td>${formatPriceAmount(item.buy.value)} ${currencyLabel(item.buy.target)}</td>
+              <td>${formatPriceAmount(item.sell.value)} ${currencyLabel(item.sell.target)}</td>
               <td>${renderMarketBasis(item)}</td>
-              <td class="${item.profit > 0 ? 'change-up' : ''}">${formatAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</td>
-              <td>${item.prices.map(price => `${formatAmount(price.value)} ${currencyLabel(price.target)}`).join(' / ')}</td>
+              <td class="${item.profit > 0 ? 'change-up' : ''}">${formatPriceAmount(item.profit)} ${currencyLabel(selectedTarget())} (${formatChange(item.margin * 100)})</td>
+              <td>${item.prices.map(price => `${formatPriceAmount(price.value)} ${currencyLabel(price.target)}`).join(' / ')}</td>
             </tr>
           `).join('')}
         </tbody>

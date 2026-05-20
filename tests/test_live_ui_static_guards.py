@@ -77,6 +77,11 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "if (state.mainView === 'lots') {\n    renderLotSubtabs();" in app_js
     assert "state.lotSubtab === 'bases'" in app_js
     assert "refreshBaseMarket(false)" in app_js
+    assert "isBaseMarketPin(item)" in app_js
+    assert "historyCurrent = usesHistory ? values[values.length - 1] : market.price" in app_js
+    assert "function formatPriceAmount" in app_js
+    assert "`${formatPriceAmount(value)} ${currencyLabel(currency)}`" in app_js
+    assert "priceInputValue(priceValue)" in app_js
     assert "sellerLotsTab: 'Предметы'" in i18n_js
     assert "sellerLotsTitle: 'Предметы'" in i18n_js
     assert "baseTrackSaved: 'Основа добавлена в отслеживание.'" in i18n_js
