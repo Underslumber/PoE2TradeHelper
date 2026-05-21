@@ -101,7 +101,7 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "if (state.mainView === 'lots') {\n    renderLotSubtabs();" in app_js
     assert "state.lotSubtab === 'bases'" in app_js
     assert "refreshBaseMarket(false)" in app_js
-    assert "const shouldRetryRefresh = String(job?.status || '') === 'rate_limited';" in app_js
+    assert "const shouldRetryRefresh = String(job?.status || '') === 'rate_limited' && (!retryAt || Date.now() >= retryAt * 1000);" in app_js
     assert "refreshBaseMarket(shouldRetryRefresh)" in app_js
     assert "isBaseMarketPin(item)" in app_js
     assert "historyCurrent = usesHistory ? values[values.length - 1] : market.price" in app_js

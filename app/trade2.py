@@ -7,6 +7,7 @@ from app.trade.history import (
     read_latest_rates as _read_history_latest_rates,
     read_market_history,
 )
+from app.trade.rate_limit import trade2_rate_limited_request
 
 import asyncio
 import json
@@ -69,10 +70,12 @@ ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
 ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = 80
 ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
+ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
 ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 ITEM_BASE_MARKET_JOBS: dict[tuple[Any, ...], dict[str, Any]] = {}
+ITEM_BASE_MARKET_SCAN_CURSORS: dict[tuple[Any, ...], int] = {}
 POE2DB_ITEM_BASE_CLASS_SLUGS = {
     "Amulets",
     "Belts",
@@ -406,7 +409,7 @@ async def get_trade_leagues() -> list[dict[str, str]]:
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-                response = await client.get(f"{TRADE2_BASE}/data/leagues")
+                response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
                 if response.status_code == 429 and attempt < 2:
                     wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
                     await asyncio.sleep(wait)
@@ -440,8 +443,8 @@ async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
             return cached
         async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
             response, ru_response = await asyncio.gather(
-                client.get(f"{TRADE2_BASE}/data/static"),
-                client.get(f"{TRADE2_RU_BASE}/data/static"),
+                trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
+                trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
             )
             response.raise_for_status()
             ru_response.raise_for_status()
@@ -465,11 +468,12 @@ async def _post_exchange(
         }
     }
     async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
-        response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
+        url = f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}"
+        response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
             wait = _retry_after_wait(response, "trade2 exchange")
             await asyncio.sleep(wait)
-            response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
+            response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         response.raise_for_status()
     return response.json()
 
@@ -605,11 +609,12 @@ async def _post_search(
 ) -> dict[str, Any]:
     body = {"query": query, "sort": sort or {"price": "asc"}}
     async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
-        response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+        url = f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}"
+        response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
             wait = _retry_after_wait(response, "trade2 search")
             await asyncio.sleep(wait)
-            response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+            response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             suffix = f"; retry after {retry_after}s" if retry_after else ""
@@ -627,11 +632,12 @@ async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> 
         chunks = _chunked(selected_ids, 10)
         for index, chunk_ids in enumerate(chunks):
             chunk = ",".join(chunk_ids)
-            response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
+            url = f"{TRADE2_RU_BASE}/fetch/{chunk}"
+            response = await trade2_rate_limited_request(lambda: client.get(url, params={"query": query_id}))
             if response.status_code == 429:
                 wait = _retry_after_wait(response, "trade2 fetch")
                 await asyncio.sleep(wait)
-                response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk}", params={"query": query_id})
+                response = await trade2_rate_limited_request(lambda: client.get(url, params={"query": query_id}))
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 suffix = f"; retry after {retry_after}s" if retry_after else ""
@@ -1153,7 +1159,7 @@ def _merge_poe2db_item_base_catalog(
 async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]:
     base_url = TRADE2_RU_BASE if locale == "ru" else TRADE2_BASE
     async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-        response = await client.get(f"{base_url}/data/items")
+        response = await trade2_rate_limited_request(lambda: client.get(f"{base_url}/data/items"))
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             suffix = f"; retry after {retry_after}s" if retry_after else ""
@@ -1659,6 +1665,37 @@ def _item_base_market_job_key(
     )
 
 
+def _item_base_market_scan_cursor_key(
+    league: str,
+    target: str,
+    status: str,
+    min_ilvl: int | None,
+) -> tuple[Any, ...]:
+    return (league, target, status, min_ilvl)
+
+
+def _item_base_market_scan_batch(
+    bases: list[dict[str, Any]],
+    cursor_key: tuple[Any, ...],
+) -> tuple[list[dict[str, Any]], int, int]:
+    if not bases:
+        return [], 0, 0
+    batch_size = max(1, min(ITEM_BASE_MARKET_SCAN_BATCH_SIZE, len(bases), ITEM_BASE_MARKET_SCAN_LIMIT))
+    start = ITEM_BASE_MARKET_SCAN_CURSORS.get(cursor_key, 0) % len(bases)
+    end = start + batch_size
+    if end <= len(bases):
+        selected = bases[start:end]
+    else:
+        selected = [*bases[start:], *bases[: end - len(bases)]]
+    return selected, start, (start + len(selected)) % len(bases)
+
+
+def _advance_item_base_market_scan_cursor(cursor_key: tuple[Any, ...] | None, next_position: int | None) -> None:
+    if cursor_key is None or next_position is None:
+        return
+    ITEM_BASE_MARKET_SCAN_CURSORS[cursor_key] = max(0, next_position)
+
+
 def _item_base_market_job_is_stale(job: dict[str, Any], now: float) -> bool:
     if job.get("status") not in {"queued", "running"}:
         return False
@@ -1691,6 +1728,9 @@ def _item_base_market_job_view(job: dict[str, Any] | None) -> dict[str, Any] | N
         "sample_limit",
         "total",
         "base_total",
+        "catalog_total",
+        "scan_start",
+        "scan_next",
         "processed_count",
         "fetched_count",
         "clean_count",
@@ -2100,23 +2140,55 @@ async def run_item_base_market_refresh_job(
     bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
     if q:
         selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
+        scan_cursor_key = None
+        scan_start = None
+        scan_next = None
     else:
-        selected_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
+        scan_cursor_key = _item_base_market_scan_cursor_key(league, target, status, min_ilvl)
+        selected_bases, scan_start, scan_next = _item_base_market_scan_batch(bases[:ITEM_BASE_MARKET_SCAN_LIMIT], scan_cursor_key)
     errors = list(catalog.get("errors") or [])
     job["base_total"] = len(selected_bases)
-    job["total"] = len(selected_bases) if not q else None
+    job["catalog_total"] = len(bases)
+    job["scan_start"] = scan_start
+    job["scan_next"] = scan_next
+    job["total"] = len(bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
 
     rows: list[dict[str, Any]] = []
     exact_query_ids: list[str] = []
     source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:rough"
+    previous_rows: list[dict[str, Any]] = []
+    if not q:
+        previous_payload = None
+        previous_cached = ITEM_BASE_MARKET_CACHE.get(
+            _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
+        )
+        if previous_cached:
+            previous_payload = _cache_copy(previous_cached.get("data") or {})
+        if previous_payload and not _item_base_market_payload_is_error_only(previous_payload):
+            previous_rows = list(previous_payload.get("rows") or [])
+        if not previous_rows:
+            latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+            latest_source = str((latest or {}).get("source") or "")
+            if latest and "exact" not in latest_source and "overview" not in latest_source:
+                previous_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
+
+    def row_keys(row: dict[str, Any]) -> set[str]:
+        keys = _base_market_row_keys(row)
+        item_id = str(row.get("id") or "")
+        if item_id:
+            keys.add(item_id)
+        return keys
 
     def publish_result(extra_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         combined_rows = [*rows, *(extra_rows or [])]
         if q:
             result_rows = _sort_item_base_market_rows(combined_rows)
         else:
+            current_keys = {key for row in combined_rows for key in row_keys(row)}
+            retained_previous_rows = [row for row in previous_rows if not (row_keys(row) & current_keys)]
+            combined_rows = [*combined_rows, *retained_previous_rows]
             result_rows = _merge_item_base_market_rows(catalog, combined_rows, min_ilvl=min_ilvl)
         result = _item_base_market_exact_result(
             league=league,
@@ -2154,6 +2226,11 @@ async def run_item_base_market_refresh_job(
                 }
         return result
 
+    def update_scan_progress(processed_count: int) -> None:
+        if q or scan_start is None or not bases:
+            return
+        job["scan_next"] = (scan_start + max(0, processed_count)) % len(bases)
+
     publish_result()
     base_index = 0
     attempts = 0
@@ -2173,6 +2250,7 @@ async def run_item_base_market_refresh_job(
             )
             base_index += 1
             job["processed_count"] = base_index
+            update_scan_progress(base_index)
             job["updated_ts"] = time.time()
             publish_result()
             continue
@@ -2202,11 +2280,13 @@ async def run_item_base_market_refresh_job(
                 job["retry_at"] = time.time() + retry_after
                 job["error"] = str(row.get("error"))
                 job["processed_count"] = base_index
+                update_scan_progress(base_index)
                 if row.get("total") is not None:
                     job["total"] = row.get("total")
                 job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
                 job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
                 job["updated_ts"] = time.time()
+                _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
                 return _cache_copy(publish_result())
         except Exception as exc:
             error_text = str(exc)
@@ -2226,7 +2306,10 @@ async def run_item_base_market_refresh_job(
                 job["retry_after"] = retry_after
                 job["retry_at"] = time.time() + retry_after
                 job["error"] = error_text
+                job["processed_count"] = base_index + 1
+                update_scan_progress(base_index + 1)
                 job["updated_ts"] = time.time()
+                _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
                 return _cache_copy(publish_result([error_row]))
             row = error_row
 
@@ -2235,6 +2318,7 @@ async def run_item_base_market_refresh_job(
         rows.append(row)
         base_index += 1
         job["processed_count"] = base_index
+        update_scan_progress(base_index)
         if q and row.get("total") is not None:
             job["total"] = row.get("total")
         job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
@@ -2249,6 +2333,7 @@ async def run_item_base_market_refresh_job(
     job["status"] = "done"
     job["updated_ts"] = time.time()
     job["error"] = None
+    _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
     result = publish_result()
     priced_rows = [row for row in result.get("rows") or [] if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
     if priced_rows:

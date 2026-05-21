@@ -3326,7 +3326,7 @@ function scheduleBaseMarketPoll() {
   const retryAt = Number(job?.retry_at || 0);
   const retryDelay = retryAt ? Math.max(5000, Math.min(60000, (retryAt * 1000) - Date.now())) : 0;
   const delay = retryDelay || 5000;
-  const shouldRetryRefresh = String(job?.status || '') === 'rate_limited';
+  const shouldRetryRefresh = String(job?.status || '') === 'rate_limited' && (!retryAt || Date.now() >= retryAt * 1000);
   state.baseMarketPollTimer = window.setTimeout(() => refreshBaseMarket(shouldRetryRefresh), delay);
 }
 

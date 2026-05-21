@@ -14,6 +14,7 @@ from tenacity import (
 )
 
 from app.config import USER_AGENT, BASE_URL
+from app.trade.rate_limit import trade2_rate_limited_request
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
@@ -70,7 +71,7 @@ class PoeTradeClient:
         async for attempt in _make_retry():
             with attempt:
                 async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-                    response = await client.get(f"{TRADE2_BASE}/data/leagues")
+                    response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
                     response.raise_for_status()
 
                     leagues = response.json().get("result", [])
@@ -99,8 +100,8 @@ class PoeTradeClient:
                 with attempt:
                     async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
                         response, ru_response = await asyncio.gather(
-                            client.get(f"{TRADE2_BASE}/data/static"),
-                            client.get(f"{TRADE2_RU_BASE}/data/static"),
+                            trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
+                            trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
                         )
                         response.raise_for_status()
                         ru_response.raise_for_status()
@@ -126,7 +127,9 @@ class PoeTradeClient:
         async for attempt in _make_retry():
             with attempt:
                 async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
-                    response = await client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
+                    response = await trade2_rate_limited_request(
+                        lambda: client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
+                    )
                     response.raise_for_status()
                     return response.json()
 
@@ -140,7 +143,9 @@ class PoeTradeClient:
         async for attempt in _make_retry():
             with attempt:
                 async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
-                    response = await client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+                    response = await trade2_rate_limited_request(
+                        lambda: client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
+                    )
                     response.raise_for_status()
                     return response.json()
 
@@ -159,7 +164,9 @@ class PoeTradeClient:
 
                 async for attempt in _make_retry():
                     with attempt:
-                        response = await client.get(f"{TRADE2_RU_BASE}/fetch/{chunk_str}", params={"query": query_id})
+                        response = await trade2_rate_limited_request(
+                            lambda: client.get(f"{TRADE2_RU_BASE}/fetch/{chunk_str}", params={"query": query_id})
+                        )
                         response.raise_for_status()
                         results.extend(response.json().get("result") or [])
 

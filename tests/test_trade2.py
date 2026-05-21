@@ -1309,12 +1309,14 @@ def test_item_base_market_background_job_collects_limited_exact_sample(monkeypat
     assert cached["cached"] is True
 
 
-def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypatch):
+def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
+    trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
     calls = {"search": 0, "fetch": 0}
     searched_types = []
-    base_count = trade2.ITEM_BASE_MARKET_MAX_BASES + 5
+    batch_size = trade2.ITEM_BASE_MARKET_SCAN_BATCH_SIZE
+    base_count = batch_size + 5
     bases = [
         {
             "id": f"base:test-base-{index}",
@@ -1348,7 +1350,7 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
         assert fetch_limit == trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
         row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
         clean_lots = []
-        if row["text_ru"] == "Тестовая основа 0":
+        if row["text_ru"] in {"Тестовая основа 0", f"Тестовая основа {batch_size}"}:
             clean_lots = [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}]
         stats = trade2._base_market_stats(
             clean_lots,
@@ -1383,16 +1385,33 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
         )
     )
 
-    assert calls == {"search": base_count, "fetch": base_count}
+    assert calls == {"search": batch_size, "fetch": batch_size}
     assert searched_types[0] == "Тестовая основа 0"
-    assert searched_types[-1] == f"Тестовая основа {base_count - 1}"
+    assert searched_types[-1] == f"Тестовая основа {batch_size - 1}"
     assert result["source"] == "trade2/search+fetch:rough"
     assert result["matched_total"] == base_count
     assert result["priced_total"] == 1
     assert len(result["rows"]) == 1
-    assert result["refresh_job"]["processed_count"] == base_count
-    assert result["refresh_job"]["base_total"] == base_count
-    assert result["refresh_job"]["fetched_count"] == base_count * trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
+    assert result["refresh_job"]["processed_count"] == batch_size
+    assert result["refresh_job"]["base_total"] == batch_size
+    assert result["refresh_job"]["catalog_total"] == base_count
+    assert result["refresh_job"]["fetched_count"] == batch_size * trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=80,
+            force_refresh=True,
+            sample_limit=100,
+        )
+    )
+
+    assert searched_types[batch_size] == f"Тестовая основа {batch_size}"
+    assert result["matched_total"] == base_count
+    assert result["priced_total"] == 2
 
 
 def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
@@ -1418,6 +1437,11 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
 
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
     monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(
+        trade2,
+        "_currency_rates_for_target",
+        lambda *args, **kwargs: asyncio.sleep(0, result=({"rows": []}, {"exalted": 1.0})),
+    )
 
     job, coroutine = trade2.start_item_base_market_refresh_job(
         league="PoE2 - Test",
@@ -1500,6 +1524,11 @@ def test_item_base_market_fetch_rate_limit_preserves_search_total(monkeypatch):
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
     monkeypatch.setattr(trade2, "_post_search", fake_search)
     monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+    monkeypatch.setattr(
+        trade2,
+        "_currency_rates_for_target",
+        lambda *args, **kwargs: asyncio.sleep(0, result=({"rows": []}, {"exalted": 1.0})),
+    )
 
     job, coroutine = trade2.start_item_base_market_refresh_job(
         league="PoE2 - Test",
