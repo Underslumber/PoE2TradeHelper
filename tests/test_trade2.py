@@ -620,6 +620,11 @@ def test_normalize_item_base_catalog_prefers_localized_query_text():
                 "label": "Currency",
                 "entries": [{"type": "Chaos Orb", "text": "Chaos Orb"}],
             },
+            {
+                "id": "jewel",
+                "label": "Jewels",
+                "entries": [{"type": "Ruby", "text": "Ruby"}],
+            },
         ]
     }
     localized_payload = {
@@ -727,6 +732,7 @@ def test_poe2db_item_class_links_keep_equipment_and_skip_non_bases():
       <a class="ItemClasses" href="Claws">Когти</a>
       <a class="ItemClasses" href="Skill_Gems">Камни умений</a>
       <a class="ItemClasses" href="Fishing_Rods">Удочки</a>
+      <a class="ItemClasses" href="Jewels">Самоцветы</a>
     </div>
     <div class="itemList">
       <span class="disabled">Доспехи</span>
@@ -855,6 +861,90 @@ def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, mo
     assert result["bases"][0]["image"] == "/static/item-base-icons/amber-amulet.png"
 
 
+def test_item_base_catalog_uses_bundled_seed_before_poe2db_when_trade2_is_limited(tmp_path, monkeypatch):
+    async def fake_fetch(_locale="en"):
+        raise RuntimeError("trade2 item catalog rate limited")
+
+    async def fake_poe2db_catalog():
+        return [
+            {
+                "id": "base:amber-amulet",
+                "type": "Амулет с янтарём",
+                "type_ru": "Амулет с янтарём",
+                "query_type": "Амулет с янтарём",
+                "category": "Amulets",
+                "category_label": "Амулеты",
+                "category_label_ru": "Амулеты",
+                "group_label_ru": "Бижутерия",
+                "icon_key": "amulet",
+                "image": "https://cdn.poe2db.tw/image/amber.webp",
+            },
+            {
+                "id": "base:грубый-кастет",
+                "type": "Грубый кастет",
+                "type_ru": "Грубый кастет",
+                "query_type": "Грубый кастет",
+                "category": "Claws",
+                "category_label": "Когти",
+                "category_label_ru": "Когти",
+                "icon_key": "base",
+                "image": "https://cdn.poe2db.tw/image/claw.webp",
+            },
+        ]
+
+    bundled_path = tmp_path / "item_base_catalog_seed.json"
+    bundled_path.write_text(
+        json.dumps(
+            {
+                "schema_version": trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION,
+                "created_ts": 456.0,
+                "source": "trade2/data/items",
+                "total": 1,
+                "bases": [
+                    {
+                        "id": "base:amber-amulet",
+                        "type": "Amber Amulet",
+                        "type_ru": "Амулет с янтарём",
+                        "query_type": "Амулет с янтарём",
+                        "category": "accessory",
+                        "category_label": "Accessories",
+                        "category_label_ru": "Бижутерия",
+                        "icon_key": "amulet",
+                        "image": "/icons/item-bases/generated/amulet.svg",
+                    },
+                    {
+                        "id": "base:ruby",
+                        "type": "Ruby",
+                        "type_ru": "Рубин",
+                        "query_type": "Рубин",
+                        "category": "jewel",
+                        "category_label": "Jewels",
+                        "category_label_ru": "Самоцветы",
+                        "icon_key": "base",
+                        "image": "/icons/item-bases/generated/base.svg",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", fake_fetch)
+    monkeypatch.setattr(trade2, "_fetch_poe2db_item_base_catalog", fake_poe2db_catalog)
+    monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", tmp_path / "missing_runtime_catalog.json")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", bundled_path)
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "storage-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})
+
+    result = asyncio.run(trade2.get_item_base_catalog())
+
+    assert result["source"] == "bundled:item_base_catalog_seed+poe2db"
+    assert result["total"] == 1
+    assert result["bases"][0]["type_ru"] == "Амулет с янтарём"
+    assert result["bases"][0]["image"] == "https://cdn.poe2db.tw/image/amber.webp"
+
+
 def test_item_base_catalog_uses_poe2db_when_trade2_is_limited(tmp_path, monkeypatch):
     async def fake_fetch(_locale="en"):
         raise RuntimeError("trade2 item catalog rate limited")
@@ -877,6 +967,7 @@ def test_item_base_catalog_uses_poe2db_when_trade2_is_limited(tmp_path, monkeypa
     monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", fake_fetch)
     monkeypatch.setattr(trade2, "_fetch_poe2db_item_base_catalog", fake_poe2db_catalog)
     monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", tmp_path / "item_base_catalog.json")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", tmp_path / "missing_seed.json")
     monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "storage-icons")
     monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
     monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})

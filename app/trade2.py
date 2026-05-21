@@ -87,7 +87,6 @@ POE2DB_ITEM_BASE_CLASS_SLUGS = {
     "Foci",
     "Gloves",
     "Helmets",
-    "Jewels",
     "One_Hand_Axes",
     "One_Hand_Maces",
     "One_Hand_Swords",
@@ -904,6 +903,11 @@ def load_bundled_item_base_catalog_snapshot(path: Any = None) -> dict[str, Any] 
     }
 
 
+def _is_trusted_item_base_catalog_source(source: Any) -> bool:
+    value = str(source or "")
+    return "trade2/data/items" in value or value.startswith("bundled:item_base_catalog_seed")
+
+
 def _entry_text(entry: dict[str, Any]) -> str:
     return str(entry.get("text") or entry.get("name") or entry.get("type") or "").strip()
 
@@ -918,7 +922,7 @@ def _skip_item_base_category(category_id: str, label: str) -> bool:
         re.search(
             r"currency|fragment|gem|flask|map|waystone|tablet|rune|soul|"
             r"essence|omen|delirium|breach|expedition|ritual|ultimatum|"
-            r"sanctum|relic|card|hideout|microtransaction",
+            r"sanctum|relic|jewel|самоцвет|card|hideout|microtransaction",
             value,
         )
     )
@@ -929,6 +933,26 @@ def _skip_item_base_name(name: str) -> bool:
     if not value:
         return True
     return bool(re.search(r"\[(?:dnt|unused)|\bdnt\b|\bunused\b", value))
+
+
+def _filter_item_base_catalog_entries(bases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = []
+    for base in bases:
+        category_id = str(base.get("category") or "").strip()
+        category_label = str(base.get("category_label") or base.get("category_label_ru") or "").strip()
+        if category_id and _skip_item_base_category(category_id, category_label):
+            continue
+        values = [
+            str(base.get("type") or ""),
+            str(base.get("type_ru") or ""),
+            str(base.get("query_type") or ""),
+            str(base.get("text") or ""),
+            str(base.get("text_ru") or ""),
+        ]
+        if any(_skip_item_base_name(value) for value in values if value):
+            continue
+        filtered.append(base)
+    return filtered
 
 
 def normalize_item_base_catalog(
@@ -982,6 +1006,7 @@ def normalize_item_base_catalog(
                     "image": image or _item_base_generated_icon_url(icon_key),
                 }
             )
+    bases = _filter_item_base_catalog_entries(bases)
     bases.sort(key=lambda item: (_lookup_text_key(item.get("category_label")), _lookup_text_key(item.get("type"))))
     return bases
 
@@ -1174,15 +1199,19 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                 except Exception as exc:
                     poe2db_bases = []
                     errors.append({"source": "poe2db/ru/Items", "error": str(exc)})
-                if poe2db_bases:
-                    has_official_ru_bases = bool(ru_payload and bases)
-                    bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases) if has_official_ru_bases else list(poe2db_bases)
-                    source = "trade2/data/items+poe2db" if has_official_ru_bases else "poe2db/ru/Items"
-                if not bases:
+                if bases:
+                    if ru_payload and poe2db_bases:
+                        bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
+                        source = "trade2/data/items+poe2db"
+                else:
                     stored = load_item_base_catalog_snapshot()
-                    if stored:
-                        bases = _ensure_item_base_catalog_icons(list(stored.get("bases") or []))
-                        source = "stored:item_base_catalog"
+                    if stored and _is_trusted_item_base_catalog_source(stored.get("source")):
+                        bases = list(stored.get("bases") or [])
+                        if poe2db_bases:
+                            bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
+                            source = "stored:item_base_catalog+poe2db"
+                        else:
+                            source = "stored:item_base_catalog"
                         errors = [*errors, *list(stored.get("errors") or [])]
                         save_item_base_catalog_snapshot(
                             {
@@ -1196,13 +1225,23 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                     else:
                         bundled = load_bundled_item_base_catalog_snapshot()
                         if bundled:
-                            bases = _ensure_item_base_catalog_icons(list(bundled.get("bases") or []))
-                            source = "bundled:item_base_catalog_seed"
+                            bases = list(bundled.get("bases") or [])
+                            if poe2db_bases:
+                                bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
+                                source = "bundled:item_base_catalog_seed+poe2db"
+                            else:
+                                source = "bundled:item_base_catalog_seed"
+                        elif poe2db_bases:
+                            bases = list(poe2db_bases)
+                            source = "poe2db/ru/Items"
                         else:
                             bases = _item_base_fallback_catalog()
                             source = "fallback"
+                bases = _filter_item_base_catalog_entries(bases)
+                if source == "trade2/data/items" and not poe2db_bases:
+                    bases = await _cache_item_base_catalog_icons(bases)
                 else:
-                    bases = _ensure_item_base_catalog_icons(bases) if poe2db_bases else await _cache_item_base_catalog_icons(bases)
+                    bases = _ensure_item_base_catalog_icons(bases)
                 created_ts = time.time()
                 ITEM_BASES_CACHE["data"] = bases
                 ITEM_BASES_CACHE["errors"] = errors
