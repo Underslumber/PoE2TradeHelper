@@ -892,6 +892,13 @@ def _skip_item_base_category(category_id: str, label: str) -> bool:
     )
 
 
+def _skip_item_base_name(name: str) -> bool:
+    value = str(name or "").strip().lower()
+    if not value:
+        return True
+    return bool(re.search(r"\[(?:dnt|unused)|\bdnt\b|\bunused\b", value))
+
+
 def normalize_item_base_catalog(
     payload: dict[str, Any] | None,
     localized_payload: dict[str, Any] | None = None,
@@ -917,11 +924,13 @@ def normalize_item_base_catalog(
                 continue
             text = _entry_text(entry)
             query_type = _entry_query_text(entry) or text
-            if not text or not query_type:
+            if not text or not query_type or _skip_item_base_name(text) or _skip_item_base_name(query_type):
                 continue
             localized_entry = localized_entries[index] if index < len(localized_entries) and isinstance(localized_entries[index], dict) else {}
             text_ru = _entry_text(localized_entry) or ITEM_BASE_RU.get(text) or text
             query_type_ru = _entry_query_text(localized_entry) or ITEM_BASE_RU.get(query_type) or text_ru
+            if _skip_item_base_name(text_ru) or _skip_item_base_name(query_type_ru):
+                continue
             key = _lookup_text_key(query_type)
             if not key or key in seen:
                 continue
@@ -981,6 +990,8 @@ def _parse_poe2db_item_class_bases(html: str, item_class: dict[str, str]) -> lis
         if not name_anchor:
             continue
         name_ru = name_anchor.get_text(" ", strip=True)
+        if _skip_item_base_name(name_ru):
+            continue
         key = _lookup_text_key(name_ru)
         if not key or key in seen:
             continue

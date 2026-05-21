@@ -612,6 +612,7 @@ def test_normalize_item_base_catalog_prefers_localized_query_text():
                 "entries": [
                     {"type": "Waxed Jacket", "text": "Waxed Jacket"},
                     {"type": "Silk Robe", "text": "Silk Robe"},
+                    {"type": "[DNT-UNUSED] Hand Wraps", "text": "[DNT-UNUSED] Hand Wraps"},
                 ],
             },
             {
@@ -629,6 +630,7 @@ def test_normalize_item_base_catalog_prefers_localized_query_text():
                 "entries": [
                     {"type": "Вощеная куртка", "text": "Вощеная куртка"},
                     {"type": "Шелковая роба", "text": "Шелковая роба"},
+                    {"type": "[DNT-UNUSED] Hand Wraps", "text": "[DNT-UNUSED] Hand Wraps"},
                 ],
             }
         ]
@@ -747,6 +749,9 @@ def test_parse_poe2db_item_class_bases_extracts_names_and_icons():
     </div>
     <div class="d-flex border-top rounded">
       <a class="magicitem" href="Ignored">Не база</a>
+    </div>
+    <div class="d-flex border-top rounded">
+      <a class="whiteitem Claw" href="Unused_Hand_Wraps">[DNT-UNUSED] Hand Wraps</a>
     </div>
     """
 
