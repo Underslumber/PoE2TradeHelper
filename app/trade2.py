@@ -73,6 +73,38 @@ ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": [
 ITEM_BASES_LOCK = asyncio.Lock()
 ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 ITEM_BASE_MARKET_JOBS: dict[tuple[Any, ...], dict[str, Any]] = {}
+POE2DB_ITEM_BASE_CLASS_SLUGS = {
+    "Amulets",
+    "Belts",
+    "Body_Armours",
+    "Boots",
+    "Bows",
+    "Bucklers",
+    "Claws",
+    "Crossbows",
+    "Daggers",
+    "Flails",
+    "Foci",
+    "Gloves",
+    "Helmets",
+    "Jewels",
+    "One_Hand_Axes",
+    "One_Hand_Maces",
+    "One_Hand_Swords",
+    "Quarterstaves",
+    "Quivers",
+    "Rings",
+    "Sceptres",
+    "Shields",
+    "Spears",
+    "Staves",
+    "Talismans",
+    "Traps",
+    "Two_Hand_Axes",
+    "Two_Hand_Maces",
+    "Two_Hand_Swords",
+    "Wands",
+}
 CURRENCY_ID_ALIASES = {
     "alchemy": "alch",
     "orb-of-alchemy": "alch",
@@ -963,6 +995,8 @@ def _poe2db_item_class_links(html: str) -> list[dict[str, str]]:
         label_ru = anchor.get_text(" ", strip=True)
         if not href or not label_ru or href.startswith(("http", "/", "#")):
             continue
+        if href not in POE2DB_ITEM_BASE_CLASS_SLUGS:
+            continue
         container = anchor.find_parent("div", class_="itemList")
         group_label_ru = ""
         if container:
@@ -1065,13 +1099,11 @@ def _merge_poe2db_item_base_catalog(
             poe_by_key.setdefault(key, base)
 
     merged: list[dict[str, Any]] = []
-    consumed: set[int] = set()
     for base in trade_bases:
         match = next((poe_by_key[key] for key in _base_market_row_keys(base) if key in poe_by_key), None)
         if not match:
             merged.append(base)
             continue
-        consumed.add(id(match))
         image = str(base.get("image") or "")
         if not image or image.startswith("data:") or _item_base_is_generated_icon_url(image):
             image = str(match.get("image") or image)
@@ -1084,9 +1116,6 @@ def _merge_poe2db_item_base_catalog(
             }
         )
 
-    for base in poe2db_bases:
-        if id(base) not in consumed:
-            merged.append(base)
     merged.sort(
         key=lambda item: (
             _lookup_text_key(item.get("category_label_ru") or item.get("category_label")),
@@ -1146,12 +1175,9 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                     poe2db_bases = []
                     errors.append({"source": "poe2db/ru/Items", "error": str(exc)})
                 if poe2db_bases:
-                    bases = (
-                        _merge_poe2db_item_base_catalog(bases, poe2db_bases)
-                        if ru_payload
-                        else list(poe2db_bases)
-                    )
-                    source = "trade2/data/items+poe2db" if ru_payload else "poe2db/ru/Items"
+                    has_official_ru_bases = bool(ru_payload and bases)
+                    bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases) if has_official_ru_bases else list(poe2db_bases)
+                    source = "trade2/data/items+poe2db" if has_official_ru_bases else "poe2db/ru/Items"
                 if not bases:
                     stored = load_item_base_catalog_snapshot()
                     if stored:

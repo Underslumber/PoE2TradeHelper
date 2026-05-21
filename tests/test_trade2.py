@@ -726,10 +726,19 @@ def test_poe2db_item_class_links_keep_equipment_and_skip_non_bases():
       <span class="disabled">Одноручное оружие</span>
       <a class="ItemClasses" href="Claws">Когти</a>
       <a class="ItemClasses" href="Skill_Gems">Камни умений</a>
+      <a class="ItemClasses" href="Fishing_Rods">Удочки</a>
     </div>
     <div class="itemList">
       <span class="disabled">Доспехи</span>
       <a class="ItemClasses" href="Body_Armours">Нательные доспехи</a>
+    </div>
+    <div class="itemList">
+      <span class="disabled">Валюта</span>
+      <a class="ItemClasses" href="Augment">Усилители</a>
+    </div>
+    <div class="itemList">
+      <span class="disabled">Прочее</span>
+      <a class="ItemClasses" href="Vault_Keys">Ключи от хранилищ</a>
     </div>
     """
 
@@ -878,6 +887,50 @@ def test_item_base_catalog_uses_poe2db_when_trade2_is_limited(tmp_path, monkeypa
     assert result["total"] == 1
     assert result["bases"][0]["type_ru"] == "Грубый кастет"
     assert result["bases"][0]["category_label_ru"] == "Когти"
+
+
+def test_poe2db_catalog_enriches_official_bases_without_appending_unmatched():
+    trade_bases = [
+        {
+            "id": "base:amber-amulet",
+            "type": "Amber Amulet",
+            "type_ru": "Амулет с янтарём",
+            "query_type": "Амулет с янтарём",
+            "category": "accessory",
+            "category_label": "Accessories",
+            "category_label_ru": "Бижутерия",
+            "icon_key": "amulet",
+            "image": "/icons/item-bases/generated/amulet.svg",
+        }
+    ]
+    poe2db_bases = [
+        {
+            "id": "base:amber-amulet",
+            "type": "Амулет с янтарём",
+            "type_ru": "Амулет с янтарём",
+            "query_type": "Амулет с янтарём",
+            "category": "Amulets",
+            "category_label_ru": "Амулеты",
+            "group_label_ru": "Бижутерия",
+            "poe2db_slug": "Amber_Amulet",
+            "image": "https://cdn.poe2db.tw/image/amber.webp",
+        },
+        {
+            "id": "base:грубый-кастет",
+            "type": "Грубый кастет",
+            "type_ru": "Грубый кастет",
+            "query_type": "Грубый кастет",
+            "category": "Claws",
+            "image": "https://cdn.poe2db.tw/image/claw.webp",
+        },
+    ]
+
+    bases = trade2._merge_poe2db_item_base_catalog(trade_bases, poe2db_bases)
+
+    assert len(bases) == 1
+    assert bases[0]["id"] == "base:amber-amulet"
+    assert bases[0]["image"] == "https://cdn.poe2db.tw/image/amber.webp"
+    assert bases[0]["poe2db_slug"] == "Amber_Amulet"
 
 
 def test_item_base_market_query_uses_normal_rarity_and_priced_buyout():
