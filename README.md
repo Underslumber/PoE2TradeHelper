@@ -53,7 +53,7 @@
 - FastAPI-интерфейс с выбором лиги, категорий, валюты оценки и деталями позиции.
 - Получение live-данных через trade2 и агрегированных цен через poe.ninja с fallback между источниками.
 - Bootstrap-справочники лиг и категорий с локальным fallback, чтобы временный сбой trade2 не оставлял интерфейс без валют и разделов.
-- Автоматический фоновый сбор market snapshots по stackable-категориям и `ItemBases` при запуске приложения; список основ сохраняется отдельно в `data/item_base_catalog.json`, имеет bundled seed-каталог для rate-limit fallback, а иконки основ кэшируются локально в `storage/icons/item-bases` с tracked seed-иконками в `/static/item-base-icons`.
+- Автоматический фоновый сбор market snapshots по stackable-категориям и `ItemBases` при запуске приложения; общий рынок основ заполняется легким обзорным `trade2/search+fetch`, а точный сбор по конкретной основе включается только для фильтра/уточнения. Список основ сохраняется отдельно в `data/item_base_catalog.json`, имеет bundled seed-каталог для rate-limit fallback, а иконки основ кэшируются локально в `storage/icons/item-bases` с tracked seed-иконками в `/static/item-base-icons`.
 - Чтение последних сохраненных снимков из SQLite без частого браузерного polling.
 - История raw/hourly/daily с compaction для старых данных.
 - Пользовательские цены в интерфейсе округляются до сотых сферы/валюты без длинных технических дробей.

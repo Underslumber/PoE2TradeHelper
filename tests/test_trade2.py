@@ -1068,10 +1068,10 @@ def test_item_base_market_background_job_collects_limited_exact_sample(monkeypat
     assert cached["cached"] is True
 
 
-def test_item_base_market_blank_refresh_scans_saved_catalog_before_display_limit(monkeypatch):
+def test_item_base_market_blank_refresh_uses_single_overview_before_display_limit(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    searched_types = []
+    calls = {"overview": 0}
 
     async def fake_catalog(q="", limit=500):
         assert q == ""
@@ -1098,37 +1098,36 @@ def test_item_base_market_blank_refresh_scans_saved_catalog_before_display_limit
     async def fake_rates(**kwargs):
         return {"rows": [{"id": "regal", "median": 0.25}]}
 
-    async def fake_search(league, query, sort=None):
-        searched_types.append(query["type"])
-        total = 500 if query["type"] == "Амулет с янтарём" else 9000
-        return {"id": f"query-{len(searched_types)}", "total": total, "result": ["lot1"]}
-
-    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
-        assert fetch_limit == 100
-        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
-        low = 1.0 if row["text_ru"] == "Амулет с янтарём" else 2.0
+    async def fake_overview(league, target, status, rates, min_ilvl=None):
+        calls["overview"] += 1
+        assert status == "securable"
+        row = trade2._base_market_row_from_base(
+            {
+                "id": "base:amber-amulet",
+                "type": "Amber Amulet",
+                "type_ru": "Амулет с янтарём",
+                "query_type": "Амулет с янтарём",
+            },
+            min_ilvl=min_ilvl,
+        )
         stats = trade2._base_market_stats(
-            [{"price_amount": low, "price_currency": "regal", "price_target": low * 0.25}],
+            [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}],
             raw_count=100,
         )
-        return {
+        market_row = {
             **row,
             **stats,
-            "query_id": market_search["id"],
-            "total": market_search["total"],
-            "total_scope": "exact",
+            "query_id": "overview-query",
+            "total": 5000,
+            "total_scope": "overview_sample",
             "fetched_count": 100,
             "sample_lots": [],
         }
-
-    async def fake_sleep(seconds):
-        return None
+        return {"query_id": "overview-query", "total": 5000, "rows_by_key": {"amber-amulet": market_row}}
 
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
     monkeypatch.setattr(trade2, "get_category_rates", fake_rates)
-    monkeypatch.setattr(trade2, "_post_search", fake_search)
-    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
-    monkeypatch.setattr(trade2.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_overview", fake_overview)
     monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
 
     result = asyncio.run(
@@ -1143,11 +1142,14 @@ def test_item_base_market_blank_refresh_scans_saved_catalog_before_display_limit
         )
     )
 
-    assert searched_types == ["Амулет с янтарём", "Жемчужное кольцо"]
-    assert result["source"] == "trade2/search+fetch:catalog-scan"
+    assert calls == {"overview": 1}
+    assert result["source"] == "trade2/search+fetch:overview"
     assert result["matched_total"] == 2
+    assert result["priced_total"] == 1
     assert len(result["rows"]) == 1
-    assert result["refresh_job"]["processed_count"] == 2
+    assert result["refresh_job"]["processed_count"] == 1
+    assert result["refresh_job"]["base_total"] == 1
+    assert result["refresh_job"]["fetched_count"] == 100
 
 
 def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
@@ -1320,7 +1322,7 @@ def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):
     assert result["rows"][0]["low"] is None
 
 
-def test_item_base_market_blank_query_skips_legacy_overview_snapshot(monkeypatch):
+def test_item_base_market_blank_query_uses_stored_overview_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
 
@@ -1360,8 +1362,8 @@ def test_item_base_market_blank_query_skips_legacy_overview_snapshot(monkeypatch
         )
     )
 
-    assert result["source"] == "item-base-catalog"
-    assert result["rows"][0]["low"] is None
+    assert result["source"] == "trade2/search+fetch:overview"
+    assert result["rows"][0]["low"] == 1.0
 
 
 def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):

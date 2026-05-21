@@ -1850,19 +1850,16 @@ async def run_item_base_market_refresh_job(
     if q and not catalog.get("bases"):
         catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
     bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
-    if q:
-        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
-    else:
-        selected_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
+    selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)] if q else []
     errors = list(catalog.get("errors") or [])
-    job["base_total"] = len(selected_bases)
+    job["base_total"] = len(selected_bases) if q else 1
     job["total"] = len(selected_bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
 
     rows: list[dict[str, Any]] = []
     exact_query_ids: list[str] = []
-    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:catalog-scan"
+    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:overview"
 
     def publish_result(extra_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         combined_rows = [*rows, *(extra_rows or [])]
@@ -1907,6 +1904,47 @@ async def run_item_base_market_refresh_job(
         return result
 
     publish_result()
+    if not q:
+        try:
+            overview = await _fetch_item_base_market_overview(
+                league=league,
+                target=target,
+                status=status,
+                rates=rates,
+                min_ilvl=min_ilvl,
+            )
+            if overview.get("query_id"):
+                exact_query_ids.append(overview["query_id"])
+            rows.extend(_sort_item_base_market_rows(list((overview.get("rows_by_key") or {}).values())))
+            job["processed_count"] = 1
+            job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
+            job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
+            job["total"] = overview.get("total")
+            job["status"] = "done"
+            job["error"] = None
+            job["updated_ts"] = time.time()
+            result = publish_result()
+            priced_rows = [
+                row
+                for row in result.get("rows") or []
+                if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None
+            ]
+            if priced_rows:
+                log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
+            return _cache_copy(result)
+        except Exception as exc:
+            error_text = str(exc)
+            retry_after = _retry_after_from_error(error_text)
+            errors.append({"source": "trade2/search+fetch:overview", "error": error_text})
+            job["status"] = "rate_limited" if retry_after is not None else "failed"
+            job["error"] = error_text
+            if retry_after is not None:
+                job["attempts"] = int(job.get("attempts") or 0) + 1
+                job["retry_after"] = retry_after
+                job["retry_at"] = time.time() + retry_after
+            job["updated_ts"] = time.time()
+            return _cache_copy(publish_result())
+
     base_index = 0
     attempts = 0
     while base_index < len(selected_bases):
@@ -2130,7 +2168,7 @@ async def get_item_base_market(
         if min_ilvl is None:
             latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
         latest_source = str((latest or {}).get("source") or "")
-        if latest and ("exact" in latest_source or "overview" in latest_source):
+        if latest and "exact" in latest_source:
             latest = None
         if latest:
             catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)
