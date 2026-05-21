@@ -1314,26 +1314,23 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     calls = {"search": 0, "fetch": 0}
     searched_types = []
+    base_count = trade2.ITEM_BASE_MARKET_MAX_BASES + 5
+    bases = [
+        {
+            "id": f"base:test-base-{index}",
+            "type": f"Test Base {index}",
+            "type_ru": f"Тестовая основа {index}",
+            "query_type": f"Тестовая основа {index}",
+        }
+        for index in range(base_count)
+    ]
 
     async def fake_catalog(q="", limit=500):
         assert q == ""
         return {
             "source": "stored:item_base_catalog",
-            "total": 2,
-            "bases": [
-                {
-                    "id": "base:amber-amulet",
-                    "type": "Amber Amulet",
-                    "type_ru": "Амулет с янтарём",
-                    "query_type": "Амулет с янтарём",
-                },
-                {
-                    "id": "base:pearl-ring",
-                    "type": "Pearl Ring",
-                    "type_ru": "Жемчужное кольцо",
-                    "query_type": "Жемчужное кольцо",
-                },
-            ],
+            "total": base_count,
+            "bases": bases,
             "errors": [],
         }
 
@@ -1351,7 +1348,7 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
         assert fetch_limit == trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
         row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
         clean_lots = []
-        if row["text_ru"] == "Амулет с янтарём":
+        if row["text_ru"] == "Тестовая основа 0":
             clean_lots = [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}]
         stats = trade2._base_market_stats(
             clean_lots,
@@ -1372,6 +1369,7 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
     monkeypatch.setattr(trade2, "_post_search", fake_search)
     monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
     monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
+    monkeypatch.setattr(trade2, "DEFAULT_RATE_LIMIT_DELAY", 0)
 
     result = asyncio.run(
         trade2.get_item_base_market(
@@ -1385,15 +1383,16 @@ def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypa
         )
     )
 
-    assert calls == {"search": 2, "fetch": 2}
-    assert searched_types == ["Амулет с янтарём", "Жемчужное кольцо"]
+    assert calls == {"search": base_count, "fetch": base_count}
+    assert searched_types[0] == "Тестовая основа 0"
+    assert searched_types[-1] == f"Тестовая основа {base_count - 1}"
     assert result["source"] == "trade2/search+fetch:rough"
-    assert result["matched_total"] == 2
+    assert result["matched_total"] == base_count
     assert result["priced_total"] == 1
     assert len(result["rows"]) == 1
-    assert result["refresh_job"]["processed_count"] == 2
-    assert result["refresh_job"]["base_total"] == 2
-    assert result["refresh_job"]["fetched_count"] == 20
+    assert result["refresh_job"]["processed_count"] == base_count
+    assert result["refresh_job"]["base_total"] == base_count
+    assert result["refresh_job"]["fetched_count"] == base_count * trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
 
 
 def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):

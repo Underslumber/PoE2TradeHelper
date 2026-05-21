@@ -2101,7 +2101,7 @@ async def run_item_base_market_refresh_job(
     if q:
         selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
     else:
-        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_MAX_BASES)]
+        selected_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
     errors = list(catalog.get("errors") or [])
     job["base_total"] = len(selected_bases)
     job["total"] = len(selected_bases) if not q else None

@@ -92,8 +92,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "baseMarketConvertedToTarget: 'в валюте оценки'" in i18n_js
     assert "baseMarketCurrencyBreakdown: 'Разбивка по валютам лотов'" in i18n_js
     assert "baseMarketOverviewSampleHint: 'Список основ берется из сохраненного каталога" in i18n_js
-    assert "baseMarketRefreshRunning: 'точный сбор идет в фоне'" in i18n_js
-    assert "baseMarketRefreshRateLimited: 'trade2 ограничил точный сбор'" in i18n_js
+    assert "baseMarketRefreshRunning: 'сбор основ идет в фоне'" in i18n_js
+    assert "baseMarketRefreshRateLimited: 'trade2 ограничил сбор основ'" in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
     assert "refineBaseMarket: 'Уточнить рынок этой основы'" in i18n_js
     assert "if (event.key === 'Enter') refreshBaseMarket(true);" in app_js
