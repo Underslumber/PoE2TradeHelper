@@ -15,9 +15,10 @@ import statistics
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, ICONS_DIR, USER_AGENT
 from app.item_parser import parse_item_text
@@ -26,6 +27,8 @@ from app.recipes import analyze_recipes, filter_dominated_emotion_paths
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
+POE2DB_BASE = "https://poe2db.tw"
+POE2DB_RU_BASE = "https://poe2db.tw/ru"
 POE_SITE_BASE = "https://www.pathofexile.com"
 HISTORY_PATH = DATA_DIR / "trade_rate_history.jsonl"
 TRADE_STATIC_CACHE_TTL = 3600
@@ -58,6 +61,7 @@ ITEM_BASE_MARKET_CACHE_TTL = 900
 ITEM_BASE_MARKET_FETCH_LIMIT = 100
 ITEM_BASE_MARKET_DEFAULT_STATUS = "securable"
 ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT = 100
+ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT = 10
 ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT = 500
 ITEM_BASE_MARKET_JOB_TTL = 3600
 ITEM_BASE_MARKET_STALE_JOB_SECONDS = 120
@@ -257,6 +261,17 @@ def _image_url(path: str | None) -> str | None:
     if path.startswith("http://") or path.startswith("https://"):
         return path
     return f"{POE_SITE_BASE}{path}"
+
+
+def _poe2db_url(path: str | None) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://")):
+        return raw
+    if raw.startswith("/"):
+        return urljoin(POE2DB_BASE, raw)
+    return urljoin(f"{POE2DB_RU_BASE}/", raw)
 
 
 def _currency_id(value: Any) -> str:
@@ -930,6 +945,146 @@ def normalize_item_base_catalog(
     return bases
 
 
+def _poe2db_item_class_links(html: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    classes: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for anchor in soup.select("a.ItemClasses"):
+        href = str(anchor.get("href") or "").strip()
+        label_ru = anchor.get_text(" ", strip=True)
+        if not href or not label_ru or href.startswith(("http", "/", "#")):
+            continue
+        container = anchor.find_parent("div", class_="itemList")
+        group_label_ru = ""
+        if container:
+            group = container.select_one("span.disabled")
+            group_label_ru = group.get_text(" ", strip=True) if group else ""
+        if _skip_item_base_category(href, f"{group_label_ru} {label_ru}"):
+            continue
+        key = href.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        classes.append({"slug": href, "label_ru": label_ru, "group_label_ru": group_label_ru or label_ru})
+    return classes
+
+
+def _parse_poe2db_item_class_bases(html: str, item_class: dict[str, str]) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    slug = str(item_class.get("slug") or "").strip()
+    label_ru = str(item_class.get("label_ru") or slug).strip()
+    group_label_ru = str(item_class.get("group_label_ru") or label_ru).strip()
+    bases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in soup.select("div.d-flex.border-top.rounded"):
+        name_anchor = next((anchor for anchor in card.select("a.whiteitem") if anchor.get_text(" ", strip=True)), None)
+        if not name_anchor:
+            continue
+        name_ru = name_anchor.get_text(" ", strip=True)
+        key = _lookup_text_key(name_ru)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        href = str(name_anchor.get("href") or "").strip()
+        image = ""
+        image_node = card.select_one("img.panel-item-icon") or card.select_one("img")
+        if image_node:
+            image = _poe2db_url(image_node.get("src"))
+        icon_key = _item_base_icon_key(slug, label_ru, name_ru)
+        bases.append(
+            {
+                "id": _base_market_item_id(name_ru),
+                "type": name_ru,
+                "type_ru": name_ru,
+                "query_type": name_ru,
+                "category": slug,
+                "category_label": label_ru,
+                "category_label_ru": label_ru,
+                "group_label_ru": group_label_ru,
+                "poe2db_slug": href,
+                "icon_key": icon_key,
+                "image": image or _item_base_generated_icon_url(icon_key),
+            }
+        )
+    return bases
+
+
+async def _fetch_poe2db_item_base_catalog() -> list[dict[str, Any]]:
+    headers = _headers({"Accept": "text/html,application/xhtml+xml"})
+    async with httpx.AsyncClient(headers=headers, timeout=30, follow_redirects=True) as client:
+        response = await client.get(f"{POE2DB_RU_BASE}/Items")
+        response.raise_for_status()
+        item_classes = _poe2db_item_class_links(response.text)
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_class(item_class: dict[str, str]) -> list[dict[str, Any]]:
+            async with semaphore:
+                class_response = await client.get(_poe2db_url(item_class["slug"]))
+                class_response.raise_for_status()
+            return _parse_poe2db_item_class_bases(class_response.text, item_class)
+
+        results = await asyncio.gather(*(fetch_class(item_class) for item_class in item_classes), return_exceptions=True)
+
+    bases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        for base in result:
+            key = _lookup_text_key(base.get("query_type") or base.get("type_ru") or base.get("type"))
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            bases.append(base)
+    bases.sort(key=lambda item: (_lookup_text_key(item.get("category_label_ru")), _lookup_text_key(item.get("type_ru"))))
+    return bases
+
+
+def _merge_poe2db_item_base_catalog(
+    trade_bases: list[dict[str, Any]],
+    poe2db_bases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not trade_bases:
+        return list(poe2db_bases)
+    if not poe2db_bases:
+        return list(trade_bases)
+    poe_by_key: dict[str, dict[str, Any]] = {}
+    for base in poe2db_bases:
+        for key in _base_market_row_keys(base):
+            poe_by_key.setdefault(key, base)
+
+    merged: list[dict[str, Any]] = []
+    consumed: set[int] = set()
+    for base in trade_bases:
+        match = next((poe_by_key[key] for key in _base_market_row_keys(base) if key in poe_by_key), None)
+        if not match:
+            merged.append(base)
+            continue
+        consumed.add(id(match))
+        image = str(base.get("image") or "")
+        if not image or image.startswith("data:") or _item_base_is_generated_icon_url(image):
+            image = str(match.get("image") or image)
+        merged.append(
+            {
+                **base,
+                "image": image,
+                "poe2db_slug": match.get("poe2db_slug"),
+                "group_label_ru": match.get("group_label_ru") or base.get("group_label_ru"),
+            }
+        )
+
+    for base in poe2db_bases:
+        if id(base) not in consumed:
+            merged.append(base)
+    merged.sort(
+        key=lambda item: (
+            _lookup_text_key(item.get("category_label_ru") or item.get("category_label")),
+            _lookup_text_key(item.get("type_ru") or item.get("type") or item.get("query_type")),
+        )
+    )
+    return merged
+
+
 async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]:
     base_url = TRADE2_RU_BASE if locale == "ru" else TRADE2_BASE
     async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
@@ -974,6 +1129,18 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                         errors.append({"source": f"trade2/data/items:{locale}", "error": str(exc)})
                 bases = normalize_item_base_catalog(en_payload, ru_payload)
                 source = "trade2/data/items"
+                try:
+                    poe2db_bases = await _fetch_poe2db_item_base_catalog()
+                except Exception as exc:
+                    poe2db_bases = []
+                    errors.append({"source": "poe2db/ru/Items", "error": str(exc)})
+                if poe2db_bases:
+                    bases = (
+                        _merge_poe2db_item_base_catalog(bases, poe2db_bases)
+                        if ru_payload
+                        else list(poe2db_bases)
+                    )
+                    source = "trade2/data/items+poe2db" if ru_payload else "poe2db/ru/Items"
                 if not bases:
                     stored = load_item_base_catalog_snapshot()
                     if stored:
@@ -998,13 +1165,13 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                             bases = _item_base_fallback_catalog()
                             source = "fallback"
                 else:
-                    bases = await _cache_item_base_catalog_icons(bases)
+                    bases = _ensure_item_base_catalog_icons(bases) if poe2db_bases else await _cache_item_base_catalog_icons(bases)
                 created_ts = time.time()
                 ITEM_BASES_CACHE["data"] = bases
                 ITEM_BASES_CACHE["errors"] = errors
                 ITEM_BASES_CACHE["source"] = source
                 ITEM_BASES_CACHE["created_ts"] = created_ts
-                if bases and source == "trade2/data/items":
+                if bases and source in {"trade2/data/items", "trade2/data/items+poe2db", "poe2db/ru/Items"}:
                     save_item_base_catalog_snapshot(
                         {
                             "created_ts": created_ts,
@@ -1372,6 +1539,11 @@ def _bounded_item_base_sample_limit(sample_limit: int | None = None) -> int:
     return max(ITEM_BASE_MARKET_FETCH_LIMIT, min(value, ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT))
 
 
+def _item_base_fetch_limit(fetch_limit: int | None = None) -> int:
+    value = fetch_limit if isinstance(fetch_limit, int) and fetch_limit > 0 else ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT
+    return max(1, min(value, ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT))
+
+
 def _item_base_market_cache_key(
     league: str,
     target: str,
@@ -1624,7 +1796,7 @@ async def _fetch_item_base_market_row(
         market_items = await _fetch_trade_items(
             market_search.get("result") or [],
             market_search.get("id") or "",
-            limit=_bounded_item_base_sample_limit(fetch_limit),
+            limit=_item_base_fetch_limit(fetch_limit),
         )
     except Exception as exc:
         return {
@@ -1688,7 +1860,7 @@ async def _fetch_item_base_market_row_from_search(
         market_items = await _fetch_trade_items(
             market_search.get("result") or [],
             market_search.get("id") or "",
-            limit=_bounded_item_base_sample_limit(fetch_limit),
+            limit=_item_base_fetch_limit(fetch_limit),
         )
     except Exception as exc:
         return {
@@ -1850,16 +2022,19 @@ async def run_item_base_market_refresh_job(
     if q and not catalog.get("bases"):
         catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
     bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
-    selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)] if q else []
+    if q:
+        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
+    else:
+        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_MAX_BASES)]
     errors = list(catalog.get("errors") or [])
-    job["base_total"] = len(selected_bases) if q else 1
+    job["base_total"] = len(selected_bases)
     job["total"] = len(selected_bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
 
     rows: list[dict[str, Any]] = []
     exact_query_ids: list[str] = []
-    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:overview"
+    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:rough"
 
     def publish_result(extra_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         combined_rows = [*rows, *(extra_rows or [])]
@@ -1904,47 +2079,6 @@ async def run_item_base_market_refresh_job(
         return result
 
     publish_result()
-    if not q:
-        try:
-            overview = await _fetch_item_base_market_overview(
-                league=league,
-                target=target,
-                status=status,
-                rates=rates,
-                min_ilvl=min_ilvl,
-            )
-            if overview.get("query_id"):
-                exact_query_ids.append(overview["query_id"])
-            rows.extend(_sort_item_base_market_rows(list((overview.get("rows_by_key") or {}).values())))
-            job["processed_count"] = 1
-            job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
-            job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
-            job["total"] = overview.get("total")
-            job["status"] = "done"
-            job["error"] = None
-            job["updated_ts"] = time.time()
-            result = publish_result()
-            priced_rows = [
-                row
-                for row in result.get("rows") or []
-                if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None
-            ]
-            if priced_rows:
-                log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
-            return _cache_copy(result)
-        except Exception as exc:
-            error_text = str(exc)
-            retry_after = _retry_after_from_error(error_text)
-            errors.append({"source": "trade2/search+fetch:overview", "error": error_text})
-            job["status"] = "rate_limited" if retry_after is not None else "failed"
-            job["error"] = error_text
-            if retry_after is not None:
-                job["attempts"] = int(job.get("attempts") or 0) + 1
-                job["retry_after"] = retry_after
-                job["retry_at"] = time.time() + retry_after
-            job["updated_ts"] = time.time()
-            return _cache_copy(publish_result())
-
     base_index = 0
     attempts = 0
     while base_index < len(selected_bases):
@@ -1979,7 +2113,7 @@ async def run_item_base_market_refresh_job(
                 target,
                 rates,
                 min_ilvl=min_ilvl,
-                fetch_limit=bounded_sample_limit,
+                fetch_limit=bounded_sample_limit if q else ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT,
             )
             retry_after = _retry_after_from_error(row.get("error"))
             if retry_after is not None:
@@ -2168,7 +2302,7 @@ async def get_item_base_market(
         if min_ilvl is None:
             latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
         latest_source = str((latest or {}).get("source") or "")
-        if latest and "exact" in latest_source:
+        if latest and ("exact" in latest_source or "overview" in latest_source):
             latest = None
         if latest:
             catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)

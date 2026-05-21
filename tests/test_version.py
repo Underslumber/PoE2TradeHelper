@@ -7,7 +7,7 @@ from app.web.routes import templates
 
 
 def test_app_version_is_current_semver() -> None:
-    assert APP_VERSION == "0.2.47"
+    assert APP_VERSION == "0.2.48"
     assert re.fullmatch(r"\d+\.\d+\.\d+", APP_VERSION)
 
 

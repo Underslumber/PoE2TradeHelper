@@ -718,6 +718,60 @@ def test_item_base_catalog_prefers_bundled_icon_when_storage_is_empty(tmp_path, 
     assert bases[0]["image"] == "/static/item-base-icons/amber-amulet.png"
 
 
+def test_poe2db_item_class_links_keep_equipment_and_skip_non_bases():
+    html = """
+    <div class="itemList">
+      <span class="disabled">Одноручное оружие</span>
+      <a class="ItemClasses" href="Claws">Когти</a>
+      <a class="ItemClasses" href="Skill_Gems">Камни умений</a>
+    </div>
+    <div class="itemList">
+      <span class="disabled">Доспехи</span>
+      <a class="ItemClasses" href="Body_Armours">Нательные доспехи</a>
+    </div>
+    """
+
+    classes = trade2._poe2db_item_class_links(html)
+
+    assert classes == [
+        {"slug": "Claws", "label_ru": "Когти", "group_label_ru": "Одноручное оружие"},
+        {"slug": "Body_Armours", "label_ru": "Нательные доспехи", "group_label_ru": "Доспехи"},
+    ]
+
+
+def test_parse_poe2db_item_class_bases_extracts_names_and_icons():
+    html = """
+    <div class="d-flex border-top rounded">
+      <img class="panel-item-icon" src="https://cdn.poe2db.tw/image/Art/2DItems/Weapons/Claws/Claw01.webp">
+      <a class="whiteitem Claw" href="Crude_Claw">Грубый кастет</a>
+    </div>
+    <div class="d-flex border-top rounded">
+      <a class="magicitem" href="Ignored">Не база</a>
+    </div>
+    """
+
+    bases = trade2._parse_poe2db_item_class_bases(
+        html,
+        {"slug": "Claws", "label_ru": "Когти", "group_label_ru": "Одноручное оружие"},
+    )
+
+    assert bases == [
+        {
+            "id": "base:грубый-кастет",
+            "type": "Грубый кастет",
+            "type_ru": "Грубый кастет",
+            "query_type": "Грубый кастет",
+            "category": "Claws",
+            "category_label": "Когти",
+            "category_label_ru": "Когти",
+            "group_label_ru": "Одноручное оружие",
+            "poe2db_slug": "Crude_Claw",
+            "icon_key": "base",
+            "image": "https://cdn.poe2db.tw/image/Art/2DItems/Weapons/Claws/Claw01.webp",
+        }
+    ]
+
+
 def test_item_base_catalog_snapshot_roundtrip(tmp_path):
     payload = {
         "created_ts": 123.0,
@@ -739,6 +793,9 @@ def test_item_base_catalog_snapshot_roundtrip(tmp_path):
 def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, monkeypatch):
     async def fake_fetch(_locale="en"):
         raise RuntimeError("trade2 item catalog rate limited")
+
+    async def fake_poe2db_catalog():
+        return []
 
     bundled_path = tmp_path / "item_base_catalog_seed.json"
     bundled_path.write_text(
@@ -769,6 +826,7 @@ def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, mo
     bundled_icon_dir.mkdir()
     (bundled_icon_dir / "amber-amulet.png").write_bytes(b"png")
     monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", fake_fetch)
+    monkeypatch.setattr(trade2, "_fetch_poe2db_item_base_catalog", fake_poe2db_catalog)
     monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", tmp_path / "missing_runtime_catalog.json")
     monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", bundled_path)
     monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", storage_icon_dir)
@@ -781,6 +839,40 @@ def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, mo
     assert result["total"] == 1
     assert result["bases"][0]["type_ru"] == "Амулет с янтарём"
     assert result["bases"][0]["image"] == "/static/item-base-icons/amber-amulet.png"
+
+
+def test_item_base_catalog_uses_poe2db_when_trade2_is_limited(tmp_path, monkeypatch):
+    async def fake_fetch(_locale="en"):
+        raise RuntimeError("trade2 item catalog rate limited")
+
+    async def fake_poe2db_catalog():
+        return [
+            {
+                "id": "base:грубый-кастет",
+                "type": "Грубый кастет",
+                "type_ru": "Грубый кастет",
+                "query_type": "Грубый кастет",
+                "category": "Claws",
+                "category_label": "Когти",
+                "category_label_ru": "Когти",
+                "icon_key": "claws",
+                "image": "https://cdn.poe2db.tw/image/Art/2DItems/Weapons/Claws/Claw01.webp",
+            }
+        ]
+
+    monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", fake_fetch)
+    monkeypatch.setattr(trade2, "_fetch_poe2db_item_base_catalog", fake_poe2db_catalog)
+    monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", tmp_path / "item_base_catalog.json")
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "storage-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})
+
+    result = asyncio.run(trade2.get_item_base_catalog())
+
+    assert result["source"] == "poe2db/ru/Items"
+    assert result["total"] == 1
+    assert result["bases"][0]["type_ru"] == "Грубый кастет"
+    assert result["bases"][0]["category_label_ru"] == "Когти"
 
 
 def test_item_base_market_query_uses_normal_rarity_and_priced_buyout():
@@ -1068,10 +1160,11 @@ def test_item_base_market_background_job_collects_limited_exact_sample(monkeypat
     assert cached["cached"] is True
 
 
-def test_item_base_market_blank_refresh_uses_single_overview_before_display_limit(monkeypatch):
+def test_item_base_market_blank_refresh_scans_catalog_with_rough_sample(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    calls = {"overview": 0}
+    calls = {"search": 0, "fetch": 0}
+    searched_types = []
 
     async def fake_catalog(q="", limit=500):
         assert q == ""
@@ -1098,36 +1191,37 @@ def test_item_base_market_blank_refresh_uses_single_overview_before_display_limi
     async def fake_rates(**kwargs):
         return {"rows": [{"id": "regal", "median": 0.25}]}
 
-    async def fake_overview(league, target, status, rates, min_ilvl=None):
-        calls["overview"] += 1
-        assert status == "securable"
-        row = trade2._base_market_row_from_base(
-            {
-                "id": "base:amber-amulet",
-                "type": "Amber Amulet",
-                "type_ru": "Амулет с янтарём",
-                "query_type": "Амулет с янтарём",
-            },
-            min_ilvl=min_ilvl,
-        )
+    async def fake_search(league, query, sort=None):
+        calls["search"] += 1
+        assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
+        searched_types.append(query["type"])
+        return {"id": f"rough-query-{calls['search']}", "total": 5000, "result": [f"lot-{calls['search']}"]}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        calls["fetch"] += 1
+        assert fetch_limit == trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        clean_lots = []
+        if row["text_ru"] == "Амулет с янтарём":
+            clean_lots = [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}]
         stats = trade2._base_market_stats(
-            [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}],
-            raw_count=100,
+            clean_lots,
+            raw_count=trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT,
         )
-        market_row = {
+        return {
             **row,
             **stats,
-            "query_id": "overview-query",
+            "query_id": market_search["id"],
             "total": 5000,
-            "total_scope": "overview_sample",
-            "fetched_count": 100,
+            "total_scope": "exact",
+            "fetched_count": trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT,
             "sample_lots": [],
         }
-        return {"query_id": "overview-query", "total": 5000, "rows_by_key": {"amber-amulet": market_row}}
 
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
     monkeypatch.setattr(trade2, "get_category_rates", fake_rates)
-    monkeypatch.setattr(trade2, "_fetch_item_base_market_overview", fake_overview)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
     monkeypatch.setattr(trade2, "log_market_history", lambda *args, **kwargs: None)
 
     result = asyncio.run(
@@ -1142,14 +1236,15 @@ def test_item_base_market_blank_refresh_uses_single_overview_before_display_limi
         )
     )
 
-    assert calls == {"overview": 1}
-    assert result["source"] == "trade2/search+fetch:overview"
+    assert calls == {"search": 2, "fetch": 2}
+    assert searched_types == ["Амулет с янтарём", "Жемчужное кольцо"]
+    assert result["source"] == "trade2/search+fetch:rough"
     assert result["matched_total"] == 2
     assert result["priced_total"] == 1
     assert len(result["rows"]) == 1
-    assert result["refresh_job"]["processed_count"] == 1
-    assert result["refresh_job"]["base_total"] == 1
-    assert result["refresh_job"]["fetched_count"] == 100
+    assert result["refresh_job"]["processed_count"] == 2
+    assert result["refresh_job"]["base_total"] == 2
+    assert result["refresh_job"]["fetched_count"] == 20
 
 
 def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
@@ -1322,7 +1417,7 @@ def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):
     assert result["rows"][0]["low"] is None
 
 
-def test_item_base_market_blank_query_uses_stored_overview_snapshot(monkeypatch):
+def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
 
@@ -1362,8 +1457,10 @@ def test_item_base_market_blank_query_uses_stored_overview_snapshot(monkeypatch)
         )
     )
 
-    assert result["source"] == "trade2/search+fetch:overview"
-    assert result["rows"][0]["low"] == 1.0
+    assert result["stored"] is True
+    assert result["source"] == "item-base-catalog"
+    assert result["rows"][0]["text_ru"] == "Арбалет"
+    assert result["rows"][0]["low"] is None
 
 
 def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
