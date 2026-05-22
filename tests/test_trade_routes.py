@@ -185,6 +185,9 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
         assert kwargs["force_refresh"] is False
         assert kwargs["status"] == "securable"
         assert kwargs["sample_limit"] == 100
+        assert kwargs["price_trigger"] == "below"
+        assert kwargs["price_value"] == 10
+        assert kwargs["price_currency"] == "exalted"
         return {"rows": [], "refresh_job": {"status": "queued"}}
 
     monkeypatch.setattr(routes, "start_item_base_market_refresh_job", fake_start)
@@ -198,6 +201,9 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
             q="Амулет с янтарём",
             limit=40,
             min_ilvl=None,
+            price_trigger="below",
+            price_value=10,
+            price_currency="exalted",
             sample_limit=100,
             refresh=True,
         )
@@ -224,6 +230,9 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
         calls["get"] += 1
         assert kwargs["force_refresh"] is False
         assert kwargs["q"] == ""
+        assert kwargs["price_trigger"] == ""
+        assert kwargs["price_value"] is None
+        assert kwargs["price_currency"] == ""
         return {"rows": [], "refresh_job": {"status": "queued"}}
 
     monkeypatch.setattr(routes, "start_item_base_market_refresh_job", fake_start)
@@ -237,6 +246,9 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
             q="",
             limit=40,
             min_ilvl=None,
+            price_trigger="",
+            price_value=None,
+            price_currency="",
             sample_limit=100,
             refresh=True,
         )

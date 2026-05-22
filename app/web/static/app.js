@@ -74,6 +74,9 @@ const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
 const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
 const BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit';
 const BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl';
+const BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger';
+const BASE_MARKET_PRICE_VALUE_STORAGE_KEY = 'poe2-base-market-price-value';
+const BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY = 'poe2-base-market-price-currency';
 const BASE_MARKET_LIMIT_VALUES = new Set(['0', '40', '10']);
 
 function loadJsonState(key, fallback) {
@@ -268,6 +271,7 @@ function applyLanguage() {
   byId('lang-en')?.classList.toggle('active', state.lang === 'en');
   fillStatusSelect();
   fillTargetCurrencySelect();
+  fillBaseMarketPriceCurrencySelect();
   fillAccountTargetCurrencySelect();
   fillBenchmarkCurrencySelect();
   fillAutoRefreshSelect();
@@ -2806,6 +2810,20 @@ function targetOptions(includeAuto = false) {
   return [{ id: 'auto', text: t('autoTarget') }, ...ordered];
 }
 
+function currencyOptions() {
+  const currencyEntries = state.categories.Currency || [];
+  const seen = new Set();
+  return [...preferredTargets, ...currencyEntries.map(entry => entry.id)]
+    .map(id => currencyEntries.find(entry => entry.id === id))
+    .filter(Boolean)
+    .filter(entry => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    })
+    .map(entry => ({ id: entry.id, text: state.lang === 'ru' ? entryName(entry) : `${entryName(entry)} (${entry.id})` }));
+}
+
 function benchmarkOptions() {
   return [
     { id: 'basket:liquid-core', text: t('marketBasketBenchmark') },
@@ -2890,6 +2908,18 @@ function fillTargetCurrencySelect() {
   if (!select) return;
   const selected = select.value || defaultTarget();
   fillSelect(select, targetOptions(false), selected);
+}
+
+function fillBaseMarketPriceCurrencySelect() {
+  const select = byId('base-market-price-currency');
+  if (!select) return;
+  const stored = localStorage.getItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY);
+  const selected = hasTarget(select.value)
+    ? select.value
+    : hasTarget(stored)
+      ? stored
+      : selectedTarget();
+  fillSelect(select, currencyOptions(), selected);
 }
 
 function fillBenchmarkCurrencySelect() {
@@ -3175,11 +3205,35 @@ function normalizeBaseMarketMinIlvl(value) {
   return String(Math.max(1, Math.min(100, Math.round(number))));
 }
 
+function normalizeBaseMarketPriceTrigger(value) {
+  const trigger = String(value ?? '').trim().toLowerCase();
+  return trigger === 'above' || trigger === 'below' ? trigger : '';
+}
+
+function normalizeBaseMarketPriceValue(value) {
+  const raw = String(value ?? '').trim().replace(',', '.');
+  if (!raw) return '';
+  const number = Number(raw);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return String(number);
+}
+
+function normalizeBaseMarketPriceCurrency(value) {
+  const currency = String(value ?? '').trim();
+  return hasTarget(currency) ? currency : selectedTarget();
+}
+
 function restoreBaseMarketFilters() {
   const limit = byId('base-market-limit');
   if (limit) limit.value = normalizeBaseMarketLimit(localStorage.getItem(BASE_MARKET_LIMIT_STORAGE_KEY));
   const minIlvl = byId('base-market-min-ilvl');
   if (minIlvl) minIlvl.value = normalizeBaseMarketMinIlvl(localStorage.getItem(BASE_MARKET_MIN_ILVL_STORAGE_KEY));
+  const priceTrigger = byId('base-market-price-trigger');
+  if (priceTrigger) priceTrigger.value = normalizeBaseMarketPriceTrigger(localStorage.getItem(BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY));
+  const priceValue = byId('base-market-price-value');
+  if (priceValue) priceValue.value = normalizeBaseMarketPriceValue(localStorage.getItem(BASE_MARKET_PRICE_VALUE_STORAGE_KEY));
+  const priceCurrency = byId('base-market-price-currency');
+  if (priceCurrency) priceCurrency.value = normalizeBaseMarketPriceCurrency(localStorage.getItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY));
 }
 
 function persistBaseMarketLimit() {
@@ -3200,8 +3254,39 @@ function persistBaseMarketMinIlvl(commit = false) {
   if (commit && input) input.value = value;
 }
 
+function persistBaseMarketPriceTrigger() {
+  const select = byId('base-market-price-trigger');
+  const trigger = normalizeBaseMarketPriceTrigger(select?.value);
+  if (trigger) {
+    localStorage.setItem(BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY, trigger);
+  } else {
+    localStorage.removeItem(BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY);
+  }
+  if (select) select.value = trigger;
+}
+
+function persistBaseMarketPriceValue(commit = false) {
+  const input = byId('base-market-price-value');
+  const value = normalizeBaseMarketPriceValue(input?.value);
+  if (value) {
+    localStorage.setItem(BASE_MARKET_PRICE_VALUE_STORAGE_KEY, value);
+  } else {
+    localStorage.removeItem(BASE_MARKET_PRICE_VALUE_STORAGE_KEY);
+  }
+  if (commit && input) input.value = value;
+}
+
+function persistBaseMarketPriceCurrency() {
+  const select = byId('base-market-price-currency');
+  const currency = normalizeBaseMarketPriceCurrency(select?.value);
+  localStorage.setItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY, currency);
+  if (select) select.value = currency;
+}
+
 function baseMarketRequestParams(forceRefresh = false) {
   const minIlvl = Number(byId('base-market-min-ilvl')?.value || 0);
+  const priceTrigger = normalizeBaseMarketPriceTrigger(byId('base-market-price-trigger')?.value);
+  const priceValue = normalizeBaseMarketPriceValue(byId('base-market-price-value')?.value);
   const params = {
     league: byId('live-league')?.value || '',
     target: selectedTarget(),
@@ -3211,6 +3296,11 @@ function baseMarketRequestParams(forceRefresh = false) {
     sample_limit: '100',
   };
   if (Number.isFinite(minIlvl) && minIlvl > 0) params.min_ilvl = String(Math.round(minIlvl));
+  if (priceTrigger && priceValue) {
+    params.price_trigger = priceTrigger;
+    params.price_value = priceValue;
+    params.price_currency = normalizeBaseMarketPriceCurrency(byId('base-market-price-currency')?.value);
+  }
   if (forceRefresh) params.refresh = 'true';
   return params;
 }
@@ -6566,6 +6656,7 @@ async function initLiveTrade() {
     fillSelect(leagueSelect, state.leagues.map(league => ({ id: league.id, text: league.text })), state.leagues[0]?.id);
     fillStatusSelect();
     fillTargetCurrencySelect();
+    fillBaseMarketPriceCurrencySelect();
     fillAutoRefreshSelect();
     fillChartDaysSelects();
     fillDetailTargetSelect();
@@ -6678,10 +6769,11 @@ async function initLiveTrade() {
       if (state.baseMarketFilterTimer) window.clearTimeout(state.baseMarketFilterTimer);
       state.baseMarketFilterTimer = window.setTimeout(() => refreshBaseMarket(false), 350);
     });
-    ['base-market-query', 'base-market-min-ilvl'].forEach(id => {
+    ['base-market-query', 'base-market-min-ilvl', 'base-market-price-value'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
         if (event.key === 'Enter') {
           if (id === 'base-market-min-ilvl') persistBaseMarketMinIlvl(true);
+          if (id === 'base-market-price-value') persistBaseMarketPriceValue(true);
           refreshBaseMarket(true);
         }
       });
@@ -6693,6 +6785,23 @@ async function initLiveTrade() {
     });
     byId('base-market-limit')?.addEventListener('change', () => {
       persistBaseMarketLimit();
+      refreshBaseMarket(false);
+    });
+    byId('base-market-price-trigger')?.addEventListener('change', () => {
+      persistBaseMarketPriceTrigger();
+      refreshBaseMarket(false);
+    });
+    byId('base-market-price-value')?.addEventListener('input', () => {
+      persistBaseMarketPriceValue(false);
+      if (state.baseMarketFilterTimer) window.clearTimeout(state.baseMarketFilterTimer);
+      state.baseMarketFilterTimer = window.setTimeout(() => refreshBaseMarket(false), 350);
+    });
+    byId('base-market-price-value')?.addEventListener('change', () => {
+      persistBaseMarketPriceValue(true);
+      refreshBaseMarket(false);
+    });
+    byId('base-market-price-currency')?.addEventListener('change', () => {
+      persistBaseMarketPriceCurrency();
       refreshBaseMarket(false);
     });
     byId('detail-target-currency').addEventListener('change', event => {

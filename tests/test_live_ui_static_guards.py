@@ -84,11 +84,25 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert 'value="0" data-i18n="baseMarketLimitAll" selected' in template
     assert 'value="40"' in template
     assert 'value="10"' in template
+    assert 'id="base-market-price-trigger"' in template
+    assert 'value="above" data-i18n="baseMarketPriceAbove"' in template
+    assert 'value="below" data-i18n="baseMarketPriceBelow"' in template
+    assert 'id="base-market-price-value"' in template
+    assert 'id="base-market-price-currency"' in template
     assert "BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit'" in app_js
     assert "BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl'" in app_js
+    assert "BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger'" in app_js
+    assert "BASE_MARKET_PRICE_VALUE_STORAGE_KEY = 'poe2-base-market-price-value'" in app_js
+    assert "BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY = 'poe2-base-market-price-currency'" in app_js
     assert "limit: normalizeBaseMarketLimit(byId('base-market-limit')?.value)" in app_js
+    assert "params.price_trigger = priceTrigger" in app_js
+    assert "params.price_value = priceValue" in app_js
+    assert "params.price_currency = normalizeBaseMarketPriceCurrency(byId('base-market-price-currency')?.value)" in app_js
     assert "persistBaseMarketMinIlvl(true)" in app_js
     assert "persistBaseMarketLimit();" in app_js
+    assert "persistBaseMarketPriceTrigger();" in app_js
+    assert "persistBaseMarketPriceValue(true)" in app_js
+    assert "persistBaseMarketPriceCurrency();" in app_js
     assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js
     assert "baseMarketRefreshJob" in app_js
@@ -105,6 +119,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "baseMarketRefreshRateLimited: 'trade2 ограничил сбор основ'" in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
     assert "baseMarketLimitAll: 'Все'" in i18n_js
+    assert "baseMarketPriceAbove: 'Больше'" in i18n_js
+    assert "baseMarketPriceBelow: 'Меньше'" in i18n_js
     assert "refineBaseMarket: 'Уточнить рынок этой основы'" in i18n_js
     assert "if (event.key === 'Enter') {" in app_js
     assert "base-market-title-line" in app_js

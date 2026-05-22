@@ -1599,7 +1599,8 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
 
     assert job["status"] == "rate_limited"
     assert job["retry_after"] == 60
-    assert result["rows"][0]["error"] == "Client error '429 Too Many Requests'"
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
     assert not trade2.ITEM_BASE_MARKET_CACHE
 
 
@@ -1687,9 +1688,9 @@ def test_item_base_market_fetch_rate_limit_preserves_search_total(monkeypatch):
     assert job["status"] == "rate_limited"
     assert job["retry_after"] == 299
     assert job["total"] == 3423
-    assert result["rows"][0]["query_id"] == "search-id"
-    assert result["rows"][0]["total"] == 3423
-    assert result["rows"][0]["error"] == "trade2 fetch rate limited; retry after 299s"
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
+    assert not trade2.ITEM_BASE_MARKET_CACHE
 
 
 def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):
@@ -1786,6 +1787,82 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
 
     assert result["matched_total"] == 3
     assert [row["id"] for row in result["rows"]] == ["base:test-0", "base:test-1", "base:test-2"]
+
+
+def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "source": "trade2/search+fetch:catalog-scan",
+            "rows": [
+                {"id": "base:cheap", "text_ru": "Дешевая основа", "low": 4.0},
+                {"id": "base:expensive", "text_ru": "Дорогая основа", "low": 12.0},
+                {"id": "base:empty", "text_ru": "Пустая основа"},
+            ],
+        },
+    }
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="",
+            limit=0,
+            force_refresh=False,
+            price_trigger="below",
+            price_value=10,
+            price_currency="exalted",
+        )
+    )
+
+    assert result["matched_total"] == 1
+    assert result["priced_total"] == 1
+    assert [row["id"] for row in result["rows"]] == ["base:cheap"]
+    assert result["price_filter"]["target_value"] == 10
+
+
+def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "source": "trade2/search+fetch:catalog-scan",
+            "rows": [
+                {"id": "base:below", "text_ru": "Ниже порога", "low": 9.0},
+                {"id": "base:above", "text_ru": "Выше порога", "low": 15.0},
+            ],
+        },
+    }
+
+    async def fake_currency_rates_for_target(*args, **kwargs):
+        return {"rows": []}, {"exalted": 1.0, "divine": 10.0}
+
+    monkeypatch.setattr(trade2, "_currency_rates_for_target", fake_currency_rates_for_target)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="",
+            limit=0,
+            force_refresh=False,
+            price_trigger="above",
+            price_value=1,
+            price_currency="divine",
+        )
+    )
+
+    assert result["matched_total"] == 1
+    assert [row["id"] for row in result["rows"]] == ["base:above"]
+    assert result["price_filter"]["target_value"] == 10
 
 
 def test_item_base_market_hides_empty_catalog_rows(monkeypatch):

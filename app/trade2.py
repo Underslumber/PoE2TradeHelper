@@ -1596,8 +1596,6 @@ def _sort_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _item_base_market_row_has_evidence(row: dict[str, Any]) -> bool:
-    if row.get("error"):
-        return True
     if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None:
         return True
     if row.get("best_native") or row.get("optimal_native") or row.get("sample_lots"):
@@ -1611,6 +1609,104 @@ def _item_base_market_row_has_evidence(row: dict[str, Any]) -> bool:
 
 def _visible_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in rows if _item_base_market_row_has_evidence(row)]
+
+
+def _normalize_item_base_market_price_trigger(value: Any) -> str:
+    trigger = str(value or "").strip().lower()
+    return trigger if trigger in {"above", "below"} else ""
+
+
+def _item_base_market_row_target_price(row: dict[str, Any]) -> float | None:
+    for key in ("low", "best", "median"):
+        value = _to_float(row.get(key))
+        if value is not None and value > 0:
+            return value
+    native = row.get("best_native")
+    if isinstance(native, dict):
+        value = _to_float(native.get("price_target"))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+async def _item_base_market_price_filter(
+    *,
+    league: str,
+    target: str,
+    price_trigger: str = "",
+    price_value: float | None = None,
+    price_currency: str = "",
+) -> dict[str, Any]:
+    trigger = _normalize_item_base_market_price_trigger(price_trigger)
+    value = _to_float(price_value)
+    if not trigger or value is None or value <= 0:
+        return {"enabled": False}
+
+    target_id = _currency_id(target) or str(target or "").strip()
+    currency_id = _currency_id(price_currency) or target_id
+    target_value = value
+    error = ""
+    if currency_id != target_id:
+        _, rates = await _currency_rates_for_target(league, target, status="any")
+        rate = _to_float(rates.get(currency_id) or rates.get(str(price_currency or "")))
+        if rate is None or rate <= 0:
+            target_value = None
+            error = f"Нет сохраненного курса для {currency_id} -> {target_id}"
+        else:
+            target_value = value * rate
+
+    return {
+        "enabled": True,
+        "trigger": trigger,
+        "value": value,
+        "currency": currency_id,
+        "target": target_id,
+        "target_value": target_value,
+        "error": error,
+    }
+
+
+def _filter_item_base_market_rows_by_price(
+    rows: list[dict[str, Any]],
+    price_filter: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not price_filter.get("enabled"):
+        return list(rows)
+    threshold = _to_float(price_filter.get("target_value"))
+    if threshold is None or threshold <= 0:
+        return []
+    trigger = _normalize_item_base_market_price_trigger(price_filter.get("trigger"))
+    if not trigger:
+        return list(rows)
+
+    filtered = []
+    for row in rows:
+        price = _item_base_market_row_target_price(row)
+        if price is None:
+            continue
+        if trigger == "below" and price <= threshold:
+            filtered.append(row)
+        elif trigger == "above" and price >= threshold:
+            filtered.append(row)
+    return filtered
+
+
+def _apply_item_base_market_price_filter(
+    payload: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    limit: int,
+    price_filter: dict[str, Any],
+) -> dict[str, Any]:
+    rows = _filter_item_base_market_rows_by_price(rows, price_filter)
+    payload["rows"] = rows[:limit]
+    payload["matched_total"] = len(rows)
+    payload["priced_total"] = sum(1 for row in rows if _item_base_market_row_target_price(row) is not None)
+    if price_filter.get("enabled"):
+        payload["price_filter"] = price_filter
+    else:
+        payload.pop("price_filter", None)
+    return payload
 
 
 def _merge_item_base_market_rows(
@@ -2260,12 +2356,7 @@ async def run_item_base_market_refresh_job(
         )
         result["query_ids"] = exact_query_ids
         job["result"] = result
-        has_collected_rows = any(
-            row.get("query_id")
-            or row.get("total") is not None
-            or int(row.get("fetched_count") or row.get("raw_count") or 0) > 0
-            for row in combined_rows
-        )
+        has_collected_rows = any(_item_base_market_row_has_evidence(row) for row in combined_rows)
         if (not q or has_collected_rows) and not _item_base_market_payload_is_error_only(result):
             cache_created_ts = time.time()
             ITEM_BASE_MARKET_CACHE[_item_base_market_cache_key(league, target, status, q, ITEM_BASE_MARKET_MAX_BASES, min_ilvl)] = {
@@ -2454,11 +2545,21 @@ async def get_item_base_market(
     min_ilvl: int | None = None,
     force_refresh: bool = False,
     sample_limit: int | None = None,
+    price_trigger: str = "",
+    price_value: float | None = None,
+    price_currency: str = "",
 ) -> dict[str, Any]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
     min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+    price_filter = await _item_base_market_price_filter(
+        league=league,
+        target=target,
+        price_trigger=price_trigger,
+        price_value=price_value,
+        price_currency=price_currency,
+    )
     cache_key = _item_base_market_cache_key(league, target, status, q, limit, min_ilvl)
     canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
     exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, min_ilvl)
@@ -2472,8 +2573,7 @@ async def get_item_base_market(
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
                 rows = _visible_item_base_market_rows(rows)
-                payload["rows"] = rows[:limit]
-                payload["matched_total"] = len(rows)
+                _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 return payload
         job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit))
@@ -2482,8 +2582,7 @@ async def get_item_base_market(
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
                 rows = _visible_item_base_market_rows(rows)
-                result["rows"] = rows[:limit]
-                result["matched_total"] = len(rows)
+                _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
                 result["refresh_job"] = _item_base_market_job_view(job)
                 result["cached"] = False
                 return result
@@ -2493,7 +2592,7 @@ async def get_item_base_market(
                     catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
             except Exception:
                 catalog = {"bases": [_manual_item_base_market_base(q)], "source": "manual", "total": 1}
-            return _item_base_market_pending_result(
+            pending = _item_base_market_pending_result(
                 league=league,
                 target=target,
                 status=status,
@@ -2503,6 +2602,8 @@ async def get_item_base_market(
                 job=job,
                 catalog=catalog,
             )
+            rows = _visible_item_base_market_rows(pending.get("rows") or [])
+            return _apply_item_base_market_price_filter(pending, rows, limit=limit, price_filter=price_filter)
         cached = None
         if cache_key != canonical_cache_key:
             cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
@@ -2512,8 +2613,7 @@ async def get_item_base_market(
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
                 rows = _visible_item_base_market_rows(rows)
-                payload["rows"] = rows[:limit]
-                payload["matched_total"] = len(rows)
+                _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 return payload
         latest = None
@@ -2528,24 +2628,21 @@ async def get_item_base_market(
             rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
             rows = _visible_item_base_market_rows(rows)
-            priced_total = sum(1 for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None or row.get("best_native"))
-            return {
+            payload = {
                 **latest,
                 "schema_version": "poe2-item-base-market/v1",
                 "category": ITEM_BASE_MARKET_CATEGORY,
-                "rows": rows[:limit],
-                "matched_total": len(rows),
                 "catalog_total": catalog.get("total") or len(rows),
-                "priced_total": priced_total,
                 "basis": "stored clean normal bases, price chart uses low market",
                 "cached": True,
                 "stored": True,
             }
+            return _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
         catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
         if q and not catalog.get("bases"):
             catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
         rows = _sort_item_base_market_rows(_base_market_catalog_rows(catalog, min_ilvl=min_ilvl))
-        return _item_base_market_exact_result(
+        payload = _item_base_market_exact_result(
             league=league,
             target=target,
             status=status,
@@ -2559,6 +2656,8 @@ async def get_item_base_market(
             source="item-base-catalog",
             stored=True,
         )
+        visible_rows = _visible_item_base_market_rows(rows)
+        return _apply_item_base_market_price_filter(payload, visible_rows, limit=limit, price_filter=price_filter)
 
     job, coroutine = start_item_base_market_refresh_job(
         league=league,
@@ -2589,8 +2688,7 @@ async def get_item_base_market(
         result = await coroutine
     rows = _filter_item_base_market_rows(result.get("rows") or [], q)
     rows = _visible_item_base_market_rows(rows)
-    result["rows"] = rows[:limit]
-    result["matched_total"] = len(rows)
+    _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
     result["refresh_job"] = _item_base_market_job_view(job)
     return _cache_copy(result)
 
