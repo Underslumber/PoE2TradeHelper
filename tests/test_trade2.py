@@ -810,6 +810,148 @@ def test_item_base_catalog_snapshot_roundtrip(tmp_path):
     assert loaded["bases"][0]["type_ru"] == "Амулет с янтарём"
 
 
+def test_bundled_item_base_seed_is_built_from_pob_catalog():
+    payload = json.loads(trade2.ITEM_BASE_BUNDLED_CATALOG_PATH.read_text(encoding="utf-8"))
+    bases = {base["type"]: base for base in payload["bases"]}
+
+    assert payload["source"] == "PathOfBuilding-PoE2/Data/Bases+poe2db/ru"
+    assert payload["total"] == len(payload["bases"]) >= 900
+    assert bases["Cutlass"]["type_ru"] == "Абордажная сабля"
+    assert bases["Cutlass"]["base_class_label_ru"] == "Мечи"
+    assert bases["Rawhide Boots"]["type_ru"] == "Сыромятные сапоги"
+    assert bases["Rawhide Boots"]["base_class_label_ru"] == "Обувь"
+    assert bases["Shortbow"]["type_ru"] == "Короткий лук"
+    assert bases["Crude Claw"]["type_ru"] == "Грубый кастет"
+    assert "Shrine Sceptre (Purity of Fire)" not in bases
+    assert "Golden Hoop" not in bases
+    assert "Fishing Rod" not in bases
+    assert "Ruby" not in bases
+    assert all(base["type_ru"] and not base["type_ru"].isascii() for base in payload["bases"])
+
+
+def test_item_base_catalog_prefers_pob_seed_over_old_stored_trade2_catalog(tmp_path, monkeypatch):
+    old_runtime_path = tmp_path / "item_base_catalog.json"
+    old_runtime_path.write_text(
+        json.dumps(
+            {
+                "schema_version": trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION,
+                "created_ts": 100.0,
+                "source": "trade2/data/items",
+                "total": 1,
+                "bases": [
+                    {
+                        "id": "base:rawhide-boots",
+                        "type": "Rawhide Boots",
+                        "type_ru": "Золочёное облачение",
+                        "query_type": "Золочёное облачение",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    bundled_path = tmp_path / "item_base_catalog_seed.json"
+    bundled_path.write_text(
+        json.dumps(
+            {
+                "schema_version": trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION,
+                "created_ts": 200.0,
+                "source": "PathOfBuilding-PoE2/Data/Bases+poe2db/ru",
+                "total": 1,
+                "bases": [
+                    {
+                        "id": "base:rawhide-boots",
+                        "type": "Rawhide Boots",
+                        "type_ru": "Сыромятные сапоги",
+                        "query_type": "Сыромятные сапоги",
+                        "category": "armour",
+                        "category_label": "Armour",
+                        "category_label_ru": "Броня",
+                        "icon_key": "boots",
+                        "image": "/icons/item-bases/generated/boots.svg",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    async def unexpected_fetch(_locale="en"):
+        raise AssertionError("trade2 catalog should not be fetched when PoB seed exists")
+
+    monkeypatch.setattr(trade2, "_fetch_item_base_catalog_payload", unexpected_fetch)
+    monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", old_runtime_path)
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", bundled_path)
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "storage-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})
+
+    result = asyncio.run(trade2.get_item_base_catalog())
+
+    assert result["source"] == "bundled:item_base_catalog_seed"
+    assert result["total"] == 1
+    assert result["bases"][0]["type_ru"] == "Сыромятные сапоги"
+
+
+def test_item_base_catalog_filters_by_pob_base_class(tmp_path, monkeypatch):
+    catalog_path = tmp_path / "item_base_catalog.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "schema_version": trade2.ITEM_BASE_CATALOG_SCHEMA_VERSION,
+                "created_ts": 200.0,
+                "source": "PathOfBuilding-PoE2/Data/Bases+poe2db/ru",
+                "total": 2,
+                "bases": [
+                    {
+                        "id": "base:scimitar",
+                        "type": "Scimitar",
+                        "type_ru": "Скимитар",
+                        "query_type": "Скимитар",
+                        "category": "weapon",
+                        "category_label": "Weapons",
+                        "category_label_ru": "Оружие",
+                        "base_class": "sword",
+                        "base_class_label": "Swords",
+                        "base_class_label_ru": "Мечи",
+                        "icon_key": "base",
+                        "image": "/icons/item-bases/generated/base.svg",
+                    },
+                    {
+                        "id": "base:hammer",
+                        "type": "Hammer",
+                        "type_ru": "Молот",
+                        "query_type": "Молот",
+                        "category": "weapon",
+                        "category_label": "Weapons",
+                        "category_label_ru": "Оружие",
+                        "base_class": "mace",
+                        "base_class_label": "Maces",
+                        "base_class_label_ru": "Булавы",
+                        "icon_key": "base",
+                        "image": "/icons/item-bases/generated/base.svg",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(trade2, "ITEM_BASE_CATALOG_PATH", catalog_path)
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_CATALOG_PATH", tmp_path / "missing_seed.json")
+    monkeypatch.setattr(trade2, "ITEM_BASE_ICON_DIR", tmp_path / "storage-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASE_BUNDLED_ICON_DIR", tmp_path / "bundled-icons")
+    monkeypatch.setattr(trade2, "ITEM_BASES_CACHE", {"created_ts": 0.0, "data": None, "errors": []})
+
+    result = asyncio.run(trade2.get_item_base_catalog(q="меч"))
+
+    assert result["matched_total"] == 1
+    assert result["bases"][0]["type_ru"] == "Скимитар"
+    assert result["bases"][0]["base_class_label_ru"] == "Мечи"
+
+
 def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, monkeypatch):
     async def fake_fetch(_locale="en"):
         raise RuntimeError("trade2 item catalog rate limited")
@@ -861,7 +1003,7 @@ def test_item_base_catalog_uses_bundled_seed_when_trade2_is_limited(tmp_path, mo
     assert result["bases"][0]["image"] == "/static/item-base-icons/amber-amulet.png"
 
 
-def test_item_base_catalog_uses_bundled_seed_before_poe2db_when_trade2_is_limited(tmp_path, monkeypatch):
+def test_item_base_catalog_uses_bundled_seed_without_runtime_poe2db_merge(tmp_path, monkeypatch):
     async def fake_fetch(_locale="en"):
         raise RuntimeError("trade2 item catalog rate limited")
 
@@ -939,10 +1081,10 @@ def test_item_base_catalog_uses_bundled_seed_before_poe2db_when_trade2_is_limite
 
     result = asyncio.run(trade2.get_item_base_catalog())
 
-    assert result["source"] == "bundled:item_base_catalog_seed+poe2db"
+    assert result["source"] == "bundled:item_base_catalog_seed"
     assert result["total"] == 1
     assert result["bases"][0]["type_ru"] == "Амулет с янтарём"
-    assert result["bases"][0]["image"] == "https://cdn.poe2db.tw/image/amber.webp"
+    assert result["bases"][0]["image"] == "/icons/item-bases/generated/amulet.svg"
 
 
 def test_item_base_catalog_uses_poe2db_when_trade2_is_limited(tmp_path, monkeypatch):
@@ -1389,7 +1531,8 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
     assert searched_types[0] == "Тестовая основа 0"
     assert searched_types[-1] == f"Тестовая основа {batch_size - 1}"
     assert result["source"] == "trade2/search+fetch:rough"
-    assert result["matched_total"] == base_count
+    assert result["matched_total"] == 1
+    assert result["catalog_total"] == base_count
     assert result["priced_total"] == 1
     assert len(result["rows"]) == 1
     assert result["refresh_job"]["processed_count"] == batch_size
@@ -1410,7 +1553,8 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
     )
 
     assert searched_types[batch_size] == f"Тестовая основа {batch_size}"
-    assert result["matched_total"] == base_count
+    assert result["matched_total"] == 2
+    assert result["catalog_total"] == base_count
     assert result["priced_total"] == 2
 
 
@@ -1590,8 +1734,162 @@ def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):
 
     assert result["stored"] is True
     assert result["source"] == "item-base-catalog"
-    assert result["rows"][0]["text_ru"] == "Арбалет"
-    assert result["rows"][0]["low"] is None
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
+    assert result["catalog_total"] == 1
+
+
+def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    bases = [
+        {
+            "id": f"base:test-{index}",
+            "type": f"Test Base {index}",
+            "type_ru": f"Тестовая основа {index}",
+            "query_type": f"Тестовая основа {index}",
+        }
+        for index in range(3)
+    ]
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": len(bases),
+            "bases": bases,
+            "errors": [],
+        }
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "source": "trade2/search+fetch:rough",
+            "rows": [
+                {"id": f"base:test-{index}", "text_ru": f"Тестовая основа {index}", "low": float(index + 1)}
+                for index in range(3)
+            ],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=0,
+            force_refresh=False,
+        )
+    )
+
+    assert result["matched_total"] == 3
+    assert [row["id"] for row in result["rows"]] == ["base:test-0", "base:test-1", "base:test-2"]
+
+
+def test_item_base_market_hides_empty_catalog_rows(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": 2,
+            "bases": [
+                {
+                    "id": "base:future-sword",
+                    "type": "Future Sword",
+                    "type_ru": "Будущий меч",
+                    "query_type": "Будущий меч",
+                },
+                {
+                    "id": "base:future-axe",
+                    "type": "Future Axe",
+                    "type_ru": "Будущий топор",
+                    "query_type": "Будущий топор",
+                },
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=0,
+            force_refresh=False,
+        )
+    )
+
+    assert result["catalog_total"] == 2
+    assert result["matched_total"] == 0
+    assert result["rows"] == []
+
+
+def test_item_base_market_exact_refresh_hides_zero_result_base(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    async def fake_catalog(q="", limit=500):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:future-sword",
+                    "type": "Future Sword",
+                    "type_ru": "Будущий меч",
+                    "query_type": "Будущий меч",
+                }
+            ],
+            "errors": [],
+        }
+
+    async def fake_search(league, query, sort=None):
+        return {"id": "search-id", "total": 0, "result": []}
+
+    async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
+        row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
+        return {
+            **row,
+            **trade2._base_market_stats([], 0),
+            "query_id": market_search["id"],
+            "total": 0,
+            "total_scope": "exact",
+            "fetched_count": 0,
+            "sample_lots": [],
+        }
+
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "_post_search", fake_search)
+    monkeypatch.setattr(trade2, "_fetch_item_base_market_row_from_search", fake_fetch_from_search)
+    monkeypatch.setattr(
+        trade2,
+        "_currency_rates_for_target",
+        lambda *args, **kwargs: asyncio.sleep(0, result=({"rows": []}, {"exalted": 1.0})),
+    )
+    monkeypatch.setattr(trade2, "DEFAULT_RATE_LIMIT_DELAY", 0)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="Будущий меч",
+            limit=0,
+            force_refresh=True,
+        )
+    )
+
+    assert result["catalog_total"] == 1
+    assert result["matched_total"] == 0
+    assert result["rows"] == []
 
 
 def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch):
@@ -1636,8 +1934,8 @@ def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch
 
     assert result["stored"] is True
     assert result["source"] == "item-base-catalog"
-    assert result["rows"][0]["text_ru"] == "Арбалет"
-    assert result["rows"][0]["low"] is None
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
 
 
 def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
@@ -1721,9 +2019,9 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
 
     assert history_calls == {"count": 0}
     assert result["source"] == "item-base-catalog"
-    assert result["rows"][0]["text_ru"] == "Амулет с янтарём"
-    assert result["rows"][0]["min_ilvl"] == 82
-    assert result["rows"][0]["low"] is None
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
+    assert result["catalog_total"] == 1
 
 
 def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypatch):

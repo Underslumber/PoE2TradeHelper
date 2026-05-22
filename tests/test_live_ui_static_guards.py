@@ -81,6 +81,15 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "data-base-refine" in app_js
     assert "status: 'securable'" in app_js
     assert "sample_limit: '100'" in app_js
+    assert 'value="0" data-i18n="baseMarketLimitAll" selected' in template
+    assert 'value="40"' in template
+    assert 'value="10"' in template
+    assert "BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit'" in app_js
+    assert "BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl'" in app_js
+    assert "limit: normalizeBaseMarketLimit(byId('base-market-limit')?.value)" in app_js
+    assert "persistBaseMarketMinIlvl(true)" in app_js
+    assert "persistBaseMarketLimit();" in app_js
+    assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js
     assert "baseMarketRefreshJob" in app_js
     assert "baseMarketSort: {" in app_js
@@ -95,8 +104,9 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "baseMarketRefreshRunning: 'сбор основ идет в фоне'" in i18n_js
     assert "baseMarketRefreshRateLimited: 'trade2 ограничил сбор основ'" in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
+    assert "baseMarketLimitAll: 'Все'" in i18n_js
     assert "refineBaseMarket: 'Уточнить рынок этой основы'" in i18n_js
-    assert "if (event.key === 'Enter') refreshBaseMarket(true);" in app_js
+    assert "if (event.key === 'Enter') {" in app_js
     assert "base-market-title-line" in app_js
     assert "if (state.mainView === 'lots') {\n    renderLotSubtabs();" in app_js
     assert "state.lotSubtab === 'bases'" in app_js

@@ -72,6 +72,9 @@ const i18n = window.POE2_I18N || { ru: {}, en: {} };
 const HISTORY_SERIES_LIMIT = 1500;
 const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
 const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
+const BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit';
+const BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl';
+const BASE_MARKET_LIMIT_VALUES = new Set(['0', '40', '10']);
 
 function loadJsonState(key, fallback) {
   try {
@@ -3159,6 +3162,44 @@ function switchLotSubtab(tab) {
   }
 }
 
+function normalizeBaseMarketLimit(value) {
+  const normalized = String(value ?? '').trim();
+  return BASE_MARKET_LIMIT_VALUES.has(normalized) ? normalized : '0';
+}
+
+function normalizeBaseMarketMinIlvl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const number = Number(raw);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return String(Math.max(1, Math.min(100, Math.round(number))));
+}
+
+function restoreBaseMarketFilters() {
+  const limit = byId('base-market-limit');
+  if (limit) limit.value = normalizeBaseMarketLimit(localStorage.getItem(BASE_MARKET_LIMIT_STORAGE_KEY));
+  const minIlvl = byId('base-market-min-ilvl');
+  if (minIlvl) minIlvl.value = normalizeBaseMarketMinIlvl(localStorage.getItem(BASE_MARKET_MIN_ILVL_STORAGE_KEY));
+}
+
+function persistBaseMarketLimit() {
+  const limit = normalizeBaseMarketLimit(byId('base-market-limit')?.value);
+  localStorage.setItem(BASE_MARKET_LIMIT_STORAGE_KEY, limit);
+  const select = byId('base-market-limit');
+  if (select) select.value = limit;
+}
+
+function persistBaseMarketMinIlvl(commit = false) {
+  const input = byId('base-market-min-ilvl');
+  const value = normalizeBaseMarketMinIlvl(input?.value);
+  if (value) {
+    localStorage.setItem(BASE_MARKET_MIN_ILVL_STORAGE_KEY, value);
+  } else {
+    localStorage.removeItem(BASE_MARKET_MIN_ILVL_STORAGE_KEY);
+  }
+  if (commit && input) input.value = value;
+}
+
 function baseMarketRequestParams(forceRefresh = false) {
   const minIlvl = Number(byId('base-market-min-ilvl')?.value || 0);
   const params = {
@@ -3166,7 +3207,7 @@ function baseMarketRequestParams(forceRefresh = false) {
     target: selectedTarget(),
     status: 'securable',
     q: (byId('base-market-query')?.value || '').trim(),
-    limit: byId('base-market-limit')?.value || '40',
+    limit: normalizeBaseMarketLimit(byId('base-market-limit')?.value),
     sample_limit: '100',
   };
   if (Number.isFinite(minIlvl) && minIlvl > 0) params.min_ilvl = String(Math.round(minIlvl));
@@ -3336,8 +3377,8 @@ function baseMarketRowName(row) {
 
 function baseMarketGroupLabel(row) {
   return state.lang === 'ru'
-    ? (row?.category_label_ru || t('baseMarketUnknownGroup'))
-    : (row?.category_label || row?.category_label_ru || t('baseMarketUnknownGroup'));
+    ? (row?.base_class_label_ru || row?.category_label_ru || t('baseMarketUnknownGroup'))
+    : (row?.base_class_label || row?.category_label || row?.category_label_ru || t('baseMarketUnknownGroup'));
 }
 
 function baseMarketIconMarkup(row, extraClass = '') {
@@ -6639,10 +6680,21 @@ async function initLiveTrade() {
     });
     ['base-market-query', 'base-market-min-ilvl'].forEach(id => {
       byId(id)?.addEventListener('keydown', event => {
-        if (event.key === 'Enter') refreshBaseMarket(true);
+        if (event.key === 'Enter') {
+          if (id === 'base-market-min-ilvl') persistBaseMarketMinIlvl(true);
+          refreshBaseMarket(true);
+        }
       });
     });
-    byId('base-market-limit')?.addEventListener('change', () => refreshBaseMarket(false));
+    byId('base-market-min-ilvl')?.addEventListener('input', () => persistBaseMarketMinIlvl(false));
+    byId('base-market-min-ilvl')?.addEventListener('change', () => {
+      persistBaseMarketMinIlvl(true);
+      refreshBaseMarket(false);
+    });
+    byId('base-market-limit')?.addEventListener('change', () => {
+      persistBaseMarketLimit();
+      refreshBaseMarket(false);
+    });
     byId('detail-target-currency').addEventListener('change', event => {
       state.detailTarget = event.target.value;
       renderSelectedItemDetail();
@@ -6742,6 +6794,7 @@ async function initLiveTrade() {
         renderMarket();
       });
     });
+    restoreBaseMarketFilters();
     applyLanguage();
     if (leaguesLoadFailed || staticLoadFailed) {
       setLiveError(t('staticFallbackNotice'));

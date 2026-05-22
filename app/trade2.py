@@ -68,7 +68,7 @@ ITEM_BASE_MARKET_JOB_TTL = 3600
 ITEM_BASE_MARKET_STALE_JOB_SECONDS = 120
 ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
 ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
-ITEM_BASE_MARKET_MAX_BASES = 80
+ITEM_BASE_MARKET_MAX_BASES = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
@@ -911,7 +911,15 @@ def load_bundled_item_base_catalog_snapshot(path: Any = None) -> dict[str, Any] 
 
 def _is_trusted_item_base_catalog_source(source: Any) -> bool:
     value = str(source or "")
-    return "trade2/data/items" in value or value.startswith("bundled:item_base_catalog_seed")
+    return (
+        "trade2/data/items" in value
+        or "PathOfBuilding-PoE2/Data/Bases" in value
+        or value.startswith("bundled:item_base_catalog_seed")
+    )
+
+
+def _is_pob_item_base_catalog_source(source: Any) -> bool:
+    return "PathOfBuilding-PoE2/Data/Bases" in str(source or "")
 
 
 def _entry_text(entry: dict[str, Any]) -> str:
@@ -1187,56 +1195,62 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                 created_ts = float(ITEM_BASES_CACHE.get("created_ts") or time.time())
             else:
                 errors = []
-                en_payload = None
-                ru_payload = None
-                for locale in ("en", "ru"):
-                    try:
-                        payload = await _fetch_item_base_catalog_payload(locale)
-                        if locale == "en":
-                            en_payload = payload
-                        else:
-                            ru_payload = payload
-                    except Exception as exc:
-                        errors.append({"source": f"trade2/data/items:{locale}", "error": str(exc)})
-                bases = normalize_item_base_catalog(en_payload, ru_payload)
-                source = "trade2/data/items"
-                try:
-                    poe2db_bases = await _fetch_poe2db_item_base_catalog()
-                except Exception as exc:
-                    poe2db_bases = []
-                    errors.append({"source": "poe2db/ru/Items", "error": str(exc)})
-                if bases:
-                    if ru_payload and poe2db_bases:
-                        bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
-                        source = "trade2/data/items+poe2db"
+                catalog_created_ts = None
+                poe2db_bases = []
+                stored = load_item_base_catalog_snapshot()
+                bundled = load_bundled_item_base_catalog_snapshot()
+                if stored and _is_pob_item_base_catalog_source(stored.get("source")):
+                    bases = list(stored.get("bases") or [])
+                    source = str(stored.get("source") or "stored:item_base_catalog")
+                    errors = list(stored.get("errors") or [])
+                    catalog_created_ts = _to_float(stored.get("created_ts"))
+                elif bundled:
+                    bases = list(bundled.get("bases") or [])
+                    source = str(bundled.get("source") or "bundled:item_base_catalog_seed")
+                    errors = list(bundled.get("errors") or [])
+                    catalog_created_ts = _to_float(bundled.get("created_ts"))
                 else:
-                    stored = load_item_base_catalog_snapshot()
-                    if stored and _is_trusted_item_base_catalog_source(stored.get("source")):
-                        bases = list(stored.get("bases") or [])
-                        if poe2db_bases:
+                    en_payload = None
+                    ru_payload = None
+                    for locale in ("en", "ru"):
+                        try:
+                            payload = await _fetch_item_base_catalog_payload(locale)
+                            if locale == "en":
+                                en_payload = payload
+                            else:
+                                ru_payload = payload
+                        except Exception as exc:
+                            errors.append({"source": f"trade2/data/items:{locale}", "error": str(exc)})
+                    bases = normalize_item_base_catalog(en_payload, ru_payload)
+                    source = "trade2/data/items"
+                    try:
+                        poe2db_bases = await _fetch_poe2db_item_base_catalog()
+                    except Exception as exc:
+                        poe2db_bases = []
+                        errors.append({"source": "poe2db/ru/Items", "error": str(exc)})
+                    if bases:
+                        if ru_payload and poe2db_bases:
                             bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
-                            source = "stored:item_base_catalog+poe2db"
-                        else:
-                            source = "stored:item_base_catalog"
-                        errors = [*errors, *list(stored.get("errors") or [])]
-                        save_item_base_catalog_snapshot(
-                            {
-                                "created_ts": stored.get("created_ts") or time.time(),
-                                "source": stored.get("source") or source,
-                                "total": stored.get("total") or len(bases),
-                                "bases": bases,
-                                "errors": errors,
-                            }
-                        )
+                            source = "trade2/data/items+poe2db"
                     else:
-                        bundled = load_bundled_item_base_catalog_snapshot()
-                        if bundled:
-                            bases = list(bundled.get("bases") or [])
+                        stored = load_item_base_catalog_snapshot()
+                        if stored and _is_trusted_item_base_catalog_source(stored.get("source")):
+                            bases = list(stored.get("bases") or [])
                             if poe2db_bases:
                                 bases = _merge_poe2db_item_base_catalog(bases, poe2db_bases)
-                                source = "bundled:item_base_catalog_seed+poe2db"
+                                source = "stored:item_base_catalog+poe2db"
                             else:
-                                source = "bundled:item_base_catalog_seed"
+                                source = "stored:item_base_catalog"
+                            errors = [*errors, *list(stored.get("errors") or [])]
+                            save_item_base_catalog_snapshot(
+                                {
+                                    "created_ts": stored.get("created_ts") or time.time(),
+                                    "source": stored.get("source") or source,
+                                    "total": stored.get("total") or len(bases),
+                                    "bases": bases,
+                                    "errors": errors,
+                                }
+                            )
                         elif poe2db_bases:
                             bases = list(poe2db_bases)
                             source = "poe2db/ru/Items"
@@ -1248,7 +1262,7 @@ async def get_item_base_catalog(q: str = "", limit: int = 500) -> dict[str, Any]
                     bases = await _cache_item_base_catalog_icons(bases)
                 else:
                     bases = _ensure_item_base_catalog_icons(bases)
-                created_ts = time.time()
+                created_ts = catalog_created_ts or time.time()
                 ITEM_BASES_CACHE["data"] = bases
                 ITEM_BASES_CACHE["errors"] = errors
                 ITEM_BASES_CACHE["source"] = source
@@ -1284,7 +1298,17 @@ def _filter_item_bases(bases: list[dict[str, Any]], q: str) -> list[dict[str, An
         for base in bases
         if q in " ".join(
             str(base.get(key) or "")
-            for key in ("type", "type_ru", "query_type", "category", "category_label", "category_label_ru")
+            for key in (
+                "type",
+                "type_ru",
+                "query_type",
+                "category",
+                "category_label",
+                "category_label_ru",
+                "base_class",
+                "base_class_label",
+                "base_class_label_ru",
+            )
         ).lower()
     ]
 
@@ -1490,6 +1514,9 @@ def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None
         "category": base.get("category") or "",
         "category_label": base.get("category_label") or "",
         "category_label_ru": base.get("category_label_ru") or _item_base_category_ru(str(base.get("category") or ""), str(base.get("category_label") or "")),
+        "base_class": base.get("base_class") or "",
+        "base_class_label": base.get("base_class_label") or "",
+        "base_class_label_ru": base.get("base_class_label_ru") or "",
         "icon_key": icon_key,
         "image": base.get("image") or _item_base_generated_icon_url(str(icon_key)),
         "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
@@ -1568,6 +1595,24 @@ def _sort_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
     return priced_rows + unpriced_rows
 
 
+def _item_base_market_row_has_evidence(row: dict[str, Any]) -> bool:
+    if row.get("error"):
+        return True
+    if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None:
+        return True
+    if row.get("best_native") or row.get("optimal_native") or row.get("sample_lots"):
+        return True
+    for key in ("count", "clean_count", "offers", "volume"):
+        value = _to_float(row.get(key))
+        if value is not None and value > 0:
+            return True
+    return False
+
+
+def _visible_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if _item_base_market_row_has_evidence(row)]
+
+
 def _merge_item_base_market_rows(
     catalog: dict[str, Any],
     market_rows: list[dict[str, Any]],
@@ -1624,6 +1669,12 @@ def _bounded_item_base_sample_limit(sample_limit: int | None = None) -> int:
 def _item_base_fetch_limit(fetch_limit: int | None = None) -> int:
     value = fetch_limit if isinstance(fetch_limit, int) and fetch_limit > 0 else ITEM_BASE_MARKET_DEFAULT_SAMPLE_LIMIT
     return max(1, min(value, ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT))
+
+
+def _bounded_item_base_market_limit(limit: int | None = None) -> int:
+    if not isinstance(limit, int) or limit <= 0:
+        return ITEM_BASE_MARKET_MAX_BASES
+    return max(1, min(limit, ITEM_BASE_MARKET_MAX_BASES))
 
 
 def _item_base_market_cache_key(
@@ -2026,8 +2077,9 @@ def _item_base_market_exact_result(
     source: str = "trade2/search+fetch:exact",
     stored: bool = False,
 ) -> dict[str, Any]:
-    priced_rows = [row for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
-    query_ids = [row.get("query_id") for row in rows if row.get("query_id")]
+    visible_rows = _visible_item_base_market_rows(rows)
+    priced_rows = [row for row in visible_rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None or row.get("best_native")]
+    query_ids = [row.get("query_id") for row in visible_rows if row.get("query_id")]
     return {
         "schema_version": "poe2-item-base-market/v1",
         "created_ts": time.time(),
@@ -2035,8 +2087,8 @@ def _item_base_market_exact_result(
         "category": ITEM_BASE_MARKET_CATEGORY,
         "target": target,
         "status": status,
-        "rows": rows[:limit],
-        "matched_total": len(rows),
+        "rows": visible_rows[:limit],
+        "matched_total": len(visible_rows),
         "catalog_total": catalog.get("total") or len(rows),
         "priced_total": len(priced_rows),
         "basis": "normal rarity, clean item bases without explicit/rune/desecrated affixes; chart stores low market",
@@ -2112,6 +2164,7 @@ async def run_item_base_market_refresh_job(
     sample_limit: int | None = None,
 ) -> dict[str, Any]:
     q = q.strip()
+    limit = _bounded_item_base_market_limit(limit)
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
     job = ITEM_BASE_MARKET_JOBS.get(key)
@@ -2352,6 +2405,7 @@ def start_item_base_market_refresh_job(
     sample_limit: int | None = None,
 ) -> tuple[dict[str, Any], Any | None]:
     q = q.strip()
+    limit = _bounded_item_base_market_limit(limit)
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
     now = time.time()
@@ -2396,13 +2450,13 @@ async def get_item_base_market(
     target: str = "exalted",
     status: str = "any",
     q: str = "",
-    limit: int = 40,
+    limit: int = 0,
     min_ilvl: int | None = None,
     force_refresh: bool = False,
     sample_limit: int | None = None,
 ) -> dict[str, Any]:
     q = q.strip()
-    limit = max(1, min(limit, ITEM_BASE_MARKET_MAX_BASES))
+    limit = _bounded_item_base_market_limit(limit)
     min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     cache_key = _item_base_market_cache_key(league, target, status, q, limit, min_ilvl)
@@ -2417,6 +2471,7 @@ async def get_item_base_market(
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
+                rows = _visible_item_base_market_rows(rows)
                 payload["rows"] = rows[:limit]
                 payload["matched_total"] = len(rows)
                 payload["cached"] = True
@@ -2426,6 +2481,7 @@ async def get_item_base_market(
             result = _cache_copy(job.get("result") or {})
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+                rows = _visible_item_base_market_rows(rows)
                 result["rows"] = rows[:limit]
                 result["matched_total"] = len(rows)
                 result["refresh_job"] = _item_base_market_job_view(job)
@@ -2455,6 +2511,7 @@ async def get_item_base_market(
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
+                rows = _visible_item_base_market_rows(rows)
                 payload["rows"] = rows[:limit]
                 payload["matched_total"] = len(rows)
                 payload["cached"] = True
@@ -2470,7 +2527,8 @@ async def get_item_base_market(
             enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
             rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
-            priced_total = sum(1 for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None)
+            rows = _visible_item_base_market_rows(rows)
+            priced_total = sum(1 for row in rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None or row.get("best_native"))
             return {
                 **latest,
                 "schema_version": "poe2-item-base-market/v1",
@@ -2530,6 +2588,7 @@ async def get_item_base_market(
     else:
         result = await coroutine
     rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+    rows = _visible_item_base_market_rows(rows)
     result["rows"] = rows[:limit]
     result["matched_total"] = len(rows)
     result["refresh_job"] = _item_base_market_job_view(job)
@@ -2545,7 +2604,17 @@ def _filter_item_base_market_rows(rows: list[dict[str, Any]], q: str) -> list[di
         for row in rows
         if q in " ".join(
             str(row.get(key) or "")
-            for key in ("text", "text_ru", "query_type", "category", "category_label", "category_label_ru")
+            for key in (
+                "text",
+                "text_ru",
+                "query_type",
+                "category",
+                "category_label",
+                "category_label_ru",
+                "base_class",
+                "base_class_label",
+                "base_class_label_ru",
+            )
         ).lower()
     ]
 
