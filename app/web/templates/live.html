@@ -127,21 +127,21 @@
               <option value="10">10</option>
             </select>
           </label>
-          <label class="form-field">
+          <label class="form-field base-market-price-field">
             <span data-i18n="baseMarketPriceTrigger">Цена</span>
-            <select id="base-market-price-trigger" class="form-select">
-              <option value="" data-i18n="baseMarketPriceAny" selected>Любая цена</option>
-              <option value="above" data-i18n="baseMarketPriceAbove">Больше</option>
-              <option value="below" data-i18n="baseMarketPriceBelow">Меньше</option>
-            </select>
-          </label>
-          <label class="form-field">
-            <span data-i18n="baseMarketPriceValue">Порог цены</span>
-            <input id="base-market-price-value" class="form-control" type="number" min="0" step="0.01" placeholder="10">
-          </label>
-          <label class="form-field">
-            <span data-i18n="baseMarketPriceCurrency">Валюта порога</span>
-            <select id="base-market-price-currency" class="form-select"></select>
+            <span class="base-market-price-filter">
+              <select id="base-market-price-trigger" class="form-select base-market-operator-select" aria-label="Цена">
+                <option value="" selected>*</option>
+                <option value="above">&gt;</option>
+                <option value="below">&lt;</option>
+              </select>
+              <input id="base-market-price-value" class="form-control base-market-price-value" type="number" min="0" max="999" step="0.01" placeholder="10" aria-label="Порог цены">
+              <span class="base-market-currency-picker">
+                <img id="base-market-price-currency-icon" alt="" aria-hidden="true">
+                <span id="base-market-price-currency-fallback" aria-hidden="true"></span>
+                <select id="base-market-price-currency" class="form-select base-market-currency-select" aria-label="Валюта порога"></select>
+              </span>
+            </span>
           </label>
         </div>
         <div class="action-row">

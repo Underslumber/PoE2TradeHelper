@@ -272,6 +272,8 @@ function applyLanguage() {
   fillStatusSelect();
   fillTargetCurrencySelect();
   fillBaseMarketPriceCurrencySelect();
+  updateBaseMarketPriceTriggerTitle();
+  byId('base-market-price-value')?.setAttribute('aria-label', t('baseMarketPriceValue'));
   fillAccountTargetCurrencySelect();
   fillBenchmarkCurrencySelect();
   fillAutoRefreshSelect();
@@ -2920,6 +2922,7 @@ function fillBaseMarketPriceCurrencySelect() {
       ? stored
       : selectedTarget();
   fillSelect(select, currencyOptions(), selected);
+  updateBaseMarketPriceCurrencyIcon();
 }
 
 function fillBenchmarkCurrencySelect() {
@@ -3223,6 +3226,42 @@ function normalizeBaseMarketPriceCurrency(value) {
   return hasTarget(currency) ? currency : selectedTarget();
 }
 
+function baseMarketPriceTriggerLabel(trigger) {
+  if (trigger === 'above') return t('baseMarketPriceAbove');
+  if (trigger === 'below') return t('baseMarketPriceBelow');
+  return t('baseMarketPriceAny');
+}
+
+function updateBaseMarketPriceTriggerTitle() {
+  const select = byId('base-market-price-trigger');
+  if (!select) return;
+  const trigger = normalizeBaseMarketPriceTrigger(select.value);
+  const label = baseMarketPriceTriggerLabel(trigger);
+  select.title = label;
+  select.setAttribute('aria-label', `${t('baseMarketPriceTrigger')}: ${label}`);
+}
+
+function updateBaseMarketPriceCurrencyIcon() {
+  const select = byId('base-market-price-currency');
+  if (!select) return;
+  const currency = normalizeBaseMarketPriceCurrency(select.value);
+  const label = currencyLabel(currency);
+  const icon = currencyIcon(currency);
+  const image = byId('base-market-price-currency-icon');
+  const fallback = byId('base-market-price-currency-fallback');
+  select.title = label;
+  select.setAttribute('aria-label', `${t('baseMarketPriceCurrency')}: ${label}`);
+  if (image) {
+    image.src = icon || '';
+    image.alt = label;
+    image.style.display = icon ? '' : 'none';
+  }
+  if (fallback) {
+    fallback.textContent = icon ? '' : String(currency || '?').slice(0, 3).toUpperCase();
+    fallback.style.display = icon ? 'none' : '';
+  }
+}
+
 function restoreBaseMarketFilters() {
   const limit = byId('base-market-limit');
   if (limit) limit.value = normalizeBaseMarketLimit(localStorage.getItem(BASE_MARKET_LIMIT_STORAGE_KEY));
@@ -3234,6 +3273,8 @@ function restoreBaseMarketFilters() {
   if (priceValue) priceValue.value = normalizeBaseMarketPriceValue(localStorage.getItem(BASE_MARKET_PRICE_VALUE_STORAGE_KEY));
   const priceCurrency = byId('base-market-price-currency');
   if (priceCurrency) priceCurrency.value = normalizeBaseMarketPriceCurrency(localStorage.getItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY));
+  updateBaseMarketPriceTriggerTitle();
+  updateBaseMarketPriceCurrencyIcon();
 }
 
 function persistBaseMarketLimit() {
@@ -3263,6 +3304,7 @@ function persistBaseMarketPriceTrigger() {
     localStorage.removeItem(BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY);
   }
   if (select) select.value = trigger;
+  updateBaseMarketPriceTriggerTitle();
 }
 
 function persistBaseMarketPriceValue(commit = false) {
@@ -3281,6 +3323,7 @@ function persistBaseMarketPriceCurrency() {
   const currency = normalizeBaseMarketPriceCurrency(select?.value);
   localStorage.setItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY, currency);
   if (select) select.value = currency;
+  updateBaseMarketPriceCurrencyIcon();
 }
 
 function baseMarketRequestParams(forceRefresh = false) {

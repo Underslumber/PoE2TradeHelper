@@ -63,6 +63,7 @@ def test_live_ui_keeps_navigation_when_static_reference_is_unavailable() -> None
 def test_live_ui_has_separate_base_tracking_surface() -> None:
     root = Path(__file__).resolve().parents[1]
     app_js = (root / "app" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    app_css = (root / "app" / "web" / "static" / "app.css").read_text(encoding="utf-8")
     template = (root / "app" / "web" / "templates" / "live.html").read_text(encoding="utf-8")
     i18n_js = (root / "app" / "web" / "static" / "i18n.js").read_text(encoding="utf-8")
 
@@ -85,10 +86,17 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert 'value="40"' in template
     assert 'value="10"' in template
     assert 'id="base-market-price-trigger"' in template
-    assert 'value="above" data-i18n="baseMarketPriceAbove"' in template
-    assert 'value="below" data-i18n="baseMarketPriceBelow"' in template
+    assert 'class="form-select base-market-operator-select"' in template
+    assert '<option value="above">&gt;</option>' in template
+    assert '<option value="below">&lt;</option>' in template
     assert 'id="base-market-price-value"' in template
+    assert 'class="form-control base-market-price-value"' in template
     assert 'id="base-market-price-currency"' in template
+    assert 'id="base-market-price-currency-icon"' in template
+    assert 'id="base-market-price-currency-fallback"' in template
+    assert "grid-template-columns: minmax(320px, 1fr) 140px 120px minmax(170px, auto)" in app_css
+    assert "grid-template-columns: 36px 68px 42px" in app_css
+    assert "color: transparent" in app_css
     assert "BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit'" in app_js
     assert "BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl'" in app_js
     assert "BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger'" in app_js
@@ -103,6 +111,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "persistBaseMarketPriceTrigger();" in app_js
     assert "persistBaseMarketPriceValue(true)" in app_js
     assert "persistBaseMarketPriceCurrency();" in app_js
+    assert "updateBaseMarketPriceCurrencyIcon();" in app_js
+    assert "updateBaseMarketPriceTriggerTitle();" in app_js
     assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js
     assert "baseMarketRefreshJob" in app_js

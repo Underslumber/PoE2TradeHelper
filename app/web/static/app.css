@@ -389,9 +389,73 @@ body {
   grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.4fr) 120px;
 }
 .lot-market-grid {
+  align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(260px, 1.4fr) minmax(150px, 0.5fr) minmax(120px, 0.4fr);
+  grid-template-columns: minmax(320px, 1fr) 140px 120px minmax(170px, auto);
+}
+.base-market-price-field {
+  min-width: 0;
+}
+.form-field .base-market-price-filter {
+  align-items: center;
+  color: inherit;
+  display: inline-grid;
+  font-size: inherit;
+  gap: 6px;
+  grid-template-columns: 36px 68px 42px;
+  justify-content: start;
+  width: max-content;
+}
+.base-market-operator-select,
+.base-market-price-value,
+.base-market-currency-select {
+  height: 32px;
+}
+.base-market-operator-select {
+  font-weight: 800;
+  padding: 0 4px;
+  text-align: center;
+  width: 36px;
+}
+.base-market-price-value {
+  padding: 4px 6px;
+  text-align: center;
+  width: 68px;
+}
+.form-field .base-market-currency-picker {
+  color: #e6edf3;
+  display: inline-block;
+  font-size: 0.72rem;
+  height: 32px;
+  position: relative;
+  width: 42px;
+}
+.base-market-currency-select {
+  color: transparent;
+  inset: 0;
+  padding: 0;
+  position: absolute;
+  width: 42px;
+}
+.base-market-currency-select option {
+  background: #101920;
+  color: #e6edf3;
+}
+.base-market-currency-picker img,
+.base-market-currency-picker span {
+  left: 50%;
+  max-height: 20px;
+  max-width: 20px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+}
+.base-market-currency-picker span {
+  font-weight: 800;
+  line-height: 1;
 }
 .lot-results {
   display: grid;
