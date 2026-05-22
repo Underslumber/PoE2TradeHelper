@@ -1280,6 +1280,19 @@ def test_base_market_stats_keep_native_prices_without_target_conversion():
     ]
 
 
+def test_base_market_row_uses_english_type_for_trade_query() -> None:
+    row = trade2._base_market_row_from_base(
+        {
+            "type": "Elegant Plate",
+            "type_ru": "Элегантный доспех",
+            "query_type": "Элегантный доспех",
+        }
+    )
+
+    assert row["query_type"] == "Elegant Plate"
+    assert row["text_ru"] == "Элегантный доспех"
+
+
 def test_item_base_market_text_filter_uses_exact_base_search(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
@@ -1310,7 +1323,7 @@ def test_item_base_market_text_filter_uses_exact_base_search(monkeypatch):
 
     async def fake_search(league, query, sort=None):
         calls["search"] += 1
-        assert query["type"] == "Жемчужное кольцо"
+        assert query["type"] == "Pearl Ring"
         assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
         return {"id": "exact-query", "total": 100, "result": ["lot1"]}
 
@@ -1531,8 +1544,8 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
     )
 
     assert calls == {"search": batch_size, "fetch": batch_size}
-    assert searched_types[0] == "Тестовая основа 0"
-    assert searched_types[-1] == f"Тестовая основа {batch_size - 1}"
+    assert searched_types[0] == "Test Base 0"
+    assert searched_types[-1] == f"Test Base {batch_size - 1}"
     assert result["source"] == "trade2/search+fetch:rough"
     assert result["matched_total"] == 1
     assert result["catalog_total"] == base_count
@@ -1555,7 +1568,7 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
         )
     )
 
-    assert searched_types[batch_size] == f"Тестовая основа {batch_size}"
+    assert searched_types[batch_size] == f"Test Base {batch_size}"
     assert result["matched_total"] == 2
     assert result["catalog_total"] == base_count
     assert result["priced_total"] == 2
@@ -1764,6 +1777,9 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
             "errors": [],
         }
 
+    def native_group(price: float, count: int = trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS):
+        return [{"currency": "exalted", "count": count, "low_amount": price, "median_amount": price, "low_target": price, "median_target": price}]
+
     def fake_read_latest_rates(**kwargs):
         return {
             "created_ts": 10.0,
@@ -1771,13 +1787,14 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
             "rows": [
                 {
                     "id": f"base:test-{index}",
-                    "text_ru": f"Тестовая основа {index}",
-                    "low": float(index + 1),
-                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
-                }
-                for index in range(3)
-            ],
-        }
+                        "text_ru": f"Тестовая основа {index}",
+                        "low": float(index + 1),
+                        "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                        "price_currency_groups": native_group(float(index + 1)),
+                    }
+                    for index in range(3)
+                ],
+            }
 
     monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
@@ -1801,6 +1818,7 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    native_group = [{"currency": "exalted", "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS, "low_amount": 4.0, "median_amount": 4.0, "low_target": 4.0, "median_target": 4.0}]
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
         "data": {
@@ -1811,12 +1829,23 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
                     "text_ru": "Дешевая основа",
                     "low": 4.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                    "price_currency_groups": native_group,
                 },
                 {
                     "id": "base:expensive",
                     "text_ru": "Дорогая основа",
                     "low": 12.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                    "price_currency_groups": [
+                        {
+                            "currency": "exalted",
+                            "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                            "low_amount": 12.0,
+                            "median_amount": 12.0,
+                            "low_target": 12.0,
+                            "median_target": 12.0,
+                        }
+                    ],
                 },
                 {"id": "base:empty", "text_ru": "Пустая основа"},
             ],
@@ -1858,12 +1887,32 @@ def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
                     "text_ru": "Ниже порога",
                     "low": 9.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                    "price_currency_groups": [
+                        {
+                            "currency": "exalted",
+                            "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                            "low_amount": 9.0,
+                            "median_amount": 9.0,
+                            "low_target": 9.0,
+                            "median_target": 9.0,
+                        }
+                    ],
                 },
                 {
                     "id": "base:above",
                     "text_ru": "Выше порога",
                     "low": 15.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                    "price_currency_groups": [
+                        {
+                            "currency": "exalted",
+                            "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                            "low_amount": 15.0,
+                            "median_amount": 15.0,
+                            "low_target": 15.0,
+                            "median_target": 15.0,
+                        }
+                    ],
                 },
             ],
         },
@@ -1957,6 +2006,16 @@ def test_item_base_market_hides_price_only_rows_without_lots(monkeypatch):
                     "text_ru": "Подтвержденная цена",
                     "low": 4.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                    "price_currency_groups": [
+                        {
+                            "currency": "exalted",
+                            "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                            "low_amount": 4.0,
+                            "median_amount": 4.0,
+                            "low_target": 4.0,
+                            "median_target": 4.0,
+                        }
+                    ],
                 },
             ],
         },
@@ -2092,8 +2151,22 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
         "created_ts": 9999999999,
         "data": {
             "rows": [
-                {"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01, "offers": 1},
-                {"id": "base:robe", "text": "Silk Robe", "text_ru": "Шелковая роба", "low": 2.0, "offers": 1},
+                {
+                    "id": "base:pearl-ring",
+                    "text": "Pearl Ring",
+                    "text_ru": "Жемчужное кольцо",
+                    "low": 0.01,
+                    "offers": 1,
+                    "price_currency_groups": [{"currency": "exalted", "count": 1, "low_amount": 0.01, "median_amount": 0.01}],
+                },
+                {
+                    "id": "base:robe",
+                    "text": "Silk Robe",
+                    "text_ru": "Шелковая роба",
+                    "low": 2.0,
+                    "offers": 1,
+                    "price_currency_groups": [{"currency": "exalted", "count": 1, "low_amount": 2.0, "median_amount": 2.0}],
+                },
             ]
         },
     }
@@ -2171,7 +2244,7 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
     assert result["catalog_total"] == 1
 
 
-def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypatch):
+def test_item_base_market_ignores_error_only_cache_and_hides_stored_price_only_rows(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
@@ -2208,11 +2281,11 @@ def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypat
     )
 
     assert result["stored"] is True
-    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
-    assert result["rows"][0]["total_scope"] == "stored_snapshot"
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
 
 
-def test_item_base_market_enriches_stored_rows_from_catalog(monkeypatch):
+def test_item_base_market_enriches_but_hides_stored_price_only_rows(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
 
     def fake_read_latest_rates(**kwargs):
@@ -2251,8 +2324,8 @@ def test_item_base_market_enriches_stored_rows_from_catalog(monkeypatch):
     )
 
     assert result["stored"] is True
-    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
-    assert result["rows"][0]["low"] == 0.01
+    assert result["rows"] == []
+    assert result["matched_total"] == 0
 
 
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():

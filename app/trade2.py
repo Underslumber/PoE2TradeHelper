@@ -1505,7 +1505,7 @@ def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str,
 
 
 def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None) -> dict[str, Any]:
-    query_type = str(base.get("query_type") or base.get("type") or base.get("type_ru") or "").strip()
+    query_type = str(base.get("type") or base.get("query_type") or base.get("type_ru") or "").strip()
     icon_key = base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), query_type)
     return {
         "id": base.get("id") or _base_market_item_id(query_type),
@@ -1616,8 +1616,17 @@ def _item_base_market_row_has_evidence(row: dict[str, Any], min_lots: int = 1) -
     return _item_base_market_confirmed_lot_count(row) >= max(1, min_lots)
 
 
+def _item_base_market_row_has_native_price_evidence(row: dict[str, Any]) -> bool:
+    return bool(row.get("sample_lots") or row.get("best_native") or row.get("optimal_native") or row.get("price_currency_groups"))
+
+
 def _visible_item_base_market_rows(rows: list[dict[str, Any]], min_lots: int = 1) -> list[dict[str, Any]]:
-    return [row for row in rows if _item_base_market_row_has_evidence(row, min_lots=min_lots)]
+    return [
+        row
+        for row in rows
+        if _item_base_market_row_has_evidence(row, min_lots=min_lots)
+        and _item_base_market_row_has_native_price_evidence(row)
+    ]
 
 
 def _item_base_market_min_visible_lots(q: str) -> int:
