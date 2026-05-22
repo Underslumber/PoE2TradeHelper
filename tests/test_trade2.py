@@ -1766,7 +1766,12 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
             "created_ts": 10.0,
             "source": "trade2/search+fetch:rough",
             "rows": [
-                {"id": f"base:test-{index}", "text_ru": f"Тестовая основа {index}", "low": float(index + 1)}
+                {
+                    "id": f"base:test-{index}",
+                    "text_ru": f"Тестовая основа {index}",
+                    "low": float(index + 1),
+                    "offers": 1,
+                }
                 for index in range(3)
             ],
         }
@@ -1798,8 +1803,8 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
-                {"id": "base:cheap", "text_ru": "Дешевая основа", "low": 4.0},
-                {"id": "base:expensive", "text_ru": "Дорогая основа", "low": 12.0},
+                {"id": "base:cheap", "text_ru": "Дешевая основа", "low": 4.0, "offers": 2},
+                {"id": "base:expensive", "text_ru": "Дорогая основа", "low": 12.0, "offers": 2},
                 {"id": "base:empty", "text_ru": "Пустая основа"},
             ],
         },
@@ -1835,8 +1840,8 @@ def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
-                {"id": "base:below", "text_ru": "Ниже порога", "low": 9.0},
-                {"id": "base:above", "text_ru": "Выше порога", "low": 15.0},
+                {"id": "base:below", "text_ru": "Ниже порога", "low": 9.0, "offers": 2},
+                {"id": "base:above", "text_ru": "Выше порога", "low": 15.0, "offers": 2},
             ],
         },
     }
@@ -1907,6 +1912,37 @@ def test_item_base_market_hides_empty_catalog_rows(monkeypatch):
     assert result["catalog_total"] == 2
     assert result["matched_total"] == 0
     assert result["rows"] == []
+
+
+def test_item_base_market_hides_price_only_rows_without_lots(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
+        "created_ts": 9999999999,
+        "data": {
+            "source": "trade2/search+fetch:catalog-scan",
+            "rows": [
+                {"id": "base:ghost", "text_ru": "Пустая цена", "low": 12.0, "offers": 0},
+                {"id": "base:confirmed", "text_ru": "Подтвержденная цена", "low": 4.0, "offers": 1},
+            ],
+        },
+    }
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="",
+            limit=0,
+            force_refresh=False,
+        )
+    )
+
+    assert result["matched_total"] == 1
+    assert result["priced_total"] == 1
+    assert [row["id"] for row in result["rows"]] == ["base:confirmed"]
 
 
 def test_item_base_market_exact_refresh_hides_zero_result_base(monkeypatch):
@@ -2022,8 +2058,8 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
         "created_ts": 9999999999,
         "data": {
             "rows": [
-                {"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01},
-                {"id": "base:robe", "text": "Silk Robe", "text_ru": "Шелковая роба", "low": 2.0},
+                {"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01, "offers": 1},
+                {"id": "base:robe", "text": "Silk Robe", "text_ru": "Шелковая роба", "low": 2.0, "offers": 1},
             ]
         },
     }
@@ -2117,7 +2153,7 @@ def test_item_base_market_ignores_error_only_cache_for_stored_snapshot(monkeypat
     def fake_read_latest_rates(**kwargs):
         return {
             "created_ts": 10.0,
-            "rows": [{"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01}],
+            "rows": [{"id": "base:pearl-ring", "text": "Pearl Ring", "text_ru": "Жемчужное кольцо", "low": 0.01, "offers": 1}],
         }
 
     async def fake_catalog(q="", limit=1000):
@@ -2148,7 +2184,7 @@ def test_item_base_market_enriches_stored_rows_from_catalog(monkeypatch):
     def fake_read_latest_rates(**kwargs):
         return {
             "created_ts": 10.0,
-            "rows": [{"id": "base:pearl-ring", "median": 0.01, "best": 0.01}],
+            "rows": [{"id": "base:pearl-ring", "median": 0.01, "best": 0.01, "offers": 1}],
         }
 
     async def fake_catalog(q="", limit=1000):

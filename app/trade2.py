@@ -1596,11 +1596,13 @@ def _sort_item_base_market_rows(rows: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def _item_base_market_row_has_evidence(row: dict[str, Any]) -> bool:
-    if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None:
+    if row.get("sample_lots") or row.get("best_native") or row.get("optimal_native"):
         return True
-    if row.get("best_native") or row.get("optimal_native") or row.get("sample_lots"):
-        return True
-    for key in ("count", "clean_count", "offers", "volume"):
+    for group in row.get("price_currency_groups") or []:
+        value = _to_float(group.get("count"))
+        if value is not None and value > 0:
+            return True
+    for key in ("count", "clean_count", "offers"):
         value = _to_float(row.get(key))
         if value is not None and value > 0:
             return True

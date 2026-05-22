@@ -3612,7 +3612,7 @@ function baseMarketExactTotal(row) {
 }
 
 function baseMarketAnalyzedText(row) {
-  const clean = Number(row?.count || row?.clean_count || 0);
+  const clean = Number(row?.count || row?.clean_count || row?.offers || 0);
   const fetched = Number(row?.raw_count || row?.fetched_count || 0);
   if (fetched > 0) return `${formatAmount(clean)} / ${formatAmount(fetched)}`;
   return formatAmount(clean);
