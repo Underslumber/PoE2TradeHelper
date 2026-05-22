@@ -1493,7 +1493,10 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
         row = trade2._base_market_row_from_base(base, min_ilvl=min_ilvl)
         clean_lots = []
         if row["text_ru"] in {"Тестовая основа 0", f"Тестовая основа {batch_size}"}:
-            clean_lots = [{"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}]
+            clean_lots = [
+                {"price_amount": 1.0, "price_currency": "regal", "price_target": 0.25}
+                for _ in range(trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS)
+            ]
         stats = trade2._base_market_stats(
             clean_lots,
             raw_count=trade2.ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT,
@@ -1770,7 +1773,7 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
                     "id": f"base:test-{index}",
                     "text_ru": f"Тестовая основа {index}",
                     "low": float(index + 1),
-                    "offers": 1,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                 }
                 for index in range(3)
             ],
@@ -1803,8 +1806,18 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
-                {"id": "base:cheap", "text_ru": "Дешевая основа", "low": 4.0, "offers": 2},
-                {"id": "base:expensive", "text_ru": "Дорогая основа", "low": 12.0, "offers": 2},
+                {
+                    "id": "base:cheap",
+                    "text_ru": "Дешевая основа",
+                    "low": 4.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                },
+                {
+                    "id": "base:expensive",
+                    "text_ru": "Дорогая основа",
+                    "low": 12.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                },
                 {"id": "base:empty", "text_ru": "Пустая основа"},
             ],
         },
@@ -1840,8 +1853,18 @@ def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
-                {"id": "base:below", "text_ru": "Ниже порога", "low": 9.0, "offers": 2},
-                {"id": "base:above", "text_ru": "Выше порога", "low": 15.0, "offers": 2},
+                {
+                    "id": "base:below",
+                    "text_ru": "Ниже порога",
+                    "low": 9.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                },
+                {
+                    "id": "base:above",
+                    "text_ru": "Выше порога",
+                    "low": 15.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                },
             ],
         },
     }
@@ -1923,7 +1946,18 @@ def test_item_base_market_hides_price_only_rows_without_lots(monkeypatch):
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
                 {"id": "base:ghost", "text_ru": "Пустая цена", "low": 12.0, "offers": 0},
-                {"id": "base:confirmed", "text_ru": "Подтвержденная цена", "low": 4.0, "offers": 1},
+                {
+                    "id": "base:thin",
+                    "text_ru": "Тонкая цена",
+                    "low": 8.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS - 1,
+                },
+                {
+                    "id": "base:confirmed",
+                    "text_ru": "Подтвержденная цена",
+                    "low": 4.0,
+                    "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
+                },
             ],
         },
     }
