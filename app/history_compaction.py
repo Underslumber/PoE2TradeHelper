@@ -55,6 +55,11 @@ def _weighted_average(records: list[MarketHistory], field: str) -> float | None:
     return total / weight_total if weight_total else None
 
 
+def _weighted_int(records: list[MarketHistory], field: str) -> int | None:
+    value = _weighted_average(records, field)
+    return round(value) if value is not None else None
+
+
 def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
     first = records[0]
     records = sorted(records, key=lambda item: item.timestamp)
@@ -63,6 +68,10 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
     price = _weighted_average(records, "price")
     volume = _weighted_average(records, "volume")
     offers = _weighted_average(records, "offers")
+    raw_count = _weighted_int(records, "raw_count")
+    clean_count = _weighted_int(records, "clean_count")
+    stale_count = _weighted_int(records, "stale_count")
+    recent_listing_count = _weighted_int(records, "recent_listing_count")
     return MarketHistory(
         league=first.league,
         category=first.category,
@@ -73,6 +82,12 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
         price=price if price is not None else latest.price,
         volume=volume,
         offers=round(offers) if offers is not None else None,
+        raw_count=raw_count,
+        clean_count=clean_count,
+        stale_count=stale_count,
+        recent_listing_count=recent_listing_count,
+        high_demand=latest.high_demand,
+        weak_activity=latest.weak_activity,
         change=latest.change,
         sparkline_json=latest.sparkline_json,
         sparkline_kind=latest.sparkline_kind,

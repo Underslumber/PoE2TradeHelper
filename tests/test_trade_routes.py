@@ -190,6 +190,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
         assert kwargs["price_trigger"] == "below"
         assert kwargs["price_value"] == 10
         assert kwargs["price_currency"] == "exalted"
+        assert kwargs["hide_weak_activity"] is True
         return {"rows": [], "refresh_job": {"status": "queued"}}
 
     monkeypatch.setattr(routes, "start_item_base_market_refresh_job", fake_start)
@@ -206,6 +207,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
             price_trigger="below",
             price_value=10,
             price_currency="exalted",
+            hide_weak_activity=True,
             sample_limit=100,
             refresh=True,
         )

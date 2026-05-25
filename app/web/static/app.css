@@ -457,6 +457,19 @@ body {
   font-weight: 800;
   line-height: 1;
 }
+.base-market-activity-toggle {
+  align-items: center;
+  color: #b8c4ce;
+  display: inline-flex;
+  font-size: 0.88rem;
+  gap: 8px;
+  min-height: 34px;
+}
+.base-market-activity-toggle input {
+  accent-color: #60a5fa;
+  height: 16px;
+  width: 16px;
+}
 .lot-results {
   display: grid;
   gap: 12px;
@@ -2148,6 +2161,9 @@ body {
 }
 .advice-badge.demand {
   color: #ffd166;
+}
+.advice-badge.weak-activity {
+  color: #aab6c2;
 }
 .advice-card.signal .advice-badge {
   color: #25e7a1;

@@ -1270,6 +1270,68 @@ def test_fresh_clean_item_base_lots_exclude_stale_and_mark_high_demand(monkeypat
     assert stats["stale_count"] == 1
     assert stats["recent_listing_count"] == 3
     assert stats["high_demand"] is True
+    assert stats["weak_activity"] is False
+
+
+def test_base_market_stats_mark_weak_activity_only_when_old_lots_dominate(monkeypatch):
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(trade2.time, "time", lambda: now.timestamp())
+
+    def clean_lot(lot_id: str, seconds_old: int) -> dict[str, object]:
+        return {
+            "id": lot_id,
+            "indexed": (now - timedelta(seconds=seconds_old)).isoformat().replace("+00:00", "Z"),
+            "listed_age_seconds": seconds_old,
+            "rarity": "Normal",
+            "corrupted": False,
+            "explicit_mods": [],
+            "rune_mods": [],
+            "desecrated_mods": [],
+            "stat_mods": [],
+            "price_amount": 2.0,
+            "price_currency": "exalted",
+            "price_target": 2.0,
+        }
+
+    fresh_lots = [clean_lot(f"fresh-{index}", 2 * 86400) for index in range(4)]
+    weak_stats = trade2._base_market_stats(fresh_lots, raw_count=10, stale_count=6)
+    rare_stats = trade2._base_market_stats(fresh_lots, raw_count=4, stale_count=0)
+    active_lots = [
+        clean_lot("recent-1", 10 * 60),
+        clean_lot("recent-2", 20 * 60),
+        clean_lot("recent-3", 50 * 60),
+        clean_lot("fresh", 2 * 86400),
+    ]
+    active_stats = trade2._base_market_stats(active_lots, raw_count=10, stale_count=6)
+
+    assert weak_stats["weak_activity"] is True
+    assert weak_stats["weak_activity_observed_count"] == 10
+    assert rare_stats["weak_activity"] is False
+    assert active_stats["high_demand"] is True
+    assert active_stats["weak_activity"] is False
+
+
+def test_visible_item_base_market_rows_can_hide_weak_activity_rows():
+    rows = [
+        {
+            "id": "base:weak",
+            "count": 4,
+            "low": 1.0,
+            "stored_price_evidence": True,
+            "weak_activity": True,
+        },
+        {
+            "id": "base:normal",
+            "count": 2,
+            "low": 2.0,
+            "stored_price_evidence": True,
+            "weak_activity": False,
+        },
+    ]
+
+    visible = trade2._visible_item_base_market_rows(rows, hide_weak_activity=True)
+
+    assert [row["id"] for row in visible] == ["base:normal"]
 
 
 def test_base_market_stats_store_low_market_as_chart_price():
@@ -1386,6 +1448,36 @@ def test_item_base_market_scan_prioritizes_high_demand_rows(monkeypatch):
     assert [base["type"] for base in selected] == ["Test Base 4", "Test Base 0", "Test Base 1"]
     assert start == 0
     assert next_position == 2
+    assert priority_count == 1
+    assert normal_count == 2
+
+
+def test_item_base_market_scan_rechecks_weak_activity_rows(monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
+    trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    bases = [
+        {"id": f"base:test-{index}", "type": f"Test Base {index}", "type_ru": f"Тестовая основа {index}"}
+        for index in range(6)
+    ]
+    previous_rows = [
+        {
+            "id": "base:test-4",
+            "text": "Test Base 4",
+            "text_ru": "Тестовая основа 4",
+            "weak_activity": True,
+            "stale_count": 8,
+            "weak_activity_observed_count": 10,
+        }
+    ]
+
+    priority_bases = trade2._item_base_market_priority_bases(bases, previous_rows)
+    selected, _start, _next_position, priority_count, normal_count = trade2._item_base_market_scan_batch(
+        bases,
+        ("PoE2 - Test", "exalted", "securable", None),
+        priority_bases=priority_bases,
+    )
+
+    assert [base["type"] for base in selected] == ["Test Base 4", "Test Base 0", "Test Base 1"]
     assert priority_count == 1
     assert normal_count == 2
 

@@ -78,6 +78,9 @@ MARKET_LISTING_MAX_AGE_DAYS = 14
 MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
 MARKET_LISTING_HIGH_DEMAND_COUNT = 3
+MARKET_LISTING_WEAK_ACTIVITY_FRESH_COUNT = 5
+MARKET_LISTING_WEAK_ACTIVITY_MIN_OBSERVED = 10
+MARKET_LISTING_WEAK_ACTIVITY_MIN_STALE = 5
 ITEM_BASE_MARKET_PRIORITY_RECHECK_LIMIT = 4
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
@@ -1418,6 +1421,30 @@ def _high_demand_fields(lots: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _weak_activity_fields(
+    lots: list[dict[str, Any]],
+    raw_count: int,
+    stale_count: int,
+    demand_fields: dict[str, Any],
+) -> dict[str, Any]:
+    fresh_count = len(lots)
+    observed_count = max(raw_count, fresh_count + stale_count)
+    high_demand = bool(demand_fields.get("high_demand"))
+    weak_activity = (
+        observed_count >= MARKET_LISTING_WEAK_ACTIVITY_MIN_OBSERVED
+        and fresh_count < MARKET_LISTING_WEAK_ACTIVITY_FRESH_COUNT
+        and stale_count >= MARKET_LISTING_WEAK_ACTIVITY_MIN_STALE
+        and not high_demand
+    )
+    return {
+        "weak_activity": weak_activity,
+        "weak_activity_observed_count": observed_count,
+        "weak_activity_fresh_threshold": MARKET_LISTING_WEAK_ACTIVITY_FRESH_COUNT,
+        "weak_activity_min_observed": MARKET_LISTING_WEAK_ACTIVITY_MIN_OBSERVED,
+        "weak_activity_min_stale": MARKET_LISTING_WEAK_ACTIVITY_MIN_STALE,
+    }
+
+
 def _fresh_clean_item_base_lots(
     lots: list[dict[str, Any] | None],
     rates: dict[str, float],
@@ -1439,6 +1466,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: 
     native_groups = _base_market_currency_groups(lots)
     best_native = _base_market_best_native(lots)
     demand_fields = _high_demand_fields(lots)
+    weak_fields = _weak_activity_fields(lots, raw_count, stale_count, demand_fields)
     raw_values = sorted(lot["price_target"] for lot in lots if isinstance(lot.get("price_target"), float))
     values, outliers = _trim_price_outliers(raw_values)
     if not values:
@@ -1448,6 +1476,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: 
             "clean_count": len(lots),
             "stale_count": stale_count,
             **demand_fields,
+            **weak_fields,
             "outliers": outliers,
             "low": None,
             "best": None,
@@ -1471,6 +1500,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: 
         "clean_count": len(lots),
         "stale_count": stale_count,
         **demand_fields,
+        **weak_fields,
         "outliers": outliers,
         "low": values[0],
         "best": values[0],
@@ -1680,6 +1710,12 @@ def _item_base_market_row_has_high_demand(row: dict[str, Any]) -> bool:
     return bool(row.get("high_demand")) or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT
 
 
+def _item_base_market_row_has_weak_activity(row: dict[str, Any]) -> bool:
+    if bool(row.get("high_demand")):
+        return False
+    return bool(row.get("weak_activity"))
+
+
 def _item_base_market_priority_bases(
     bases: list[dict[str, Any]],
     previous_rows: list[dict[str, Any]],
@@ -1692,9 +1728,14 @@ def _item_base_market_priority_bases(
         key=lambda row: (_to_int(row.get("recent_listing_count")) or 0, _to_int(row.get("clean_count")) or 0),
         reverse=True,
     )
+    weak_rows = sorted(
+        [row for row in previous_rows if _item_base_market_row_has_weak_activity(row)],
+        key=lambda row: (_to_int(row.get("stale_count")) or 0, _to_int(row.get("weak_activity_observed_count")) or 0),
+        reverse=True,
+    )
     selected: list[dict[str, Any]] = []
     selected_ids: set[int] = set()
-    for row in priority_rows:
+    for row in [*priority_rows, *weak_rows]:
         row_keys = _base_market_keys(row)
         if not row_keys:
             continue
@@ -1763,11 +1804,16 @@ def _item_base_market_row_has_native_price_evidence(row: dict[str, Any]) -> bool
     )
 
 
-def _visible_item_base_market_rows(rows: list[dict[str, Any]], min_lots: int = 1) -> list[dict[str, Any]]:
+def _visible_item_base_market_rows(
+    rows: list[dict[str, Any]],
+    min_lots: int = 1,
+    hide_weak_activity: bool = False,
+) -> list[dict[str, Any]]:
     return [
         row
         for row in rows
-        if _item_base_market_row_has_evidence(row, min_lots=min_lots)
+        if not (hide_weak_activity and _item_base_market_row_has_weak_activity(row))
+        and _item_base_market_row_has_evidence(row, min_lots=min_lots)
         and _item_base_market_row_has_native_price_evidence(row)
     ]
 
@@ -2883,6 +2929,7 @@ async def get_item_base_market(
     price_trigger: str = "",
     price_value: float | None = None,
     price_currency: str = "",
+    hide_weak_activity: bool = False,
 ) -> dict[str, Any]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
@@ -2910,7 +2957,7 @@ async def get_item_base_market(
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
-                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 return payload
@@ -2921,7 +2968,7 @@ async def get_item_base_market(
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
-                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
                 _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
                 result["refresh_job"] = active_refresh_job
                 result["cached"] = False
@@ -2943,7 +2990,11 @@ async def get_item_base_market(
                 job=job,
                 catalog=catalog,
             )
-            rows = _visible_item_base_market_rows(pending.get("rows") or [], min_lots=min_visible_lots)
+            rows = _visible_item_base_market_rows(
+                pending.get("rows") or [],
+                min_lots=min_visible_lots,
+                hide_weak_activity=hide_weak_activity,
+            )
             pending = _apply_item_base_market_price_filter(pending, rows, limit=limit, price_filter=price_filter)
             if pending.get("rows") or str(job.get("status") or "") not in {"queued", "running", "rate_limited"}:
                 return pending
@@ -2955,7 +3006,7 @@ async def get_item_base_market(
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
-                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+                rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 if active_refresh_job is not None:
@@ -2980,7 +3031,7 @@ async def get_item_base_market(
             rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=collection_min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
             rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
-            rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+            rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
             payload = {
                 **latest,
                 "schema_version": "poe2-item-base-market/v1",
@@ -3012,7 +3063,7 @@ async def get_item_base_market(
             source="item-base-catalog",
             stored=True,
         )
-        visible_rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+        visible_rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
         payload = _apply_item_base_market_price_filter(payload, visible_rows, limit=limit, price_filter=price_filter)
         if active_refresh_job is not None:
             payload["refresh_job"] = active_refresh_job
@@ -3047,7 +3098,7 @@ async def get_item_base_market(
         result = await coroutine
     rows = _filter_item_base_market_rows(result.get("rows") or [], q)
     rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
-    rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
+    rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
     _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
     result["refresh_job"] = _item_base_market_job_view(job)
     return _cache_copy(result)

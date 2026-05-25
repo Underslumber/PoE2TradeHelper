@@ -94,6 +94,7 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert 'id="base-market-price-currency"' in template
     assert 'id="base-market-price-currency-icon"' in template
     assert 'id="base-market-price-currency-fallback"' in template
+    assert 'id="base-market-hide-weak-activity"' in template
     assert "grid-template-columns: minmax(320px, 1fr) 140px 120px minmax(170px, auto)" in app_css
     assert "grid-template-columns: 36px 68px 42px" in app_css
     assert "color: transparent" in app_css
@@ -102,15 +103,18 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger'" in app_js
     assert "BASE_MARKET_PRICE_VALUE_STORAGE_KEY = 'poe2-base-market-price-value'" in app_js
     assert "BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY = 'poe2-base-market-price-currency'" in app_js
+    assert "BASE_MARKET_HIDE_WEAK_ACTIVITY_STORAGE_KEY = 'poe2-base-market-hide-weak-activity'" in app_js
     assert "limit: normalizeBaseMarketLimit(byId('base-market-limit')?.value)" in app_js
     assert "params.price_trigger = priceTrigger" in app_js
     assert "params.price_value = priceValue" in app_js
     assert "params.price_currency = normalizeBaseMarketPriceCurrency(byId('base-market-price-currency')?.value)" in app_js
+    assert "params.hide_weak_activity = 'true'" in app_js
     assert "persistBaseMarketMinIlvl(true)" in app_js
     assert "persistBaseMarketLimit();" in app_js
     assert "persistBaseMarketPriceTrigger();" in app_js
     assert "persistBaseMarketPriceValue(true)" in app_js
     assert "persistBaseMarketPriceCurrency();" in app_js
+    assert "persistBaseMarketHideWeakActivity();" in app_js
     assert "updateBaseMarketPriceCurrencyIcon();" in app_js
     assert "updateBaseMarketPriceTriggerTitle();" in app_js
     assert "function baseMarketPayloadHasActiveJob(payload)" in app_js
@@ -119,6 +123,7 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "function listingAgeText(lot)" in app_js
     assert "listingAgeText(lot)" in app_js
     assert "function baseMarketDemandBadge(row)" in app_js
+    assert "function baseMarketWeakActivityBadge(row)" in app_js
     assert "baseMarketPriorityRecheck" in app_js
     assert "baseMarketCollectingNoMatches" in app_js
     assert "row?.count || row?.clean_count || row?.offers || 0" in app_js
@@ -142,6 +147,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "listedAgeMonthsAgo: 'мес. назад'" in i18n_js
     assert "staleListingsIgnored: 'старых отброшено'" in i18n_js
     assert "baseMarketHighDemand: 'Повышенный спрос'" in i18n_js
+    assert "baseMarketHideWeakActivity: 'Скрыть слабоактивные'" in i18n_js
+    assert "baseMarketWeakActivity: 'Слабоактивная'" in i18n_js
     assert "baseMarketPriorityRecheck: 'приоритет'" in i18n_js
     assert "baseMarketCollectingNoMatches: 'Сбор идет." in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js

@@ -38,6 +38,12 @@ TRADE_JOURNAL_COLUMNS = {
 MARKET_HISTORY_COLUMNS = {
     "status": "VARCHAR DEFAULT 'any'",
     "source": "VARCHAR",
+    "raw_count": "INTEGER",
+    "clean_count": "INTEGER",
+    "stale_count": "INTEGER",
+    "recent_listing_count": "INTEGER",
+    "high_demand": "INTEGER",
+    "weak_activity": "INTEGER",
     "change": "FLOAT",
     "sparkline_json": "TEXT",
     "sparkline_kind": "VARCHAR",

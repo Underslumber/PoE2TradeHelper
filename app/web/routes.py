@@ -1860,6 +1860,7 @@ async def api_trade_item_base_market(
     price_trigger: str = Query("", pattern="^(|above|below)$"),
     price_value: float | None = Query(None, ge=0),
     price_currency: str = Query(""),
+    hide_weak_activity: bool = Query(False),
     sample_limit: int = Query(100, ge=100, le=500),
     refresh: bool = Query(False),
 ):
@@ -1891,6 +1892,7 @@ async def api_trade_item_base_market(
                 price_trigger=price_trigger,
                 price_value=price_value,
                 price_currency=price_currency,
+                hide_weak_activity=hide_weak_activity,
             )
         return await get_item_base_market(
             league=league,
@@ -1904,6 +1906,7 @@ async def api_trade_item_base_market(
             price_trigger=price_trigger,
             price_value=price_value,
             price_currency=price_currency,
+            hide_weak_activity=hide_weak_activity,
         )
     except asyncio.TimeoutError:
         return JSONResponse(

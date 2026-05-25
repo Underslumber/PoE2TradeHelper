@@ -77,6 +77,7 @@ const BASE_MARKET_MIN_ILVL_STORAGE_KEY = 'poe2-base-market-min-ilvl';
 const BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger';
 const BASE_MARKET_PRICE_VALUE_STORAGE_KEY = 'poe2-base-market-price-value';
 const BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY = 'poe2-base-market-price-currency';
+const BASE_MARKET_HIDE_WEAK_ACTIVITY_STORAGE_KEY = 'poe2-base-market-hide-weak-activity';
 const BASE_MARKET_LIMIT_VALUES = new Set(['0', '40', '10']);
 
 function loadJsonState(key, fallback) {
@@ -3283,6 +3284,8 @@ function restoreBaseMarketFilters() {
   if (priceValue) priceValue.value = normalizeBaseMarketPriceValue(localStorage.getItem(BASE_MARKET_PRICE_VALUE_STORAGE_KEY));
   const priceCurrency = byId('base-market-price-currency');
   if (priceCurrency) priceCurrency.value = normalizeBaseMarketPriceCurrency(localStorage.getItem(BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY));
+  const hideWeakActivity = byId('base-market-hide-weak-activity');
+  if (hideWeakActivity) hideWeakActivity.checked = localStorage.getItem(BASE_MARKET_HIDE_WEAK_ACTIVITY_STORAGE_KEY) === 'true';
   updateBaseMarketPriceTriggerTitle();
   updateBaseMarketPriceCurrencyIcon();
 }
@@ -3336,6 +3339,11 @@ function persistBaseMarketPriceCurrency() {
   updateBaseMarketPriceCurrencyIcon();
 }
 
+function persistBaseMarketHideWeakActivity() {
+  const checked = Boolean(byId('base-market-hide-weak-activity')?.checked);
+  localStorage.setItem(BASE_MARKET_HIDE_WEAK_ACTIVITY_STORAGE_KEY, checked ? 'true' : 'false');
+}
+
 function baseMarketRequestParams(forceRefresh = false) {
   const minIlvl = Number(byId('base-market-min-ilvl')?.value || 0);
   const priceTrigger = normalizeBaseMarketPriceTrigger(byId('base-market-price-trigger')?.value);
@@ -3354,6 +3362,7 @@ function baseMarketRequestParams(forceRefresh = false) {
     params.price_value = priceValue;
     params.price_currency = normalizeBaseMarketPriceCurrency(byId('base-market-price-currency')?.value);
   }
+  if (byId('base-market-hide-weak-activity')?.checked) params.hide_weak_activity = 'true';
   if (forceRefresh) params.refresh = 'true';
   return params;
 }
@@ -3652,6 +3661,26 @@ function baseMarketDemandBadge(row) {
   return `<span class="advice-badge demand">${escapeHtml(t('baseMarketHighDemand'))}</span>`;
 }
 
+function baseMarketWeakActivityText(row) {
+  if (!row?.weak_activity) return '';
+  const fresh = Number(row?.clean_count ?? row?.count ?? 0);
+  const threshold = Number(row?.weak_activity_fresh_threshold || 5);
+  const observed = Number(row?.weak_activity_observed_count ?? row?.raw_count ?? row?.fetched_count ?? 0);
+  const parts = [t('baseMarketWeakActivity')];
+  if (Number.isFinite(fresh) && Number.isFinite(threshold) && threshold > 0) {
+    parts.push(`${t('baseMarketFreshUnder14d')}: ${formatAmount(fresh)} / ${formatAmount(threshold)}`);
+  }
+  if (Number.isFinite(observed) && observed > 0) {
+    parts.push(`${t('baseMarketObservedLots')}: ${formatAmount(observed)}`);
+  }
+  return parts.join(' · ');
+}
+
+function baseMarketWeakActivityBadge(row) {
+  if (!row?.weak_activity) return '';
+  return `<span class="advice-badge weak-activity">${escapeHtml(t('baseMarketWeakActivity'))}</span>`;
+}
+
 function baseMarketLotsLabel(row) {
   if (baseMarketExactTotal(row)) return t('baseMarketTotalFound');
   if (row?.total_scope === 'stored_snapshot' || state.baseMarket?.stored) return t('baseMarketStoredLots');
@@ -3673,7 +3702,8 @@ function baseMarketErrorLabel(errorText) {
 function baseMarketRowState(row) {
   const stateText = baseMarketLowPrice(row) ? t('baseMarketHasPriceData') : (baseMarketErrorLabel(row?.error) || t('baseMarketPricesPending'));
   const demandText = row?.high_demand ? baseMarketDemandText(row) : '';
-  return [demandText, stateText].filter(Boolean).join(' · ');
+  const weakActivityText = baseMarketWeakActivityText(row);
+  return [weakActivityText, demandText, stateText].filter(Boolean).join(' · ');
 }
 
 function baseMarketHistoryKey(row) {
@@ -3772,6 +3802,7 @@ function renderBaseMarketDetail() {
           <div>
             <strong>${escapeHtml(baseMarketRowName(row))}</strong>
             ${baseMarketDemandBadge(row)}
+            ${baseMarketWeakActivityBadge(row)}
             <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : ''].filter(Boolean).join(' / '))}</small>
             <small>${escapeHtml(rowState)}</small>
           </div>
@@ -3854,6 +3885,7 @@ function renderBaseMarketRow(row) {
           ${baseMarketIconMarkup(row)}
           <strong>${escapeHtml(baseMarketRowName(row))}</strong>
           ${baseMarketDemandBadge(row)}
+          ${baseMarketWeakActivityBadge(row)}
         </div>
         <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : '', t('baseMarketPureBasis')].filter(Boolean).join(' · '))}</small>
         <small>${escapeHtml(baseMarketRowState(row))}</small>
@@ -6888,6 +6920,10 @@ async function initLiveTrade() {
     });
     byId('base-market-price-currency')?.addEventListener('change', () => {
       persistBaseMarketPriceCurrency();
+      refreshBaseMarket(false);
+    });
+    byId('base-market-hide-weak-activity')?.addEventListener('change', () => {
+      persistBaseMarketHideWeakActivity();
       refreshBaseMarket(false);
     });
     byId('detail-target-currency').addEventListener('change', event => {

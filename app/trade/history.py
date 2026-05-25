@@ -44,6 +44,14 @@ def _positive_int(value: Any) -> int | None:
     return number if number > 0 else None
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 def _history_row_price(row: dict[str, Any] | None) -> float | None:
     if not row:
         return None
@@ -123,6 +131,12 @@ def _snapshot_from_group(records: list[MarketHistory]) -> dict[str, Any]:
                 "best": record.price,
                 "volume": record.volume or 0,
                 "offers": record.offers or 0,
+                "raw_count": record.raw_count,
+                "clean_count": record.clean_count,
+                "stale_count": record.stale_count,
+                "recent_listing_count": record.recent_listing_count,
+                "high_demand": bool(record.high_demand) if record.high_demand is not None else False,
+                "weak_activity": bool(record.weak_activity) if record.weak_activity is not None else False,
                 "change": record.change,
                 "sparkline": _json_load(record.sparkline_json, []),
                 "sparkline_kind": record.sparkline_kind,
@@ -229,6 +243,12 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
                 price=price,
                 volume=_positive_float(row.get("volume")),
                 offers=_positive_int(row.get("offers")),
+                raw_count=_nonnegative_int(row.get("raw_count")),
+                clean_count=_nonnegative_int(row.get("clean_count")),
+                stale_count=_nonnegative_int(row.get("stale_count")),
+                recent_listing_count=_nonnegative_int(row.get("recent_listing_count")),
+                high_demand=1 if row.get("high_demand") else 0,
+                weak_activity=1 if row.get("weak_activity") else 0,
                 change=_positive_float(row.get("change")),
                 sparkline_json=_json_dump(row.get("sparkline")),
                 sparkline_kind=row.get("sparkline_kind"),
