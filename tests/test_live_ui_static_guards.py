@@ -116,6 +116,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "function baseMarketPayloadHasActiveJob(payload)" in app_js
     assert "!baseMarketPayloadHasActiveJob(cachedMarket)" in app_js
     assert "!baseMarketPayloadHasActiveJob(data)" in app_js
+    assert "function listingAgeText(lot)" in app_js
+    assert "listingAgeText(lot)" in app_js
     assert "row?.count || row?.clean_count || row?.offers || 0" in app_js
     assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js
@@ -134,6 +136,8 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "baseMarketBatchProgress: 'порция'" in i18n_js
     assert "baseMarketCatalogProgress: 'каталог'" in i18n_js
     assert "baseMarketLotsChecked: 'лоты'" in i18n_js
+    assert "listedAgeMonthsAgo: 'мес. назад'" in i18n_js
+    assert "staleListingsIgnored: 'старых отброшено'" in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
     assert "baseMarketLimitAll: 'Все'" in i18n_js
     assert "baseMarketPriceAbove: 'Больше'" in i18n_js

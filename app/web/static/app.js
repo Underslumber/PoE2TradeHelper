@@ -503,6 +503,16 @@ function formatDateTime(value) {
   return date.toLocaleString(state.lang === 'ru' ? 'ru-RU' : 'en-US');
 }
 
+function listingAgeText(lot) {
+  const days = Number(lot?.listed_age_days);
+  if (!Number.isFinite(days) || days < 0) return '';
+  if (days < 1) return t('listedAgeToday');
+  if (days < 60) return `${formatAmount(Math.floor(days))} ${t('listedAgeDaysAgo')}`;
+  const months = Math.floor(days / 30);
+  if (months < 24) return `${formatAmount(months)} ${t('listedAgeMonthsAgo')}`;
+  return `${formatAmount(Math.floor(months / 12))} ${t('listedAgeYearsAgo')}`;
+}
+
 function snapshotLabel(data = {}) {
   if (data.stored) return t('savedSnapshotLabel');
   if (data.cached) return t('cacheLabel');
@@ -3619,8 +3629,9 @@ function baseMarketExactTotal(row) {
 function baseMarketAnalyzedText(row) {
   const clean = Number(row?.count || row?.clean_count || row?.offers || 0);
   const fetched = Number(row?.raw_count || row?.fetched_count || 0);
-  if (fetched > 0) return `${formatAmount(clean)} / ${formatAmount(fetched)}`;
-  return formatAmount(clean);
+  const stale = Number(row?.stale_count || 0);
+  const text = fetched > 0 ? `${formatAmount(clean)} / ${formatAmount(fetched)}` : formatAmount(clean);
+  return stale > 0 ? `${text} · ${t('staleListingsIgnored')}: ${formatAmount(stale)}` : text;
 }
 
 function baseMarketLotsLabel(row) {
@@ -3703,7 +3714,7 @@ function renderBaseMarketSamples(row) {
         <div class="base-market-sample">
           <strong>${escapeHtml(lotNativePrice(lot))}</strong>
           ${lot.price_target ? `<small>${escapeHtml(`${t('baseMarketConvertedToTarget')}: ${lotTargetPrice(lot.price_target, target)}`)}</small>` : ''}
-          <small>${escapeHtml([lot.seller, lot.item_level ? `ilvl ${lot.item_level}` : '', lot.stash].filter(Boolean).join(' · '))}</small>
+          <small>${escapeHtml([lot.seller, listingAgeText(lot), lot.item_level ? `ilvl ${lot.item_level}` : '', lot.stash].filter(Boolean).join(' · '))}</small>
         </div>
       `).join('')}
     </div>
@@ -4247,7 +4258,9 @@ function marketSourceNote(market) {
     const change = market.change === null || market.change === undefined ? '' : ` · ${t('last7days')}: ${formatChange(market.change)}`;
     return `${t('source')}: poe.ninja · ${t('volume')}: ${formatAmount(market.volume || 0)}${change}`;
   }
-  return `${t('marketLots')}: ${formatAmount(market?.count || 0)}`;
+  const stale = Number(market?.stale_count || 0);
+  const staleText = stale > 0 ? ` · ${t('staleListingsIgnored')}: ${formatAmount(stale)}` : '';
+  return `${t('marketLots')}: ${formatAmount(market?.count || 0)}${staleText}`;
 }
 
 function renderSellerLotCard(lot) {
@@ -4260,6 +4273,7 @@ function renderSellerLotCard(lot) {
   const lotBase = cleanPoeText(lot.base_type);
   const manualProfile = market.comparison?.manual_profile ? ` · ${t('manualProfile')}` : '';
   const active = lot.id && lot.id === state.focusedSellerLotId;
+  const listedAge = listingAgeText(lot);
   return `
     <article class="lot-card ${escapeHtml(verdict.kind || 'unknown')} ${active ? 'active' : ''}" data-lot-focus data-lot-id="${escapeHtml(lot.id || '')}" tabindex="0">
       <div class="lot-card-grid">
@@ -4274,7 +4288,7 @@ function renderSellerLotCard(lot) {
           ${mods ? `<div class="lot-card-note">${mods}</div>` : ''}
           ${renderSellerLotStatProfile(lot)}
           ${renderSellerLotPropertySummary(lot)}
-          <div class="lot-card-note">${t('stashSection')}: ${escapeHtml(lot.stash || '-')} · ${t('listed')}: ${formatDateTime(lot.indexed)}</div>
+          <div class="lot-card-note">${t('stashSection')}: ${escapeHtml(lot.stash || '-')} · ${t('listed')}: ${formatDateTime(lot.indexed)}${listedAge ? ` (${escapeHtml(listedAge)})` : ''}</div>
         </div>
         <div>
           <span class="lot-card-label">${t('sellerPrice')}</span>

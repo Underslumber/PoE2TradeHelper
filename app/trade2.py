@@ -14,6 +14,7 @@ import json
 import re
 import statistics
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin
@@ -73,6 +74,8 @@ ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
+MARKET_LISTING_MAX_AGE_DAYS = 14
+MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
 ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1361,7 +1364,54 @@ def _is_clean_item_base_lot(lot: dict[str, Any]) -> bool:
     return True
 
 
-def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, Any]:
+def _listing_indexed_ts(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        indexed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if indexed.tzinfo is None:
+        indexed = indexed.replace(tzinfo=timezone.utc)
+    return indexed.timestamp()
+
+
+def _listing_age_seconds(value: Any, now_ts: float | None = None) -> float | None:
+    indexed_ts = _listing_indexed_ts(value)
+    if indexed_ts is None:
+        return None
+    now = time.time() if now_ts is None else now_ts
+    return max(0.0, now - indexed_ts)
+
+
+def _is_stale_listing(lot: dict[str, Any], max_age_seconds: int = MARKET_LISTING_MAX_AGE_SECONDS) -> bool:
+    age_seconds = _to_float(lot.get("listed_age_seconds"))
+    if age_seconds is None:
+        age_seconds = _listing_age_seconds(lot.get("indexed"))
+    return age_seconds is not None and age_seconds > max_age_seconds
+
+
+def _fresh_clean_item_base_lots(
+    lots: list[dict[str, Any] | None],
+    rates: dict[str, float],
+    target: str,
+) -> tuple[list[dict[str, Any]], int]:
+    clean_lots: list[dict[str, Any]] = []
+    stale_count = 0
+    for lot in lots:
+        if not lot or not _is_clean_item_base_lot(lot):
+            continue
+        if _is_stale_listing(lot):
+            stale_count += 1
+            continue
+        clean_lots.append(_apply_target_price(lot, rates, target))
+    return clean_lots, stale_count
+
+
+def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: int = 0) -> dict[str, Any]:
     native_groups = _base_market_currency_groups(lots)
     best_native = _base_market_best_native(lots)
     raw_values = sorted(lot["price_target"] for lot in lots if isinstance(lot.get("price_target"), float))
@@ -1371,6 +1421,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, 
             "count": 0,
             "raw_count": raw_count,
             "clean_count": len(lots),
+            "stale_count": stale_count,
             "outliers": outliers,
             "low": None,
             "best": None,
@@ -1392,6 +1443,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int) -> dict[str, 
         "count": len(values),
         "raw_count": raw_count,
         "clean_count": len(lots),
+        "stale_count": stale_count,
         "outliers": outliers,
         "low": values[0],
         "best": values[0],
@@ -1502,6 +1554,9 @@ def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str,
             "seller": lot.get("seller"),
             "stash": lot.get("stash"),
             "indexed": lot.get("indexed"),
+            "listed_age_seconds": lot.get("listed_age_seconds"),
+            "listed_age_days": lot.get("listed_age_days"),
+            "stale": lot.get("stale"),
             "item_level": lot.get("item_level"),
             "price_amount": lot.get("price_amount"),
             "price_currency": lot.get("price_currency"),
@@ -2006,6 +2061,7 @@ async def _fetch_item_base_market_overview(
     lots = [_normalize_item_listing(item) for item in market_items]
     grouped_raw: dict[str, list[dict[str, Any]]] = {}
     grouped_clean: dict[str, list[dict[str, Any]]] = {}
+    grouped_stale: dict[str, int] = {}
     group_names: dict[str, str] = {}
     group_icons: dict[str, str] = {}
     for lot in lots:
@@ -2020,6 +2076,9 @@ async def _fetch_item_base_market_overview(
         if lot.get("icon"):
             group_icons.setdefault(key, lot["icon"])
         if _is_clean_item_base_lot(lot):
+            if _is_stale_listing(lot):
+                grouped_stale[key] = grouped_stale.get(key, 0) + 1
+                continue
             priced_lot = _apply_target_price(lot, rates, target)
             grouped_clean.setdefault(key, []).append(priced_lot)
 
@@ -2042,7 +2101,11 @@ async def _fetch_item_base_market_overview(
             "min_ilvl": min_ilvl,
             "total_scope": "overview_sample",
             "overview_total": market_search.get("total") or len(lots),
-            **_base_market_stats(clean_lots, raw_count=len(grouped_raw.get(key) or [])),
+            **_base_market_stats(
+                clean_lots,
+                raw_count=len(grouped_raw.get(key) or []),
+                stale_count=grouped_stale.get(key, 0),
+            ),
             "query_id": market_search.get("id"),
             "total": market_search.get("total") or len(lots),
             "sample_lots": _base_market_sample_lots(clean_lots),
@@ -2110,13 +2173,9 @@ async def _fetch_item_base_market_row(
         }
 
     lots = [_normalize_item_listing(item) for item in market_items]
-    clean_lots = [
-        _apply_target_price(lot, rates, target)
-        for lot in lots
-        if lot and _is_clean_item_base_lot(lot)
-    ]
+    clean_lots, stale_count = _fresh_clean_item_base_lots(lots, rates, target)
     local_icon = await _cache_item_base_listing_icon(row, clean_lots)
-    stats = _base_market_stats(clean_lots, raw_count=len(lots))
+    stats = _base_market_stats(clean_lots, raw_count=len(lots), stale_count=stale_count)
     return {
         **row,
         **stats,
@@ -2175,13 +2234,9 @@ async def _fetch_item_base_market_row_from_search(
         }
 
     lots = [_normalize_item_listing(item) for item in market_items]
-    clean_lots = [
-        _apply_target_price(lot, rates, target)
-        for lot in lots
-        if lot and _is_clean_item_base_lot(lot)
-    ]
+    clean_lots, stale_count = _fresh_clean_item_base_lots(lots, rates, target)
     local_icon = await _cache_item_base_listing_icon(row, clean_lots)
-    stats = _base_market_stats(clean_lots, raw_count=len(lots))
+    stats = _base_market_stats(clean_lots, raw_count=len(lots), stale_count=stale_count)
     return {
         **row,
         **stats,
@@ -3416,11 +3471,19 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
     if not stash or amount is None or not currency:
         return None
     account = listing.get("account") or {}
+    indexed = listing.get("indexed") or ""
+    indexed_ts = _listing_indexed_ts(indexed)
+    listed_age_seconds = _listing_age_seconds(indexed) if indexed else None
+    listed_age_days = listed_age_seconds / 86400 if listed_age_seconds is not None else None
     return {
         "id": entry.get("id") or item.get("id") or "",
         "seller": account.get("name") or "",
         "online": bool(account.get("online")),
-        "indexed": listing.get("indexed") or "",
+        "indexed": indexed,
+        "indexed_ts": indexed_ts,
+        "listed_age_seconds": listed_age_seconds,
+        "listed_age_days": listed_age_days,
+        "stale": listed_age_seconds is not None and listed_age_seconds > MARKET_LISTING_MAX_AGE_SECONDS,
         "stash": stash.get("name") or "",
         "stash_x": stash.get("x"),
         "stash_y": stash.get("y"),
@@ -3867,14 +3930,20 @@ async def _fetch_similar_market(
             market_search.get("id") or "",
             limit=SELLER_MARKET_FETCH_LIMIT,
         )
-        market_lots = [_normalize_item_listing(item) for item in market_items]
-        market_lots = [_apply_target_price(item, rates, target) for item in market_lots if item]
+        normalized_lots = [item for item in (_normalize_item_listing(item) for item in market_items) if item]
+        stale_count = sum(1 for item in normalized_lots if _is_stale_listing(item))
+        market_lots = [
+            _apply_target_price(item, rates, target)
+            for item in normalized_lots
+            if not _is_stale_listing(item)
+        ]
         comparable_lots = _filter_comparable_lots(lot, market_lots, looseness, profile)
         stats = _market_price_stats(comparable_lots, seller)
+        stats["stale_count"] = stale_count
         stats["confidence"] = _market_confidence(stats.get("count", 0), comparison, stats)
         last_payload = {
             "query_id": market_search.get("id"),
-            "total": market_search.get("total") or len(market_lots),
+            "total": market_search.get("total") or len(normalized_lots),
             "candidate_count": len(market_lots),
             "filtered_count": len(comparable_lots),
             "lots": comparable_lots,

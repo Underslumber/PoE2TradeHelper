@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 import app.trade2 as trade2
 from app.trade2 import build_trade_advice, normalize_exchange_result, normalize_poe_ninja_overview, normalize_static_entries
@@ -167,6 +168,29 @@ def test_normalize_item_listing_requires_stash_buyout_price():
     assert lot["stat_mods"][0]["id"] == "explicit.stat_3299347043"
     assert lot["stat_mods"][0]["type"] == "explicit"
     assert lot["stat_mods"][0]["text"] == "+10 to Strength"
+
+
+def test_normalize_item_listing_tracks_listing_age(monkeypatch):
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    indexed = now - timedelta(days=3, hours=6)
+    monkeypatch.setattr(trade2.time, "time", lambda: now.timestamp())
+    payload = {
+        "id": "item1",
+        "listing": {
+            "indexed": indexed.isoformat().replace("+00:00", "Z"),
+            "stash": {"name": "Buyout", "x": 1, "y": 2},
+            "price": {"type": "~price", "amount": 2, "currency": "divine"},
+            "account": {"name": "Seller#1234", "online": False},
+        },
+        "item": {"typeLine": "Crimson Amulet", "baseType": "Crimson Amulet", "rarity": "Normal"},
+    }
+
+    lot = trade2._normalize_item_listing(payload)
+
+    assert lot["indexed_ts"] == indexed.timestamp()
+    assert lot["listed_age_seconds"] == 3 * 86400 + 6 * 3600
+    assert lot["listed_age_days"] == 3.25
+    assert lot["stale"] is False
 
 
 def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():
@@ -1204,6 +1228,39 @@ def test_clean_item_base_lot_requires_normal_item_without_affixes():
     assert trade2._is_clean_item_base_lot(rare) is False
     assert trade2._is_clean_item_base_lot(explicit) is False
     assert trade2._is_clean_item_base_lot(fractured) is False
+
+
+def test_fresh_clean_item_base_lots_exclude_stale_listings(monkeypatch):
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(trade2.time, "time", lambda: now.timestamp())
+
+    def clean_lot(lot_id: str, days_old: int) -> dict[str, object]:
+        return {
+            "id": lot_id,
+            "indexed": (now - timedelta(days=days_old)).isoformat().replace("+00:00", "Z"),
+            "listed_age_seconds": days_old * 86400,
+            "rarity": "Normal",
+            "corrupted": False,
+            "explicit_mods": [],
+            "rune_mods": [],
+            "desecrated_mods": [],
+            "stat_mods": [],
+            "price_amount": 2.0,
+            "price_currency": "exalted",
+        }
+
+    clean_lots, stale_count = trade2._fresh_clean_item_base_lots(
+        [clean_lot("fresh", 2), clean_lot("old", 30)],
+        {"exalted": 1.0},
+        "exalted",
+    )
+    stats = trade2._base_market_stats(clean_lots, raw_count=2, stale_count=stale_count)
+
+    assert [lot["id"] for lot in clean_lots] == ["fresh"]
+    assert clean_lots[0]["price_target"] == 2.0
+    assert stale_count == 1
+    assert stats["clean_count"] == 1
+    assert stats["stale_count"] == 1
 
 
 def test_base_market_stats_store_low_market_as_chart_price():
