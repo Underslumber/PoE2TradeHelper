@@ -1321,8 +1321,9 @@ def test_item_base_market_text_filter_uses_exact_base_search(monkeypatch):
     async def fake_rates(**kwargs):
         return {"rows": [{"id": "transmutation", "median": 0.005}]}
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
         calls["search"] += 1
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         assert query["type"] == "Pearl Ring"
         assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
         return {"id": "exact-query", "total": 100, "result": ["lot1"]}
@@ -1392,7 +1393,8 @@ def test_item_base_market_background_job_collects_limited_exact_sample(monkeypat
     async def fake_rates(**kwargs):
         return {"rows": [{"id": "regal", "median": 0.17}]}
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         return {"id": "exact-query", "total": 9484, "result": ["item1"]}
 
     async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
@@ -1494,8 +1496,9 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
     async def fake_rates(**kwargs):
         return {"rows": [{"id": "regal", "median": 0.25}]}
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
         calls["search"] += 1
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
         searched_types.append(query["type"])
         return {"id": f"rough-query-{calls['search']}", "total": 5000, "result": [f"lot-{calls['search']}"]}
@@ -1592,7 +1595,8 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
             ],
         }
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         raise RuntimeError("Client error '429 Too Many Requests'")
 
     monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
@@ -1666,7 +1670,8 @@ def test_item_base_market_fetch_rate_limit_preserves_search_total(monkeypatch):
             ],
         }
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         return {"id": "search-id", "total": 3423, "result": ["a", "b"]}
 
     async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):
@@ -2057,7 +2062,8 @@ def test_item_base_market_exact_refresh_hides_zero_result_base(monkeypatch):
             "errors": [],
         }
 
-    async def fake_search(league, query, sort=None):
+    async def fake_search(league, query, sort=None, api_base=None):
+        assert api_base == trade2.ITEM_BASE_MARKET_TRADE2_BASE
         return {"id": "search-id", "total": 0, "result": []}
 
     async def fake_fetch_from_search(base, market_search, target, rates, min_ilvl=None, fetch_limit=None):

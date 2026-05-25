@@ -28,6 +28,7 @@ from app.recipes import analyze_recipes, filter_dominated_emotion_paths
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
+ITEM_BASE_MARKET_TRADE2_BASE = TRADE2_BASE
 POE2DB_BASE = "https://poe2db.tw"
 POE2DB_RU_BASE = "https://poe2db.tw/ru"
 POE_SITE_BASE = "https://www.pathofexile.com"
@@ -607,10 +608,11 @@ async def _post_search(
     league: str,
     query: dict[str, Any],
     sort: dict[str, str] | None = None,
+    api_base: str = TRADE2_RU_BASE,
 ) -> dict[str, Any]:
     body = {"query": query, "sort": sort or {"price": "asc"}}
     async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
-        url = f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}"
+        url = f"{api_base}/search/poe2/{quote(league, safe='')}"
         response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
             wait = _retry_after_wait(response, "trade2 search")
@@ -624,7 +626,12 @@ async def _post_search(
     return response.json()
 
 
-async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> list[dict[str, Any]]:
+async def _fetch_trade_items(
+    ids: list[str],
+    query_id: str,
+    limit: int = 60,
+    api_base: str = TRADE2_RU_BASE,
+) -> list[dict[str, Any]]:
     selected_ids = [item_id for item_id in ids[:limit] if item_id]
     if not selected_ids:
         return []
@@ -633,7 +640,7 @@ async def _fetch_trade_items(ids: list[str], query_id: str, limit: int = 60) -> 
         chunks = _chunked(selected_ids, 10)
         for index, chunk_ids in enumerate(chunks):
             chunk = ",".join(chunk_ids)
-            url = f"{TRADE2_RU_BASE}/fetch/{chunk}"
+            url = f"{api_base}/fetch/{chunk}"
             response = await trade2_rate_limited_request(lambda: client.get(url, params={"query": query_id}))
             if response.status_code == 429:
                 wait = _retry_after_wait(response, "trade2 fetch")
@@ -1985,11 +1992,16 @@ async def _fetch_item_base_market_overview(
     rates: dict[str, float],
     min_ilvl: int | None = None,
 ) -> dict[str, Any]:
-    market_search = await _post_search(league, _item_base_market_overview_query(status, min_ilvl=min_ilvl))
+    market_search = await _post_search(
+        league,
+        _item_base_market_overview_query(status, min_ilvl=min_ilvl),
+        api_base=ITEM_BASE_MARKET_TRADE2_BASE,
+    )
     market_items = await _fetch_trade_items(
         market_search.get("result") or [],
         market_search.get("id") or "",
         limit=ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT,
+        api_base=ITEM_BASE_MARKET_TRADE2_BASE,
     )
     lots = [_normalize_item_listing(item) for item in market_items]
     grouped_raw: dict[str, list[dict[str, Any]]] = {}
@@ -2067,6 +2079,7 @@ async def _fetch_item_base_market_row(
         market_search = await _post_search(
             league,
             _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
+            api_base=ITEM_BASE_MARKET_TRADE2_BASE,
         )
     except Exception as exc:
         return {
@@ -2082,6 +2095,7 @@ async def _fetch_item_base_market_row(
             market_search.get("result") or [],
             market_search.get("id") or "",
             limit=_item_base_fetch_limit(fetch_limit),
+            api_base=ITEM_BASE_MARKET_TRADE2_BASE,
         )
     except Exception as exc:
         return {
@@ -2146,6 +2160,7 @@ async def _fetch_item_base_market_row_from_search(
             market_search.get("result") or [],
             market_search.get("id") or "",
             limit=_item_base_fetch_limit(fetch_limit),
+            api_base=ITEM_BASE_MARKET_TRADE2_BASE,
         )
     except Exception as exc:
         return {
@@ -2424,6 +2439,7 @@ async def run_item_base_market_refresh_job(
             market_search = await _post_search(
                 league,
                 _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
+                api_base=ITEM_BASE_MARKET_TRADE2_BASE,
             )
             if market_search.get("id"):
                 exact_query_ids.append(market_search["id"])
