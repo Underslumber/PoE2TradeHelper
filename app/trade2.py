@@ -2145,15 +2145,25 @@ async def _enrich_stored_item_base_market_rows(
         bases = _item_base_fallback_catalog()
 
     rows_by_id: dict[str, dict[str, Any]] = {}
+    rows_by_key: dict[str, dict[str, Any]] = {}
     for base in bases:
         base_row = _base_market_row_from_base(base, min_ilvl=min_ilvl)
         if base_row.get("id"):
             rows_by_id[str(base_row["id"])] = base_row
+        for key in _base_market_keys(base_row):
+            rows_by_key.setdefault(key, base_row)
 
     enriched_rows = []
     for row in rows:
         item_id = str(row.get("id") or "")
-        base_row = rows_by_id.get(item_id) or _base_market_row_from_stored_id(item_id, min_ilvl=min_ilvl)
+        stored_row = _base_market_row_from_stored_id(item_id, min_ilvl=min_ilvl)
+        stored_keys = _base_market_keys(stored_row)
+        for key in _base_market_keys(row):
+            stored_keys.add(key)
+        base_row = rows_by_id.get(item_id) or next((rows_by_key[key] for key in stored_keys if key in rows_by_key), None)
+        matched_catalog = base_row is not None
+        if base_row is None:
+            base_row = stored_row
         enriched = {**base_row, **row}
         if min_ilvl is not None and "min_ilvl" not in row:
             enriched["min_ilvl"] = None
@@ -2166,13 +2176,13 @@ async def _enrich_stored_item_base_market_rows(
             median = _to_float(row.get("median")) or _to_float(row.get("best"))
             if median is not None:
                 enriched["market_median"] = median
-        source_text = stored_source.lower()
+        source_text = str(row.get("stored_source") or stored_source).lower()
         if (
             "trade2/search+fetch" in source_text
             and "exact" not in source_text
-            and "overview" not in source_text
             and _to_float(enriched.get("low")) is not None
             and ((_to_float(enriched.get("volume")) or 0) > 0 or (_to_int(enriched.get("offers")) or 0) > 0)
+            and ("overview" not in source_text or matched_catalog)
         ):
             enriched["stored_price_evidence"] = True
             stored_count = _to_int(enriched.get("offers")) or _to_int(enriched.get("volume"))
@@ -2202,6 +2212,7 @@ def _read_item_base_market_history_snapshot(
         return None
 
     rows_by_id: dict[str, dict[str, Any]] = {}
+    row_source_rank_by_id: dict[str, int] = {}
     created_ts = 0.0
     accepted_snapshots = 0
     query_ids: list[Any] = []
@@ -2209,8 +2220,9 @@ def _read_item_base_market_history_snapshot(
     for snapshot in snapshots:
         source = str(snapshot.get("source") or "")
         source_lc = source.lower()
-        if "trade2/search+fetch" not in source_lc or "exact" in source_lc or "overview" in source_lc:
+        if "trade2/search+fetch" not in source_lc or "exact" in source_lc:
             continue
+        source_rank = 0 if "rough" in source_lc else 1
         accepted_snapshots += 1
         created_ts = max(created_ts, _to_float(snapshot.get("created_ts")) or 0.0)
         for query_id in snapshot.get("query_ids") or []:
@@ -2221,8 +2233,12 @@ def _read_item_base_market_history_snapshot(
                 errors.append(error)
         for row in snapshot.get("rows") or []:
             item_id = str(row.get("id") or "").strip()
-            if item_id and item_id not in rows_by_id:
-                rows_by_id[item_id] = dict(row)
+            if not item_id:
+                continue
+            current_rank = row_source_rank_by_id.get(item_id)
+            if current_rank is None or source_rank < current_rank:
+                rows_by_id[item_id] = {**dict(row), "stored_source": source}
+                row_source_rank_by_id[item_id] = source_rank
 
     if not rows_by_id:
         return None
@@ -2233,7 +2249,7 @@ def _read_item_base_market_history_snapshot(
         "category": ITEM_BASE_MARKET_CATEGORY,
         "target": target,
         "status": status,
-        "source": "trade2/search+fetch:rough+history",
+        "source": "trade2/search+fetch:rough+overview+history",
         "query_ids": query_ids,
         "errors": errors,
         "rows": list(rows_by_id.values()),
@@ -2952,7 +2968,7 @@ async def get_item_base_market(
             status=status,
         )
         latest_source = str((latest or {}).get("source") or "")
-        if latest and ("exact" in latest_source or "overview" in latest_source):
+        if latest and "exact" in latest_source:
             latest = None
         if latest:
             catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)

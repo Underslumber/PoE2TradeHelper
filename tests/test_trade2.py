@@ -2201,7 +2201,7 @@ def test_item_base_market_exact_refresh_hides_zero_result_base(monkeypatch):
     assert result["rows"] == []
 
 
-def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch):
+def test_item_base_market_blank_query_uses_catalog_matched_stored_overview_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
 
@@ -2209,7 +2209,7 @@ def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch
         return {
             "created_ts": 10.0,
             "source": "trade2/search+fetch:overview",
-            "rows": [{"id": "base:crossbow", "text": "Crossbow", "text_ru": "Арбалет", "low": 1.0}],
+            "rows": [{"id": "base:crossbow", "text": "Crossbow", "text_ru": "Арбалет", "low": 1.0, "offers": 1}],
         }
 
     async def fake_catalog(q="", limit=1000):
@@ -2242,9 +2242,11 @@ def test_item_base_market_blank_query_skips_stored_overview_snapshot(monkeypatch
     )
 
     assert result["stored"] is True
-    assert result["source"] == "item-base-catalog"
-    assert result["rows"] == []
-    assert result["matched_total"] == 0
+    assert result["source"] == "trade2/search+fetch:overview"
+    assert result["rows"][0]["id"] == "base:crossbow"
+    assert result["rows"][0]["low"] == 1.0
+    assert result["rows"][0]["stored_price_evidence"] is True
+    assert result["matched_total"] == 1
 
 
 def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
@@ -2668,7 +2670,7 @@ def test_item_base_market_aggregates_latest_rows_from_history_batches(monkeypatc
     )
 
     assert result["stored"] is True
-    assert result["source"] == "trade2/search+fetch:rough+history"
+    assert result["source"] == "trade2/search+fetch:rough+overview+history"
     assert result["stored_history_snapshots"] == 2
     assert {row["id"]: row["low"] for row in result["rows"]} == {
         "base:amber-amulet": 2.0,
