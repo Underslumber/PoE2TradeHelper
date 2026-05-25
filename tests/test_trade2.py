@@ -2604,6 +2604,8 @@ def test_item_base_market_shows_stored_rough_price_rows(monkeypatch):
     assert result["stored"] is True
     assert result["rows"][0]["id"] == "base:pearl-ring"
     assert result["rows"][0]["low"] == 0.01
+    assert result["rows"][0]["clean_count"] == 1
+    assert result["rows"][0]["fetched_count"] == 1
     assert result["rows"][0]["stored_price_evidence"] is True
 
 

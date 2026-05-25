@@ -2175,6 +2175,11 @@ async def _enrich_stored_item_base_market_rows(
             and ((_to_float(enriched.get("volume")) or 0) > 0 or (_to_int(enriched.get("offers")) or 0) > 0)
         ):
             enriched["stored_price_evidence"] = True
+            stored_count = _to_int(enriched.get("offers")) or _to_int(enriched.get("volume"))
+            if stored_count:
+                for count_key in ("count", "clean_count", "raw_count", "fetched_count"):
+                    if not (_to_int(enriched.get(count_key)) or 0):
+                        enriched[count_key] = stored_count
         enriched_rows.append(enriched)
     return enriched_rows
 
