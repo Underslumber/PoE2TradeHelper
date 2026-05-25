@@ -2609,6 +2609,73 @@ def test_item_base_market_shows_stored_rough_price_rows(monkeypatch):
     assert result["rows"][0]["stored_price_evidence"] is True
 
 
+def test_item_base_market_aggregates_latest_rows_from_history_batches(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    def fake_read_history(**kwargs):
+        assert kwargs["category"] == "ItemBases"
+        return [
+            {
+                "created_ts": 30.0,
+                "source": "trade2/search+fetch:rough",
+                "rows": [
+                    {"id": "base:amber-amulet", "best": 2.0, "offers": 2, "volume": 2},
+                ],
+            },
+            {
+                "created_ts": 20.0,
+                "source": "trade2/search+fetch:rough",
+                "rows": [
+                    {"id": "base:amber-amulet", "best": 1.0, "offers": 1, "volume": 1},
+                    {"id": "base:pearl-ring", "best": 3.0, "offers": 3, "volume": 3},
+                ],
+            },
+        ]
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "total": 2,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                },
+                {
+                    "id": "base:pearl-ring",
+                    "type": "Pearl Ring",
+                    "type_ru": "Жемчужное кольцо",
+                    "query_type": "Жемчужное кольцо",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(trade2, "read_history", fake_read_history)
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="securable",
+            q="",
+            limit=40,
+            force_refresh=False,
+        )
+    )
+
+    assert result["stored"] is True
+    assert result["source"] == "trade2/search+fetch:rough+history"
+    assert result["stored_history_snapshots"] == 2
+    assert {row["id"]: row["low"] for row in result["rows"]} == {
+        "base:amber-amulet": 2.0,
+        "base:pearl-ring": 3.0,
+    }
+
+
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():
     parsed = {
         "display_name": "Vengeance Veil Waxed Jacket",

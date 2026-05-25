@@ -2184,6 +2184,64 @@ async def _enrich_stored_item_base_market_rows(
     return enriched_rows
 
 
+def _read_item_base_market_history_snapshot(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    limit: int = 1500,
+) -> dict[str, Any] | None:
+    snapshots = read_history(
+        limit=limit,
+        league=league,
+        category=ITEM_BASE_MARKET_CATEGORY,
+        target=target,
+        status=status,
+    )
+    if not snapshots:
+        return None
+
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    created_ts = 0.0
+    accepted_snapshots = 0
+    query_ids: list[Any] = []
+    errors: list[Any] = []
+    for snapshot in snapshots:
+        source = str(snapshot.get("source") or "")
+        source_lc = source.lower()
+        if "trade2/search+fetch" not in source_lc or "exact" in source_lc or "overview" in source_lc:
+            continue
+        accepted_snapshots += 1
+        created_ts = max(created_ts, _to_float(snapshot.get("created_ts")) or 0.0)
+        for query_id in snapshot.get("query_ids") or []:
+            if query_id not in query_ids:
+                query_ids.append(query_id)
+        for error in snapshot.get("errors") or []:
+            if error not in errors:
+                errors.append(error)
+        for row in snapshot.get("rows") or []:
+            item_id = str(row.get("id") or "").strip()
+            if item_id and item_id not in rows_by_id:
+                rows_by_id[item_id] = dict(row)
+
+    if not rows_by_id:
+        return None
+    return {
+        "schema_version": "poe2-item-base-market/v1",
+        "created_ts": created_ts or time.time(),
+        "league": league,
+        "category": ITEM_BASE_MARKET_CATEGORY,
+        "target": target,
+        "status": status,
+        "source": "trade2/search+fetch:rough+history",
+        "query_ids": query_ids,
+        "errors": errors,
+        "rows": list(rows_by_id.values()),
+        "stored_history_snapshots": accepted_snapshots,
+        "stored_history_rows": len(rows_by_id),
+    }
+
+
 async def _fetch_item_base_market_overview(
     league: str,
     target: str,
@@ -2535,7 +2593,12 @@ async def run_item_base_market_refresh_job(
         if previous_payload and not _item_base_market_payload_is_error_only(previous_payload):
             previous_rows = list(previous_payload.get("rows") or [])
         if not previous_rows:
-            latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+            latest = _read_item_base_market_history_snapshot(league=league, target=target, status=status) or read_latest_rates(
+                league=league,
+                category=ITEM_BASE_MARKET_CATEGORY,
+                target=target,
+                status=status,
+            )
             latest_source = str((latest or {}).get("source") or "")
             if latest and "exact" not in latest_source and "overview" not in latest_source:
                 previous_rows = await _enrich_stored_item_base_market_rows(
@@ -2882,7 +2945,12 @@ async def get_item_base_market(
                 if active_refresh_job is not None:
                     payload["refresh_job"] = active_refresh_job
                 return payload
-        latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+        latest = _read_item_base_market_history_snapshot(league=league, target=target, status=status) or read_latest_rates(
+            league=league,
+            category=ITEM_BASE_MARKET_CATEGORY,
+            target=target,
+            status=status,
+        )
         latest_source = str((latest or {}).get("source") or "")
         if latest and ("exact" in latest_source or "overview" in latest_source):
             latest = None
