@@ -113,6 +113,9 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "persistBaseMarketPriceCurrency();" in app_js
     assert "updateBaseMarketPriceCurrencyIcon();" in app_js
     assert "updateBaseMarketPriceTriggerTitle();" in app_js
+    assert "function baseMarketPayloadHasActiveJob(payload)" in app_js
+    assert "!baseMarketPayloadHasActiveJob(cachedMarket)" in app_js
+    assert "!baseMarketPayloadHasActiveJob(data)" in app_js
     assert "row?.count || row?.clean_count || row?.offers || 0" in app_js
     assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js

@@ -3464,6 +3464,10 @@ function baseMarketJobIsActive(job = baseMarketRefreshJob()) {
   return ['queued', 'running', 'rate_limited'].includes(String(job?.status || ''));
 }
 
+function baseMarketPayloadHasActiveJob(payload) {
+  return baseMarketJobIsActive(payload?.refresh_job || null);
+}
+
 function baseMarketJobText(job = baseMarketRefreshJob()) {
   const status = String(job?.status || '');
   if (!status) return '';
@@ -3877,8 +3881,9 @@ async function refreshBaseMarket(forceRefresh = true) {
   }
   const searchParams = new URLSearchParams(params);
   const cacheKey = searchParams.toString();
-  if (!forceRefresh && state.baseMarketCache[cacheKey] && state.baseMarketCache[cacheKey].stored !== false) {
-    state.baseMarket = state.baseMarketCache[cacheKey];
+  const cachedMarket = state.baseMarketCache[cacheKey];
+  if (!forceRefresh && cachedMarket && cachedMarket.stored !== false && !baseMarketPayloadHasActiveJob(cachedMarket)) {
+    state.baseMarket = cachedMarket;
     renderBaseMarket();
     scheduleBaseMarketPoll();
     return;
@@ -3900,7 +3905,7 @@ async function refreshBaseMarket(forceRefresh = true) {
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
     state.baseMarket = data;
     state.focusedBaseMarketId = data.rows?.[0]?.id || '';
-    if (forceRefresh || data.stored !== false || (data.rows || []).length) {
+    if (!baseMarketPayloadHasActiveJob(data) && (forceRefresh || data.stored !== false || (data.rows || []).length)) {
       state.baseMarketCache[cacheKey] = data;
     }
   } catch (error) {
