@@ -2796,6 +2796,7 @@ async def get_item_base_market(
     canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, collection_min_ilvl)
     exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, collection_min_ilvl)
     min_visible_lots = _item_base_market_min_visible_lots(q)
+    active_refresh_job: dict[str, Any] | None = None
     if not force_refresh:
         cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
         if not cached and q:
@@ -2811,15 +2812,17 @@ async def get_item_base_market(
                 return payload
         job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit))
         if job and time.time() - float(job.get("created_ts") or 0) < ITEM_BASE_MARKET_JOB_TTL:
+            active_refresh_job = _item_base_market_job_view(job)
             result = _cache_copy(job.get("result") or {})
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
                 _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
-                result["refresh_job"] = _item_base_market_job_view(job)
+                result["refresh_job"] = active_refresh_job
                 result["cached"] = False
-                return result
+                if result.get("rows") or str(job.get("status") or "") not in {"queued", "running", "rate_limited"}:
+                    return result
             try:
                 catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
                 if q and not catalog.get("bases"):
@@ -2837,7 +2840,9 @@ async def get_item_base_market(
                 catalog=catalog,
             )
             rows = _visible_item_base_market_rows(pending.get("rows") or [], min_lots=min_visible_lots)
-            return _apply_item_base_market_price_filter(pending, rows, limit=limit, price_filter=price_filter)
+            pending = _apply_item_base_market_price_filter(pending, rows, limit=limit, price_filter=price_filter)
+            if pending.get("rows") or str(job.get("status") or "") not in {"queued", "running", "rate_limited"}:
+                return pending
         cached = None
         if cache_key != canonical_cache_key:
             cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
@@ -2849,6 +2854,8 @@ async def get_item_base_market(
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
+                if active_refresh_job is not None:
+                    payload["refresh_job"] = active_refresh_job
                 return payload
         latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
         latest_source = str((latest or {}).get("source") or "")
@@ -2870,7 +2877,10 @@ async def get_item_base_market(
                 "cached": True,
                 "stored": True,
             }
-            return _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
+            payload = _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
+            if active_refresh_job is not None:
+                payload["refresh_job"] = active_refresh_job
+            return payload
         catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
         if q and not catalog.get("bases"):
             catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
@@ -2890,7 +2900,10 @@ async def get_item_base_market(
             stored=True,
         )
         visible_rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
-        return _apply_item_base_market_price_filter(payload, visible_rows, limit=limit, price_filter=price_filter)
+        payload = _apply_item_base_market_price_filter(payload, visible_rows, limit=limit, price_filter=price_filter)
+        if active_refresh_job is not None:
+            payload["refresh_job"] = active_refresh_job
+        return payload
 
     job, coroutine = start_item_base_market_refresh_job(
         league=league,
