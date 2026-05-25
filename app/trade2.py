@@ -76,6 +76,9 @@ ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
 MARKET_LISTING_MAX_AGE_DAYS = 14
 MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
+MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
+MARKET_LISTING_HIGH_DEMAND_COUNT = 3
+ITEM_BASE_MARKET_PRIORITY_RECHECK_LIMIT = 4
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
 ITEM_BASE_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1394,6 +1397,27 @@ def _is_stale_listing(lot: dict[str, Any], max_age_seconds: int = MARKET_LISTING
     return age_seconds is not None and age_seconds > max_age_seconds
 
 
+def _is_high_demand_age_listing(lot: dict[str, Any], max_age_seconds: int = MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS) -> bool:
+    age_seconds = _to_float(lot.get("listed_age_seconds"))
+    if age_seconds is None:
+        age_seconds = _listing_age_seconds(lot.get("indexed"))
+    return age_seconds is not None and age_seconds <= max_age_seconds
+
+
+def _high_demand_count(lots: list[dict[str, Any]]) -> int:
+    return sum(1 for lot in lots if _is_high_demand_age_listing(lot))
+
+
+def _high_demand_fields(lots: list[dict[str, Any]]) -> dict[str, Any]:
+    recent_count = _high_demand_count(lots)
+    return {
+        "recent_listing_count": recent_count,
+        "high_demand": recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT,
+        "high_demand_threshold": MARKET_LISTING_HIGH_DEMAND_COUNT,
+        "high_demand_age_seconds": MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS,
+    }
+
+
 def _fresh_clean_item_base_lots(
     lots: list[dict[str, Any] | None],
     rates: dict[str, float],
@@ -1414,6 +1438,7 @@ def _fresh_clean_item_base_lots(
 def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: int = 0) -> dict[str, Any]:
     native_groups = _base_market_currency_groups(lots)
     best_native = _base_market_best_native(lots)
+    demand_fields = _high_demand_fields(lots)
     raw_values = sorted(lot["price_target"] for lot in lots if isinstance(lot.get("price_target"), float))
     values, outliers = _trim_price_outliers(raw_values)
     if not values:
@@ -1422,6 +1447,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: 
             "raw_count": raw_count,
             "clean_count": len(lots),
             "stale_count": stale_count,
+            **demand_fields,
             "outliers": outliers,
             "low": None,
             "best": None,
@@ -1444,6 +1470,7 @@ def _base_market_stats(lots: list[dict[str, Any]], raw_count: int, stale_count: 
         "raw_count": raw_count,
         "clean_count": len(lots),
         "stale_count": stale_count,
+        **demand_fields,
         "outliers": outliers,
         "low": values[0],
         "best": values[0],
@@ -1557,6 +1584,7 @@ def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str,
             "listed_age_seconds": lot.get("listed_age_seconds"),
             "listed_age_days": lot.get("listed_age_days"),
             "stale": lot.get("stale"),
+            "high_demand_age": lot.get("high_demand_age"),
             "item_level": lot.get("item_level"),
             "price_amount": lot.get("price_amount"),
             "price_currency": lot.get("price_currency"),
@@ -1633,6 +1661,53 @@ def _base_market_row_keys(row: dict[str, Any]) -> set[str]:
         )
         if key
     }
+
+
+def _base_market_keys(row: dict[str, Any]) -> set[str]:
+    keys = _base_market_row_keys(row)
+    item_id = str(row.get("id") or "")
+    if item_id:
+        keys.add(item_id)
+    return keys
+
+
+def _base_market_base_keys(base: dict[str, Any]) -> set[str]:
+    return _base_market_keys(_base_market_row_from_base(base))
+
+
+def _item_base_market_row_has_high_demand(row: dict[str, Any]) -> bool:
+    recent_count = _to_int(row.get("recent_listing_count")) or 0
+    return bool(row.get("high_demand")) or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT
+
+
+def _item_base_market_priority_bases(
+    bases: list[dict[str, Any]],
+    previous_rows: list[dict[str, Any]],
+    limit: int = ITEM_BASE_MARKET_PRIORITY_RECHECK_LIMIT,
+) -> list[dict[str, Any]]:
+    if not bases or not previous_rows or limit <= 0:
+        return []
+    priority_rows = sorted(
+        [row for row in previous_rows if _item_base_market_row_has_high_demand(row)],
+        key=lambda row: (_to_int(row.get("recent_listing_count")) or 0, _to_int(row.get("clean_count")) or 0),
+        reverse=True,
+    )
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[int] = set()
+    for row in priority_rows:
+        row_keys = _base_market_keys(row)
+        if not row_keys:
+            continue
+        for base in bases:
+            if id(base) in selected_ids:
+                continue
+            if _base_market_base_keys(base) & row_keys:
+                selected.append(base)
+                selected_ids.add(id(base))
+                break
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _base_market_catalog_rows(catalog: dict[str, Any], min_ilvl: int | None = None) -> list[dict[str, Any]]:
@@ -1908,17 +1983,45 @@ def _item_base_market_scan_cursor_key(
 def _item_base_market_scan_batch(
     bases: list[dict[str, Any]],
     cursor_key: tuple[Any, ...],
-) -> tuple[list[dict[str, Any]], int, int]:
+    priority_bases: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], int, int, int, int]:
     if not bases:
-        return [], 0, 0
+        return [], 0, 0, 0, 0
     batch_size = max(1, min(ITEM_BASE_MARKET_SCAN_BATCH_SIZE, len(bases), ITEM_BASE_MARKET_SCAN_LIMIT))
     start = ITEM_BASE_MARKET_SCAN_CURSORS.get(cursor_key, 0) % len(bases)
-    end = start + batch_size
-    if end <= len(bases):
-        selected = bases[start:end]
+    return _item_base_market_scan_batch_from_priority(bases, start, batch_size, priority_bases)
+
+
+def _item_base_market_scan_batch_from_priority(
+    bases: list[dict[str, Any]],
+    start: int,
+    batch_size: int,
+    priority_bases: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], int, int, int, int]:
+    priority_selected: list[dict[str, Any]] = []
+    priority_keys: set[str] = set()
+    for base in priority_bases or []:
+        if len(priority_selected) >= batch_size:
+            break
+        keys = _base_market_base_keys(base)
+        if not keys or priority_keys & keys:
+            continue
+        priority_selected.append(base)
+        priority_keys.update(keys)
+
+    remaining = max(0, batch_size - len(priority_selected))
+    if remaining <= 0:
+        normal_candidates: list[dict[str, Any]] = []
+        next_position = start
+    elif start + remaining <= len(bases):
+        normal_candidates = bases[start : start + remaining]
+        next_position = (start + remaining) % len(bases)
     else:
-        selected = [*bases[start:], *bases[: end - len(bases)]]
-    return selected, start, (start + len(selected)) % len(bases)
+        normal_candidates = [*bases[start:], *bases[: start + remaining - len(bases)]]
+        next_position = (start + remaining) % len(bases)
+    normal_selected = [base for base in normal_candidates if not (_base_market_base_keys(base) & priority_keys)]
+    selected = [*priority_selected, *normal_selected]
+    return selected, start, next_position, len(priority_selected), len(normal_selected)
 
 
 def _advance_item_base_market_scan_cursor(cursor_key: tuple[Any, ...] | None, next_position: int | None) -> None:
@@ -1962,6 +2065,7 @@ def _item_base_market_job_view(job: dict[str, Any] | None) -> dict[str, Any] | N
         "catalog_total",
         "scan_start",
         "scan_next",
+        "priority_recheck_count",
         "processed_count",
         "fetched_count",
         "clean_count",
@@ -2370,6 +2474,7 @@ async def run_item_base_market_refresh_job(
             "processed_count": 0,
             "fetched_count": 0,
             "clean_count": 0,
+            "priority_recheck_count": 0,
             "error": None,
         }
         ITEM_BASE_MARKET_JOBS[key] = job
@@ -2379,26 +2484,6 @@ async def run_item_base_market_refresh_job(
     if q and not catalog.get("bases"):
         catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
     bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
-    if q:
-        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
-        scan_cursor_key = None
-        scan_start = None
-        scan_next = None
-    else:
-        scan_cursor_key = _item_base_market_scan_cursor_key(league, target, status, min_ilvl)
-        selected_bases, scan_start, scan_next = _item_base_market_scan_batch(bases[:ITEM_BASE_MARKET_SCAN_LIMIT], scan_cursor_key)
-    errors = list(catalog.get("errors") or [])
-    job["base_total"] = len(selected_bases)
-    job["catalog_total"] = len(bases)
-    job["scan_start"] = scan_start
-    job["scan_next"] = scan_next
-    job["total"] = len(bases) if not q else None
-
-    _, rates = await _currency_rates_for_target(league, target, status="any")
-
-    rows: list[dict[str, Any]] = []
-    exact_query_ids: list[str] = []
-    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:rough"
     previous_rows: list[dict[str, Any]] = []
     if not q:
         previous_payload = None
@@ -2415,12 +2500,38 @@ async def run_item_base_market_refresh_job(
             if latest and "exact" not in latest_source and "overview" not in latest_source:
                 previous_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
 
+    priority_recheck_count = 0
+    normal_scan_count = 0
+    if q:
+        selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
+        scan_cursor_key = None
+        scan_start = None
+        scan_next = None
+    else:
+        scan_cursor_key = _item_base_market_scan_cursor_key(league, target, status, min_ilvl)
+        scan_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
+        priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows)
+        selected_bases, scan_start, scan_next, priority_recheck_count, normal_scan_count = _item_base_market_scan_batch(
+            scan_bases,
+            scan_cursor_key,
+            priority_bases=priority_bases,
+        )
+    errors = list(catalog.get("errors") or [])
+    job["base_total"] = len(selected_bases)
+    job["catalog_total"] = len(bases)
+    job["scan_start"] = scan_start
+    job["scan_next"] = scan_next
+    job["priority_recheck_count"] = priority_recheck_count
+    job["total"] = len(bases) if not q else None
+
+    _, rates = await _currency_rates_for_target(league, target, status="any")
+
+    rows: list[dict[str, Any]] = []
+    exact_query_ids: list[str] = []
+    source = "trade2/search+fetch:exact" if q else "trade2/search+fetch:rough"
+
     def row_keys(row: dict[str, Any]) -> set[str]:
-        keys = _base_market_row_keys(row)
-        item_id = str(row.get("id") or "")
-        if item_id:
-            keys.add(item_id)
-        return keys
+        return _base_market_keys(row)
 
     def publish_result(extra_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         combined_rows = [*rows, *(extra_rows or [])]
@@ -2465,7 +2576,13 @@ async def run_item_base_market_refresh_job(
     def update_scan_progress(processed_count: int) -> None:
         if q or scan_start is None or not bases:
             return
-        job["scan_next"] = (scan_start + max(0, processed_count)) % len(bases)
+        normal_processed = max(0, processed_count - priority_recheck_count)
+        if scan_next is not None and processed_count >= len(selected_bases):
+            job["scan_next"] = scan_next
+        elif normal_scan_count and normal_processed >= normal_scan_count and scan_next is not None:
+            job["scan_next"] = scan_next
+        else:
+            job["scan_next"] = (scan_start + normal_processed) % len(bases)
 
     publish_result()
     base_index = 0
@@ -2614,6 +2731,7 @@ def start_item_base_market_refresh_job(
         "processed_count": 0,
         "fetched_count": 0,
         "clean_count": 0,
+        "priority_recheck_count": 0,
         "error": None,
     }
     ITEM_BASE_MARKET_JOBS[key] = job
@@ -3484,6 +3602,7 @@ def _normalize_item_listing(entry: dict[str, Any]) -> dict[str, Any] | None:
         "listed_age_seconds": listed_age_seconds,
         "listed_age_days": listed_age_days,
         "stale": listed_age_seconds is not None and listed_age_seconds > MARKET_LISTING_MAX_AGE_SECONDS,
+        "high_demand_age": listed_age_seconds is not None and listed_age_seconds <= MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS,
         "stash": stash.get("name") or "",
         "stash_x": stash.get("x"),
         "stash_y": stash.get("y"),
@@ -3758,6 +3877,7 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
         for lot in lots
         if isinstance(lot.get("price_target"), float) and lot.get("seller", "").lower() != seller_key
     ]
+    demand_fields = _high_demand_fields(priced_lots)
     raw_values = sorted(lot["price_target"] for lot in priced_lots)
     similarity_scores = [
         similarity["score"]
@@ -3778,6 +3898,7 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
             "p75": None,
             "avg_similarity": None,
             "min_similarity": None,
+            **demand_fields,
         }
     median = statistics.median(values)
     return {
@@ -3791,6 +3912,7 @@ def _market_price_stats(lots: list[dict[str, Any]], seller: str) -> dict[str, An
         "p75": _percentile(values, 0.75),
         "avg_similarity": statistics.mean(similarity_scores) if similarity_scores else None,
         "min_similarity": min(similarity_scores) if similarity_scores else None,
+        **demand_fields,
     }
 
 

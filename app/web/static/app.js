@@ -3486,12 +3486,14 @@ function baseMarketJobText(job = baseMarketRefreshJob()) {
   const processed = Number(job?.processed_count || 0);
   const baseTotal = Number(job?.base_total || 0);
   const catalogTotal = Number(job?.catalog_total || 0);
+  const priority = Number(job?.priority_recheck_count || 0);
   const baseProgress = baseTotal > 0 ? `${t('baseMarketBatchProgress')}: ${formatAmount(processed)} / ${formatAmount(baseTotal)} ${t('baseMarketBasesProgress')}` : '';
   const catalogProgress = catalogTotal > 0 ? `${t('baseMarketCatalogProgress')}: ${formatAmount(catalogTotal)}` : '';
+  const priorityProgress = priority > 0 ? `${t('baseMarketPriorityRecheck')}: ${formatAmount(priority)}` : '';
   const lotProgress = fetched > 0
     ? `${t('baseMarketLotsChecked')}: ${formatAmount(clean)} / ${formatAmount(fetched)}`
     : '';
-  const progress = [baseProgress, catalogProgress, lotProgress].filter(Boolean).join(' · ');
+  const progress = [baseProgress, catalogProgress, priorityProgress, lotProgress].filter(Boolean).join(' · ');
   if (status === 'queued') return t('baseMarketRefreshQueued');
   if (status === 'running') return [t('baseMarketRefreshRunning'), progress].filter(Boolean).join(': ');
   if (status === 'rate_limited') {
@@ -3634,6 +3636,22 @@ function baseMarketAnalyzedText(row) {
   return stale > 0 ? `${text} · ${t('staleListingsIgnored')}: ${formatAmount(stale)}` : text;
 }
 
+function baseMarketRecentListings(row) {
+  const value = Number(row?.recent_listing_count || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function baseMarketDemandText(row) {
+  const recent = baseMarketRecentListings(row);
+  if (!recent) return t('baseMarketDemandNormal');
+  return `${row?.high_demand ? t('baseMarketHighDemand') : t('baseMarketDemandNormal')} · ${t('baseMarketRecentListings')}: ${formatAmount(recent)}`;
+}
+
+function baseMarketDemandBadge(row) {
+  if (!row?.high_demand) return '';
+  return `<span class="advice-badge demand">${escapeHtml(t('baseMarketHighDemand'))}</span>`;
+}
+
 function baseMarketLotsLabel(row) {
   if (baseMarketExactTotal(row)) return t('baseMarketTotalFound');
   if (row?.total_scope === 'stored_snapshot' || state.baseMarket?.stored) return t('baseMarketStoredLots');
@@ -3653,8 +3671,9 @@ function baseMarketErrorLabel(errorText) {
 }
 
 function baseMarketRowState(row) {
-  if (baseMarketLowPrice(row)) return t('baseMarketHasPriceData');
-  return baseMarketErrorLabel(row?.error) || t('baseMarketPricesPending');
+  const stateText = baseMarketLowPrice(row) ? t('baseMarketHasPriceData') : (baseMarketErrorLabel(row?.error) || t('baseMarketPricesPending'));
+  const demandText = row?.high_demand ? baseMarketDemandText(row) : '';
+  return [demandText, stateText].filter(Boolean).join(' · ');
 }
 
 function baseMarketHistoryKey(row) {
@@ -3752,6 +3771,7 @@ function renderBaseMarketDetail() {
           ${baseMarketIconMarkup(row, 'base-market-icon-lg')}
           <div>
             <strong>${escapeHtml(baseMarketRowName(row))}</strong>
+            ${baseMarketDemandBadge(row)}
             <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : ''].filter(Boolean).join(' / '))}</small>
             <small>${escapeHtml(rowState)}</small>
           </div>
@@ -3764,6 +3784,7 @@ function renderBaseMarketDetail() {
         <div><span>${t('marketRange')}</span><strong>${baseMarketRangeText(row, target)}</strong></div>
         <div><span>${baseMarketLotsLabel(row)}</span><strong>${baseMarketLotsValue(row)}</strong></div>
         <div><span>${t('baseMarketAnalyzedLots')}</span><strong>${baseMarketAnalyzedText(row)}</strong></div>
+        <div><span>${t('baseMarketDemand')}</span><strong>${escapeHtml(baseMarketDemandText(row))}</strong></div>
       </div>
       ${!baseMarketIsExact(row) ? `<p class="base-market-context-note">${t('baseMarketOverviewSampleHint')}</p>` : ''}
       ${renderBaseMarketCurrencyGroups(row)}
@@ -3832,6 +3853,7 @@ function renderBaseMarketRow(row) {
         <div class="base-market-title-line">
           ${baseMarketIconMarkup(row)}
           <strong>${escapeHtml(baseMarketRowName(row))}</strong>
+          ${baseMarketDemandBadge(row)}
         </div>
         <small>${escapeHtml([baseMarketGroupLabel(row), row.min_ilvl ? `ilvl >= ${row.min_ilvl}` : '', t('baseMarketPureBasis')].filter(Boolean).join(' · '))}</small>
         <small>${escapeHtml(baseMarketRowState(row))}</small>
@@ -4260,7 +4282,8 @@ function marketSourceNote(market) {
   }
   const stale = Number(market?.stale_count || 0);
   const staleText = stale > 0 ? ` · ${t('staleListingsIgnored')}: ${formatAmount(stale)}` : '';
-  return `${t('marketLots')}: ${formatAmount(market?.count || 0)}${staleText}`;
+  const demandText = market?.high_demand ? ` · ${t('baseMarketHighDemand')}: ${formatAmount(market?.recent_listing_count || 0)}` : '';
+  return `${t('marketLots')}: ${formatAmount(market?.count || 0)}${demandText}${staleText}`;
 }
 
 function renderSellerLotCard(lot) {

@@ -191,6 +191,7 @@ def test_normalize_item_listing_tracks_listing_age(monkeypatch):
     assert lot["listed_age_seconds"] == 3 * 86400 + 6 * 3600
     assert lot["listed_age_days"] == 3.25
     assert lot["stale"] is False
+    assert lot["high_demand_age"] is False
 
 
 def test_normalize_item_listing_skips_unpriced_or_non_stash_listing():
@@ -1230,15 +1231,15 @@ def test_clean_item_base_lot_requires_normal_item_without_affixes():
     assert trade2._is_clean_item_base_lot(fractured) is False
 
 
-def test_fresh_clean_item_base_lots_exclude_stale_listings(monkeypatch):
+def test_fresh_clean_item_base_lots_exclude_stale_and_mark_high_demand(monkeypatch):
     now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(trade2.time, "time", lambda: now.timestamp())
 
-    def clean_lot(lot_id: str, days_old: int) -> dict[str, object]:
+    def clean_lot(lot_id: str, seconds_old: int) -> dict[str, object]:
         return {
             "id": lot_id,
-            "indexed": (now - timedelta(days=days_old)).isoformat().replace("+00:00", "Z"),
-            "listed_age_seconds": days_old * 86400,
+            "indexed": (now - timedelta(seconds=seconds_old)).isoformat().replace("+00:00", "Z"),
+            "listed_age_seconds": seconds_old,
             "rarity": "Normal",
             "corrupted": False,
             "explicit_mods": [],
@@ -1250,17 +1251,25 @@ def test_fresh_clean_item_base_lots_exclude_stale_listings(monkeypatch):
         }
 
     clean_lots, stale_count = trade2._fresh_clean_item_base_lots(
-        [clean_lot("fresh", 2), clean_lot("old", 30)],
+        [
+            clean_lot("recent-1", 10 * 60),
+            clean_lot("recent-2", 20 * 60),
+            clean_lot("recent-3", 50 * 60),
+            clean_lot("fresh", 2 * 86400),
+            clean_lot("old", 30 * 86400),
+        ],
         {"exalted": 1.0},
         "exalted",
     )
-    stats = trade2._base_market_stats(clean_lots, raw_count=2, stale_count=stale_count)
+    stats = trade2._base_market_stats(clean_lots, raw_count=5, stale_count=stale_count)
 
-    assert [lot["id"] for lot in clean_lots] == ["fresh"]
+    assert [lot["id"] for lot in clean_lots] == ["recent-1", "recent-2", "recent-3", "fresh"]
     assert clean_lots[0]["price_target"] == 2.0
     assert stale_count == 1
-    assert stats["clean_count"] == 1
+    assert stats["clean_count"] == 4
     assert stats["stale_count"] == 1
+    assert stats["recent_listing_count"] == 3
+    assert stats["high_demand"] is True
 
 
 def test_base_market_stats_store_low_market_as_chart_price():
@@ -1348,6 +1357,37 @@ def test_base_market_row_uses_english_type_for_trade_query() -> None:
 
     assert row["query_type"] == "Elegant Plate"
     assert row["text_ru"] == "Элегантный доспех"
+
+
+def test_item_base_market_scan_prioritizes_high_demand_rows(monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
+    trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    bases = [
+        {"id": f"base:test-{index}", "type": f"Test Base {index}", "type_ru": f"Тестовая основа {index}"}
+        for index in range(6)
+    ]
+    previous_rows = [
+        {
+            "id": "base:test-4",
+            "text": "Test Base 4",
+            "text_ru": "Тестовая основа 4",
+            "recent_listing_count": 5,
+            "high_demand": True,
+        }
+    ]
+
+    priority_bases = trade2._item_base_market_priority_bases(bases, previous_rows)
+    selected, start, next_position, priority_count, normal_count = trade2._item_base_market_scan_batch(
+        bases,
+        ("PoE2 - Test", "exalted", "securable", None),
+        priority_bases=priority_bases,
+    )
+
+    assert [base["type"] for base in selected] == ["Test Base 4", "Test Base 0", "Test Base 1"]
+    assert start == 0
+    assert next_position == 2
+    assert priority_count == 1
+    assert normal_count == 2
 
 
 def test_item_base_market_text_filter_uses_exact_base_search(monkeypatch):

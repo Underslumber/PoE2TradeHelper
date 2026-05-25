@@ -2146,6 +2146,9 @@ body {
   padding: 2px 6px;
   text-transform: uppercase;
 }
+.advice-badge.demand {
+  color: #ffd166;
+}
 .advice-card.signal .advice-badge {
   color: #25e7a1;
 }
