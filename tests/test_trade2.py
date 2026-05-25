@@ -2561,6 +2561,52 @@ def test_item_base_market_enriches_but_hides_stored_price_only_rows(monkeypatch)
     assert result["matched_total"] == 0
 
 
+def test_item_base_market_shows_stored_rough_price_rows(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "source": "trade2/search+fetch:rough",
+            "rows": [{"id": "base:pearl-ring", "median": 0.01, "best": 0.01, "offers": 1, "volume": 1}],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "bases": [
+                {
+                    "id": "base:pearl-ring",
+                    "type": "Pearl Ring",
+                    "type_ru": "Жемчужное кольцо",
+                    "query_type": "Жемчужное кольцо",
+                    "category": "accessory",
+                    "category_label": "Accessories",
+                    "category_label_ru": "Бижутерия",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="Жемчужное",
+            limit=40,
+            min_ilvl=1,
+            force_refresh=False,
+        )
+    )
+
+    assert result["stored"] is True
+    assert result["rows"][0]["id"] == "base:pearl-ring"
+    assert result["rows"][0]["low"] == 0.01
+    assert result["rows"][0]["stored_price_evidence"] is True
+
+
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():
     parsed = {
         "display_name": "Vengeance Veil Waxed Jacket",

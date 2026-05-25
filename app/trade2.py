@@ -1754,7 +1754,13 @@ def _item_base_market_row_has_evidence(row: dict[str, Any], min_lots: int = 1) -
 
 
 def _item_base_market_row_has_native_price_evidence(row: dict[str, Any]) -> bool:
-    return bool(row.get("sample_lots") or row.get("best_native") or row.get("optimal_native") or row.get("price_currency_groups"))
+    return bool(
+        row.get("sample_lots")
+        or row.get("best_native")
+        or row.get("optimal_native")
+        or row.get("price_currency_groups")
+        or row.get("stored_price_evidence")
+    )
 
 
 def _visible_item_base_market_rows(rows: list[dict[str, Any]], min_lots: int = 1) -> list[dict[str, Any]]:
@@ -2128,6 +2134,7 @@ def _item_base_market_rows_matching_min_ilvl(
 async def _enrich_stored_item_base_market_rows(
     rows: list[dict[str, Any]],
     min_ilvl: int | None = None,
+    stored_source: str = "",
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -2159,6 +2166,15 @@ async def _enrich_stored_item_base_market_rows(
             median = _to_float(row.get("median")) or _to_float(row.get("best"))
             if median is not None:
                 enriched["market_median"] = median
+        source_text = stored_source.lower()
+        if (
+            "trade2/search+fetch" in source_text
+            and "exact" not in source_text
+            and "overview" not in source_text
+            and _to_float(enriched.get("low")) is not None
+            and ((_to_float(enriched.get("volume")) or 0) > 0 or (_to_int(enriched.get("offers")) or 0) > 0)
+        ):
+            enriched["stored_price_evidence"] = True
         enriched_rows.append(enriched)
     return enriched_rows
 
@@ -2517,7 +2533,11 @@ async def run_item_base_market_refresh_job(
             latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
             latest_source = str((latest or {}).get("source") or "")
             if latest and "exact" not in latest_source and "overview" not in latest_source:
-                previous_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
+                previous_rows = await _enrich_stored_item_base_market_rows(
+                    latest.get("rows") or [],
+                    min_ilvl=min_ilvl,
+                    stored_source=latest_source,
+                )
 
     priority_recheck_count = 0
     normal_scan_count = 0
@@ -2863,7 +2883,11 @@ async def get_item_base_market(
             latest = None
         if latest:
             catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)
-            enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=collection_min_ilvl)
+            enriched_latest_rows = await _enrich_stored_item_base_market_rows(
+                latest.get("rows") or [],
+                min_ilvl=collection_min_ilvl,
+                stored_source=latest_source,
+            )
             rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=collection_min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
             rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
