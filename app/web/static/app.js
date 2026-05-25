@@ -3893,7 +3893,7 @@ function renderBaseMarket() {
     status.textContent = state.baseMarketError || `${t('baseMarketInstantOnly')} · ${t('baseMarketShown')}: ${formatAmount(rows.length)} / ${formatAmount(state.baseMarket.matched_total || rows.length)} · ${t('baseMarketPriced')}: ${formatAmount(priced)}${cached}${warning ? ` · ${warning}` : ''}${pending}${jobText ? ` · ${jobText}` : ''}`;
   }
   if (!rows.length) {
-    const emptyKey = state.baseMarket.stored === false ? 'baseMarketEmpty' : 'baseMarketNoResults';
+    const emptyKey = baseMarketJobIsActive() ? 'baseMarketCollectingNoMatches' : state.baseMarket.stored === false ? 'baseMarketEmpty' : 'baseMarketNoResults';
     list.innerHTML = `<p class="text-secondary">${t(emptyKey)}</p>`;
     renderBaseMarketDetail();
     return;

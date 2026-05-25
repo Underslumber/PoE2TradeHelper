@@ -2307,6 +2307,7 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
         history_calls["count"] += 1
         return {
             "created_ts": 10.0,
+            "source": "trade2/search+fetch:rough",
             "rows": [{"id": "base:amber-amulet", "text_ru": "Амулет с янтарём", "low": 1.0}],
         }
 
@@ -2340,11 +2341,68 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
         )
     )
 
-    assert history_calls == {"count": 0}
-    assert result["source"] == "item-base-catalog"
+    assert history_calls == {"count": 1}
+    assert result["source"] == "trade2/search+fetch:rough"
     assert result["rows"] == []
     assert result["matched_total"] == 0
     assert result["catalog_total"] == 1
+
+
+def test_item_base_market_min_ilvl_uses_matching_stored_snapshot(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+
+    def fake_read_latest_rates(**kwargs):
+        return {
+            "created_ts": 10.0,
+            "source": "trade2/search+fetch:rough",
+            "rows": [
+                {
+                    "id": "base:amber-amulet",
+                    "text_ru": "Амулет с янтарём",
+                    "low": 12.0,
+                    "best_native": {"amount": 12.0, "currency": "exalted", "price_target": 12.0},
+                    "clean_count": 10,
+                    "min_ilvl": 82,
+                    "sample_lots": [{"id": "lot1"}],
+                }
+            ],
+        }
+
+    async def fake_catalog(q="", limit=1000):
+        return {
+            "source": "fake",
+            "total": 1,
+            "bases": [
+                {
+                    "id": "base:amber-amulet",
+                    "type": "Amber Amulet",
+                    "type_ru": "Амулет с янтарём",
+                    "query_type": "Амулет с янтарём",
+                }
+            ],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Test",
+            target="exalted",
+            status="any",
+            q="",
+            limit=40,
+            min_ilvl=82,
+            force_refresh=False,
+        )
+    )
+
+    assert result["cached"] is True
+    assert result["rows"][0]["id"] == "base:amber-amulet"
+    assert result["rows"][0]["min_ilvl"] == 82
+    assert result["rows"][0]["low"] == 12.0
 
 
 def test_item_base_market_ignores_error_only_cache_and_hides_stored_price_only_rows(monkeypatch):

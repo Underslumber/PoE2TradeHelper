@@ -2131,6 +2131,8 @@ async def _enrich_stored_item_base_market_rows(
         item_id = str(row.get("id") or "")
         base_row = rows_by_id.get(item_id) or _base_market_row_from_stored_id(item_id, min_ilvl=min_ilvl)
         enriched = {**base_row, **row}
+        if min_ilvl is not None and "min_ilvl" not in row:
+            enriched["min_ilvl"] = None
         enriched.setdefault("total_scope", "stored_snapshot")
         if _to_float(enriched.get("low")) is None:
             low = _to_float(row.get("best")) or _to_float(row.get("median"))
@@ -2828,9 +2830,7 @@ async def get_item_base_market(
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 return payload
-        latest = None
-        if min_ilvl is None:
-            latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
+        latest = read_latest_rates(league=league, category=ITEM_BASE_MARKET_CATEGORY, target=target, status=status)
         latest_source = str((latest or {}).get("source") or "")
         if latest and ("exact" in latest_source or "overview" in latest_source):
             latest = None

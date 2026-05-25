@@ -120,6 +120,7 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "listingAgeText(lot)" in app_js
     assert "function baseMarketDemandBadge(row)" in app_js
     assert "baseMarketPriorityRecheck" in app_js
+    assert "baseMarketCollectingNoMatches" in app_js
     assert "row?.count || row?.clean_count || row?.offers || 0" in app_js
     assert "restoreBaseMarketFilters();" in app_js
     assert "scheduleBaseMarketPoll" in app_js
@@ -142,6 +143,7 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "staleListingsIgnored: 'старых отброшено'" in i18n_js
     assert "baseMarketHighDemand: 'Повышенный спрос'" in i18n_js
     assert "baseMarketPriorityRecheck: 'приоритет'" in i18n_js
+    assert "baseMarketCollectingNoMatches: 'Сбор идет." in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
     assert "baseMarketLimitAll: 'Все'" in i18n_js
     assert "baseMarketPriceAbove: 'Больше'" in i18n_js
