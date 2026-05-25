@@ -3473,14 +3473,15 @@ function baseMarketJobText(job = baseMarketRefreshJob()) {
   if (!status) return '';
   const fetched = Number(job?.fetched_count || 0);
   const clean = Number(job?.clean_count || 0);
-  const sampleLimit = Number(job?.sample_limit || 0);
   const processed = Number(job?.processed_count || 0);
   const baseTotal = Number(job?.base_total || 0);
-  const baseProgress = baseTotal > 0 ? `${formatAmount(processed)} / ${formatAmount(baseTotal)} ${t('baseMarketBasesProgress')}` : '';
+  const catalogTotal = Number(job?.catalog_total || 0);
+  const baseProgress = baseTotal > 0 ? `${t('baseMarketBatchProgress')}: ${formatAmount(processed)} / ${formatAmount(baseTotal)} ${t('baseMarketBasesProgress')}` : '';
+  const catalogProgress = catalogTotal > 0 ? `${t('baseMarketCatalogProgress')}: ${formatAmount(catalogTotal)}` : '';
   const lotProgress = fetched > 0
-    ? `${formatAmount(clean)} / ${formatAmount(fetched)}${sampleLimit ? ` ${t('baseMarketSampleOf')} ${formatAmount(sampleLimit)}` : ''}`
+    ? `${t('baseMarketLotsChecked')}: ${formatAmount(clean)} / ${formatAmount(fetched)}`
     : '';
-  const progress = [baseProgress, lotProgress].filter(Boolean).join(' · ');
+  const progress = [baseProgress, catalogProgress, lotProgress].filter(Boolean).join(' · ');
   if (status === 'queued') return t('baseMarketRefreshQueued');
   if (status === 'running') return [t('baseMarketRefreshRunning'), progress].filter(Boolean).join(': ');
   if (status === 'rate_limited') {

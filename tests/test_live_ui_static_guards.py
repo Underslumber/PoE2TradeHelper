@@ -131,6 +131,9 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "baseMarketOverviewSampleHint: 'Список основ берется из сохраненного каталога" in i18n_js
     assert "baseMarketRefreshRunning: 'сбор основ идет в фоне'" in i18n_js
     assert "baseMarketRefreshRateLimited: 'trade2 ограничил сбор основ'" in i18n_js
+    assert "baseMarketBatchProgress: 'порция'" in i18n_js
+    assert "baseMarketCatalogProgress: 'каталог'" in i18n_js
+    assert "baseMarketLotsChecked: 'лоты'" in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js
     assert "baseMarketLimitAll: 'Все'" in i18n_js
     assert "baseMarketPriceAbove: 'Больше'" in i18n_js
