@@ -2099,12 +2099,29 @@ def _item_base_market_rows_matching_min_ilvl(
         return list(rows)
     matching_rows = []
     for row in rows:
-        try:
-            row_min_ilvl = int(row.get("min_ilvl"))
-        except (TypeError, ValueError):
+        sample_lots = [lot for lot in row.get("sample_lots") or [] if isinstance(lot, dict)]
+        lots_with_level = [lot for lot in sample_lots if _to_int(lot.get("item_level")) is not None]
+        if lots_with_level:
+            filtered_lots = [lot for lot in lots_with_level if (_to_int(lot.get("item_level")) or 0) >= min_ilvl]
+            if not filtered_lots:
+                continue
+            filtered_row = {
+                **row,
+                **_base_market_stats(
+                    filtered_lots,
+                    _to_int(row.get("fetched_count")) or _to_int(row.get("raw_count")) or len(sample_lots),
+                    _to_int(row.get("stale_count")) or 0,
+                ),
+                "sample_lots": _base_market_sample_lots(filtered_lots),
+                "min_ilvl": min_ilvl,
+            }
+            matching_rows.append(filtered_row)
             continue
-        if row_min_ilvl >= min_ilvl:
-            matching_rows.append(row)
+
+        row_min_ilvl = _to_int(row.get("min_ilvl"))
+        if row_min_ilvl is not None and row_min_ilvl < min_ilvl:
+            continue
+        matching_rows.append({**row, "min_ilvl": min_ilvl})
     return matching_rows
 
 
@@ -2709,8 +2726,9 @@ def start_item_base_market_refresh_job(
 ) -> tuple[dict[str, Any], Any | None]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
+    collection_min_ilvl = None
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
-    key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
+    key = _item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit)
     now = time.time()
     existing = ITEM_BASE_MARKET_JOBS.get(key)
     if existing and now - float(existing.get("created_ts") or now) < ITEM_BASE_MARKET_JOB_TTL:
@@ -2743,7 +2761,7 @@ def start_item_base_market_refresh_job(
         status=status,
         q=q,
         limit=limit,
-        min_ilvl=min_ilvl,
+        min_ilvl=collection_min_ilvl,
         sample_limit=bounded_sample_limit,
     )
     return job, coroutine
@@ -2764,7 +2782,8 @@ async def get_item_base_market(
 ) -> dict[str, Any]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
-    min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
+    display_min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
+    collection_min_ilvl = None
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     price_filter = await _item_base_market_price_filter(
         league=league,
@@ -2773,9 +2792,9 @@ async def get_item_base_market(
         price_value=price_value,
         price_currency=price_currency,
     )
-    cache_key = _item_base_market_cache_key(league, target, status, q, limit, min_ilvl)
-    canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, min_ilvl)
-    exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, min_ilvl)
+    cache_key = _item_base_market_cache_key(league, target, status, q, limit, collection_min_ilvl)
+    canonical_cache_key = _item_base_market_cache_key(league, target, status, "", ITEM_BASE_MARKET_MAX_BASES, collection_min_ilvl)
+    exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, collection_min_ilvl)
     min_visible_lots = _item_base_market_min_visible_lots(q)
     if not force_refresh:
         cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
@@ -2785,16 +2804,17 @@ async def get_item_base_market(
             payload = _cache_copy(cached["data"])
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
-                rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
+                rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
                 return payload
-        job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit))
+        job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit))
         if job and time.time() - float(job.get("created_ts") or 0) < ITEM_BASE_MARKET_JOB_TTL:
             result = _cache_copy(job.get("result") or {})
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+                rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
                 _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
                 result["refresh_job"] = _item_base_market_job_view(job)
@@ -2812,7 +2832,7 @@ async def get_item_base_market(
                 status=status,
                 q=q,
                 limit=limit,
-                min_ilvl=min_ilvl,
+                min_ilvl=collection_min_ilvl,
                 job=job,
                 catalog=catalog,
             )
@@ -2825,7 +2845,7 @@ async def get_item_base_market(
             payload = _cache_copy(cached["data"])
             if not _item_base_market_payload_is_error_only(payload):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
-                rows = _item_base_market_rows_matching_min_ilvl(rows, min_ilvl)
+                rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
                 _apply_item_base_market_price_filter(payload, rows, limit=limit, price_filter=price_filter)
                 payload["cached"] = True
@@ -2836,9 +2856,10 @@ async def get_item_base_market(
             latest = None
         if latest:
             catalog = await get_item_base_catalog(q="", limit=ITEM_BASE_CATALOG_LIMIT)
-            enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=min_ilvl)
-            rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=min_ilvl)
+            enriched_latest_rows = await _enrich_stored_item_base_market_rows(latest.get("rows") or [], min_ilvl=collection_min_ilvl)
+            rows = _merge_item_base_market_rows(catalog, enriched_latest_rows, min_ilvl=collection_min_ilvl)
             rows = _filter_item_base_market_rows(rows, q)
+            rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
             rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
             payload = {
                 **latest,
@@ -2853,14 +2874,14 @@ async def get_item_base_market(
         catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
         if q and not catalog.get("bases"):
             catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
-        rows = _sort_item_base_market_rows(_base_market_catalog_rows(catalog, min_ilvl=min_ilvl))
+        rows = _sort_item_base_market_rows(_base_market_catalog_rows(catalog, min_ilvl=collection_min_ilvl))
         payload = _item_base_market_exact_result(
             league=league,
             target=target,
             status=status,
             q=q,
             limit=limit,
-            min_ilvl=min_ilvl,
+            min_ilvl=collection_min_ilvl,
             catalog=catalog,
             rows=rows,
             errors=list(catalog.get("errors") or []),
@@ -2877,7 +2898,7 @@ async def get_item_base_market(
         status=status,
         q=q,
         limit=ITEM_BASE_MARKET_SCAN_LIMIT if not q else limit,
-        min_ilvl=min_ilvl,
+        min_ilvl=collection_min_ilvl,
         sample_limit=bounded_sample_limit,
     )
     if coroutine is None:
@@ -2892,13 +2913,14 @@ async def get_item_base_market(
                 status=status,
                 q=q,
                 limit=limit,
-                min_ilvl=min_ilvl,
+                min_ilvl=collection_min_ilvl,
                 job=job,
                 catalog=catalog,
             )
     else:
         result = await coroutine
     rows = _filter_item_base_market_rows(result.get("rows") or [], q)
+    rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
     rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots)
     _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
     result["refresh_job"] = _item_base_market_job_view(job)

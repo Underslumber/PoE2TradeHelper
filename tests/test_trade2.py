@@ -1724,7 +1724,7 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
 def test_item_base_market_refresh_restarts_stale_running_job():
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     now = time.time()
-    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", 82, 100)
+    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", None, 100)
     stale_job = {
         "id": "old",
         "status": "running",
@@ -2290,7 +2290,7 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
     assert [row["id"] for row in result["rows"]] == ["base:pearl-ring"]
 
 
-def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch):
+def test_item_base_market_min_ilvl_filters_cached_sample_lots(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     default_cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
@@ -2298,36 +2298,38 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
         "created_ts": 9999999999,
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
-            "rows": [{"id": "base:amber-amulet", "text_ru": "Амулет с янтарём", "low": 1.0, "min_ilvl": None}],
+            "rows": [
+                {
+                    "id": "base:amber-amulet",
+                    "text_ru": "Амулет с янтарём",
+                    "low": 1.0,
+                    "clean_count": 2,
+                    "fetched_count": 10,
+                    "sample_lots": [
+                        {"id": "lot-low", "item_level": 20, "price_amount": 1.0, "price_currency": "exalted", "price_target": 1.0},
+                        {"id": "lot-high", "item_level": 90, "price_amount": 3.0, "price_currency": "exalted", "price_target": 3.0},
+                    ],
+                },
+                {
+                    "id": "base:lapis-amulet",
+                    "text_ru": "Амулет с лазуритом",
+                    "low": 2.0,
+                    "clean_count": 1,
+                    "fetched_count": 10,
+                    "sample_lots": [
+                        {"id": "lot-lapis", "item_level": 30, "price_amount": 2.0, "price_currency": "exalted", "price_target": 2.0},
+                    ],
+                },
+            ],
         },
     }
     history_calls = {"count": 0}
 
     def fake_read_latest_rates(**kwargs):
         history_calls["count"] += 1
-        return {
-            "created_ts": 10.0,
-            "source": "trade2/search+fetch:rough",
-            "rows": [{"id": "base:amber-amulet", "text_ru": "Амулет с янтарём", "low": 1.0}],
-        }
-
-    async def fake_catalog(q="", limit=1000):
-        return {
-            "source": "fake",
-            "total": 1,
-            "bases": [
-                {
-                    "id": "base:amber-amulet",
-                    "type": "Amber Amulet",
-                    "type_ru": "Амулет с янтарём",
-                    "query_type": "Амулет с янтарём",
-                }
-            ],
-            "errors": [],
-        }
+        return None
 
     monkeypatch.setattr(trade2, "read_latest_rates", fake_read_latest_rates)
-    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
 
     result = asyncio.run(
         trade2.get_item_base_market(
@@ -2341,11 +2343,13 @@ def test_item_base_market_min_ilvl_does_not_reuse_unfiltered_market(monkeypatch)
         )
     )
 
-    assert history_calls == {"count": 1}
-    assert result["source"] == "trade2/search+fetch:rough"
-    assert result["rows"] == []
-    assert result["matched_total"] == 0
-    assert result["catalog_total"] == 1
+    assert history_calls == {"count": 0}
+    assert result["cached"] is True
+    assert [row["id"] for row in result["rows"]] == ["base:amber-amulet"]
+    assert result["rows"][0]["min_ilvl"] == 82
+    assert result["rows"][0]["low"] == 3.0
+    assert result["rows"][0]["clean_count"] == 1
+    assert [lot["id"] for lot in result["rows"][0]["sample_lots"]] == ["lot-high"]
 
 
 def test_item_base_market_min_ilvl_uses_matching_stored_snapshot(monkeypatch):

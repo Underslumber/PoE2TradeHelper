@@ -1871,7 +1871,7 @@ async def api_trade_item_base_market(
                 status=status,
                 q=q,
                 limit=limit,
-                min_ilvl=min_ilvl,
+                min_ilvl=None,
                 sample_limit=sample_limit,
             )
             if coroutine is not None:

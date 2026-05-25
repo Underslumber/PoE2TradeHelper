@@ -177,6 +177,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
         calls["start"] += 1
         assert kwargs["q"] == "Амулет с янтарём"
         assert kwargs["status"] == "securable"
+        assert kwargs["min_ilvl"] is None
         assert kwargs["sample_limit"] == 100
         return {"status": "queued"}, noop_job()
 
@@ -184,6 +185,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
         calls["get"] += 1
         assert kwargs["force_refresh"] is False
         assert kwargs["status"] == "securable"
+        assert kwargs["min_ilvl"] == 82
         assert kwargs["sample_limit"] == 100
         assert kwargs["price_trigger"] == "below"
         assert kwargs["price_value"] == 10
@@ -200,7 +202,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
             status="securable",
             q="Амулет с янтарём",
             limit=40,
-            min_ilvl=None,
+            min_ilvl=82,
             price_trigger="below",
             price_value=10,
             price_currency="exalted",
@@ -223,6 +225,7 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
         calls["start"] += 1
         assert kwargs["q"] == ""
         assert kwargs["status"] == "securable"
+        assert kwargs["min_ilvl"] is None
         assert kwargs["sample_limit"] == 100
         return {"status": "queued"}, noop_job()
 
@@ -230,6 +233,7 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
         calls["get"] += 1
         assert kwargs["force_refresh"] is False
         assert kwargs["q"] == ""
+        assert kwargs["min_ilvl"] == 82
         assert kwargs["price_trigger"] == ""
         assert kwargs["price_value"] is None
         assert kwargs["price_currency"] == ""
@@ -245,7 +249,7 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
             status="securable",
             q="",
             limit=40,
-            min_ilvl=None,
+            min_ilvl=82,
             price_trigger="",
             price_value=None,
             price_currency="",
