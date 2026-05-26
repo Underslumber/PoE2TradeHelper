@@ -1,9 +1,11 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Base, FunpayRubOffer
+import app.funpay_market as funpay_market
 from app.funpay_market import (
     aggregate_funpay_offers,
     build_funpay_calendar_recommendations,
@@ -82,6 +84,59 @@ def test_save_funpay_rub_snapshot_deduplicates_repeated_offer_ids():
     assert len(rows) == 1
     assert rows[0].offer_id == "2485611-582-209-12280-106"
     assert rows[0].rub_per_unit == 12.5
+
+
+def test_ensure_funpay_rub_snapshot_uses_saved_snapshot_without_live_refresh(monkeypatch):
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+    parsed = {
+        "source_url": "https://funpay.com/chips/209/",
+        "servers": {"12280": "Fate of the Vaal"},
+        "sides": {"106": "Божественные сферы"},
+        "offers": [
+            {
+                "offer_id": "2485611-582-209-12280-106",
+                "offer_url": "https://funpay.com/chips/offer?id=2485611-582-209-12280-106",
+                "league": "Fate of the Vaal",
+                "league_id": "12280",
+                "currency_name": "Божественные сферы",
+                "side_id": "106",
+                "trade_item_id": "divine",
+                "seller_id": "2485611",
+                "seller_name": "seller",
+                "seller_reviews": 1041,
+                "seller_online": True,
+                "stock": 400,
+                "rub_per_unit": 12.5,
+            }
+        ],
+    }
+
+    async def fail_collect(db):
+        raise AssertionError("unexpected live FunPay refresh")
+
+    monkeypatch.setattr(funpay_market, "collect_funpay_rub_snapshot", fail_collect)
+    with Session(engine) as db:
+        saved = save_funpay_rub_snapshot(db, parsed, created_ts=1.0)
+        snapshot, cached = asyncio.run(funpay_market.ensure_funpay_rub_snapshot(db, refresh=True))
+
+    assert cached is True
+    assert snapshot.id == saved.id
+
+
+def test_ensure_funpay_rub_snapshot_does_not_collect_when_empty(monkeypatch):
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+
+    async def fail_collect(db):
+        raise AssertionError("unexpected live FunPay refresh")
+
+    monkeypatch.setattr(funpay_market, "collect_funpay_rub_snapshot", fail_collect)
+    with Session(engine) as db:
+        snapshot, cached = asyncio.run(funpay_market.ensure_funpay_rub_snapshot(db, refresh=True))
+
+    assert cached is False
+    assert snapshot is None
 
 
 def test_funpay_league_key_matches_trade2_league_names():
@@ -164,6 +219,57 @@ def test_funpay_context_uses_trade2_league_mapping_for_funpay_rows():
     assert standard["focus"]["market_price"] == 30.0
     assert hardcore["focus"]["league"] == "[Hardcore]"
     assert hardcore["focus"]["market_price"] == 40.0
+
+
+def test_funpay_context_builds_history_only_for_target_currency(monkeypatch):
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+    base_offer = {
+        "offer_id": "offer-divine",
+        "offer_url": "https://funpay.com/chips/offer?id=offer-divine",
+        "league": "Fate of the Vaal",
+        "league_id": "12280",
+        "currency_name": "Божественные сферы",
+        "side_id": "106",
+        "trade_item_id": "divine",
+        "seller_id": "seller-divine",
+        "seller_name": "divine",
+        "seller_reviews": 100,
+        "seller_online": True,
+        "stock": 100,
+        "rub_per_unit": 10.0,
+    }
+    parsed = {
+        "source_url": "https://funpay.com/chips/209/",
+        "servers": {"12280": "Fate of the Vaal"},
+        "sides": {"106": "Божественные сферы", "105": "Сферы возвышения"},
+        "offers": [
+            base_offer,
+            {
+                **base_offer,
+                "offer_id": "offer-exalted",
+                "currency_name": "Сферы возвышения",
+                "side_id": "105",
+                "trade_item_id": "exalted",
+                "seller_id": "seller-exalted",
+                "seller_name": "exalted",
+                "rub_per_unit": 1.0,
+            },
+        ],
+    }
+    history_calls = []
+
+    def fake_history_points(db, *, league, trade_item_id, since_ts, limit=500):
+        history_calls.append(trade_item_id)
+        return []
+
+    monkeypatch.setattr(funpay_market, "_history_points", fake_history_points)
+    with Session(engine) as db:
+        snapshot = save_funpay_rub_snapshot(db, parsed, created_ts=1779101864.895)
+        context = build_funpay_rub_context(db, snapshot, league="Fate of the Vaal", target_currency="divine")
+
+    assert history_calls == ["divine"]
+    assert set(context["by_currency"]) == {"divine", "exalted"}
 
 
 def test_aggregate_funpay_offers_trims_price_outlier():

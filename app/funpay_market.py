@@ -26,7 +26,6 @@ from app.market_snapshots import (
 )
 
 FUNPAY_POE2_CHIPS_URL = "https://funpay.com/chips/209/"
-FUNPAY_CACHE_SECONDS = 15 * 60
 FUNPAY_CONTEXT_SCHEMA_VERSION = "funpay-rub-market/v3"
 
 FUNPAY_SIDE_TO_TRADE_ID = {
@@ -349,13 +348,11 @@ async def ensure_funpay_rub_snapshot(
     db: Session,
     *,
     refresh: bool = False,
-    max_age_seconds: int = FUNPAY_CACHE_SECONDS,
 ) -> tuple[FunpayRubSnapshot | None, bool]:
     latest = latest_funpay_rub_snapshot(db)
-    if not refresh and latest and time.time() - float(latest.created_ts or 0) <= max_age_seconds:
+    if latest:
         return latest, True
-    snapshot = await collect_funpay_rub_snapshot(db)
-    return snapshot, False
+    return None, False
 
 
 def _percent_change(current: float | None, previous: float | None) -> float | None:
@@ -780,11 +777,15 @@ def build_funpay_rub_context(
         if not stats:
             continue
         sample = offers[0]
-        history = _history_points(
-            db,
-            league=league,
-            trade_item_id=trade_item_id,
-            since_ts=since_ts,
+        history = (
+            _history_points(
+                db,
+                league=league,
+                trade_item_id=trade_item_id,
+                since_ts=since_ts,
+            )
+            if trade_item_id == target_currency
+            else []
         )
         row = {
             "trade_item_id": sample.trade_item_id,
