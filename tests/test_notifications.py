@@ -10,12 +10,15 @@ from app.notifications import (
     normalize_event_type,
     process_telegram_notifications,
     row_price,
+    row_has_high_demand,
+    should_trigger_market_event,
     should_trigger,
 )
 
 
 def test_notification_event_validation():
     assert normalize_event_type("price_above") == "price_above"
+    assert normalize_event_type("high_demand") == "high_demand"
     assert normalize_event_type("bad") == ""
 
 
@@ -50,6 +53,16 @@ def test_first_notification_check_only_sets_baseline():
 
     assert triggered is False
     assert reason == "baseline"
+
+
+def test_high_demand_event_triggers_from_market_row():
+    rule = TelegramNotificationRule(event_type="high_demand")
+
+    triggered, reason = should_trigger_market_event(rule, {"recent_listing_count": 3})
+
+    assert row_has_high_demand({"recent_listing_count": 3}) is True
+    assert triggered is True
+    assert reason == "high_demand"
 
 
 def _memory_session():

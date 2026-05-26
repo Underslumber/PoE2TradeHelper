@@ -79,8 +79,10 @@ MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
 MARKET_LISTING_HIGH_DEMAND_COUNT = 3
 MARKET_LISTING_WEAK_ACTIVITY_FRESH_COUNT = 5
-MARKET_LISTING_WEAK_ACTIVITY_MIN_OBSERVED = 10
+MARKET_LISTING_WEAK_ACTIVITY_MIN_OBSERVED = 6
 MARKET_LISTING_WEAK_ACTIVITY_MIN_STALE = 5
+ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS = 24 * 60 * 60
+ITEM_BASE_MARKET_RECENT_DEMAND_HISTORY_LIMIT = 200
 ITEM_BASE_MARKET_PRIORITY_RECHECK_LIMIT = 4
 ITEM_BASES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None, "errors": []}
 ITEM_BASES_LOCK = asyncio.Lock()
@@ -1707,13 +1709,84 @@ def _base_market_base_keys(base: dict[str, Any]) -> set[str]:
 
 def _item_base_market_row_has_high_demand(row: dict[str, Any]) -> bool:
     recent_count = _to_int(row.get("recent_listing_count")) or 0
-    return bool(row.get("high_demand")) or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT
+    return bool(row.get("high_demand")) or bool(row.get("recent_high_demand")) or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT
 
 
 def _item_base_market_row_has_weak_activity(row: dict[str, Any]) -> bool:
-    if bool(row.get("high_demand")):
+    if bool(row.get("high_demand")) or bool(row.get("recent_high_demand")):
         return False
     return bool(row.get("weak_activity"))
+
+
+def _item_base_market_recent_demand_map(
+    *,
+    league: str,
+    target: str,
+    status: str,
+    item_ids: set[str] | None = None,
+    now_ts: float | None = None,
+    limit: int = ITEM_BASE_MARKET_RECENT_DEMAND_HISTORY_LIMIT,
+) -> dict[str, dict[str, Any]]:
+    now = time.time() if now_ts is None else now_ts
+    cutoff = now - ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS
+    allowed_ids = {str(item_id) for item_id in item_ids or set() if str(item_id)}
+    statuses = [status or ITEM_BASE_MARKET_DEFAULT_STATUS]
+    if statuses[0] != "any":
+        statuses.append("any")
+    demand_by_id: dict[str, dict[str, Any]] = {}
+    for history_status in statuses:
+        for snapshot in read_market_history(
+            limit=limit,
+            league=league,
+            category=ITEM_BASE_MARKET_CATEGORY,
+            target=target,
+            status=history_status,
+        ):
+            snapshot_ts = _to_float(snapshot.get("created_ts")) or 0.0
+            if snapshot_ts <= 0 or snapshot_ts < cutoff:
+                continue
+            for row in snapshot.get("rows") or []:
+                item_id = str(row.get("id") or "").strip()
+                if not item_id or (allowed_ids and item_id not in allowed_ids):
+                    continue
+                recent_count = _to_int(row.get("recent_listing_count")) or 0
+                if not (bool(row.get("high_demand")) or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT):
+                    continue
+                current = demand_by_id.get(item_id)
+                if current and (_to_float(current.get("recent_high_demand_created_ts")) or 0.0) >= snapshot_ts:
+                    continue
+                demand_by_id[item_id] = {
+                    "recent_high_demand": True,
+                    "recent_high_demand_created_ts": snapshot_ts,
+                    "recent_high_demand_age_seconds": max(0.0, now - snapshot_ts),
+                    "recent_high_demand_count": recent_count,
+                    "recent_high_demand_threshold": MARKET_LISTING_HIGH_DEMAND_COUNT,
+                    "recent_high_demand_window_seconds": ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS,
+                    "demand_trigger": "recent_high_demand",
+                }
+    return demand_by_id
+
+
+def _enrich_item_base_market_recent_demand_rows(
+    rows: list[dict[str, Any]],
+    recent_demand_by_id: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if not recent_demand_by_id:
+        return rows
+    enriched_rows: list[dict[str, Any]] = []
+    for row in rows:
+        item_id = str(row.get("id") or "").strip()
+        demand_fields = recent_demand_by_id.get(item_id)
+        if not demand_fields:
+            enriched_rows.append(row)
+            continue
+        enriched = {**row, **demand_fields}
+        if not bool(row.get("high_demand")) and bool(row.get("weak_activity")):
+            enriched["weak_activity_suppressed_by_recent_demand"] = True
+        if not bool(row.get("high_demand")):
+            enriched["weak_activity"] = False
+        enriched_rows.append(enriched)
+    return enriched_rows
 
 
 def _item_base_market_priority_bases(
@@ -2304,6 +2377,15 @@ def _read_item_base_market_history_snapshot(
     }
 
 
+def _item_base_market_can_reuse_previous_source(source: Any) -> bool:
+    source_lc = str(source or "").lower()
+    if "trade2/search+fetch" not in source_lc or "exact" in source_lc:
+        return False
+    if "history" in source_lc or "rough" in source_lc:
+        return True
+    return "overview" not in source_lc
+
+
 async def _fetch_item_base_market_overview(
     league: str,
     target: str,
@@ -2528,7 +2610,16 @@ def _item_base_market_exact_result(
     refresh_job: dict[str, Any] | None = None,
     source: str = "trade2/search+fetch:exact",
     stored: bool = False,
+    recent_demand_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if recent_demand_by_id is None:
+        recent_demand_by_id = _item_base_market_recent_demand_map(
+            league=league,
+            target=target,
+            status=status,
+            item_ids={str(row.get("id") or "") for row in rows},
+        )
+    rows = _enrich_item_base_market_recent_demand_rows(rows, recent_demand_by_id)
     visible_rows = _visible_item_base_market_rows(rows, min_lots=_item_base_market_min_visible_lots(q))
     priced_rows = [row for row in visible_rows if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None or row.get("best_native")]
     query_ids = [row.get("query_id") for row in visible_rows if row.get("query_id")]
@@ -2662,7 +2753,7 @@ async def run_item_base_market_refresh_job(
                 status=status,
             )
             latest_source = str((latest or {}).get("source") or "")
-            if latest and "exact" not in latest_source and "overview" not in latest_source:
+            if latest and _item_base_market_can_reuse_previous_source(latest_source):
                 previous_rows = await _enrich_stored_item_base_market_rows(
                     latest.get("rows") or [],
                     min_ilvl=min_ilvl,
@@ -2694,6 +2785,15 @@ async def run_item_base_market_refresh_job(
     job["total"] = len(bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
+    recent_demand_by_id = _item_base_market_recent_demand_map(
+        league=league,
+        target=target,
+        status=status,
+        item_ids={
+            str(_base_market_row_from_base(base, min_ilvl=min_ilvl).get("id") or "")
+            for base in selected_bases
+        },
+    )
 
     rows: list[dict[str, Any]] = []
     exact_query_ids: list[str] = []
@@ -2725,6 +2825,7 @@ async def run_item_base_market_refresh_job(
             refresh_job=job,
             source=source,
             stored=not bool(q),
+            recent_demand_by_id=recent_demand_by_id,
         )
         result["query_ids"] = exact_query_ids
         job["result"] = result
@@ -4823,6 +4924,15 @@ def read_latest_rates(league: str, category: str, target: str = "exalted", statu
         status=status,
         history_path=HISTORY_PATH,
     )
+    if snapshot and category == ITEM_BASE_MARKET_CATEGORY:
+        rows = snapshot.get("rows") or []
+        recent_demand_by_id = _item_base_market_recent_demand_map(
+            league=league,
+            target=target,
+            status=status,
+            item_ids={str(row.get("id") or "") for row in rows},
+        )
+        snapshot["rows"] = _enrich_item_base_market_recent_demand_rows(rows, recent_demand_by_id)
     if snapshot and "advice" not in snapshot:
         snapshot["advice"] = build_trade_advice(category, snapshot.get("rows") or [], target, snapshot_ts=snapshot.get("created_ts"))
     if snapshot and "recipes" not in snapshot:

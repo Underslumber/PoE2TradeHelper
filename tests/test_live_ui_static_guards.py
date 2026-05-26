@@ -147,8 +147,11 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "listedAgeMonthsAgo: 'мес. назад'" in i18n_js
     assert "staleListingsIgnored: 'старых отброшено'" in i18n_js
     assert "baseMarketHighDemand: 'Повышенный спрос'" in i18n_js
+    assert "baseMarketRecentDemand: 'Недавний всплеск спроса'" in i18n_js
     assert "baseMarketHideWeakActivity: 'Скрыть слабоактивные'" in i18n_js
     assert "baseMarketWeakActivity: 'Слабоактивная'" in i18n_js
+    assert "notificationHighDemand: 'Повышенный спрос по основе'" in i18n_js
+    assert "{ id: 'high_demand', text: t('notificationHighDemand') }" in app_js
     assert "baseMarketPriorityRecheck: 'приоритет'" in i18n_js
     assert "baseMarketCollectingNoMatches: 'Сбор идет." in i18n_js
     assert "baseMarketInstantOnly: 'мгновенный выкуп'" in i18n_js

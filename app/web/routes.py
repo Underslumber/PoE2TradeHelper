@@ -74,6 +74,8 @@ from app.trade2 import (
     get_exchange_offers,
     ITEM_BASE_CATALOG_LIMIT,
     ITEM_BASE_MARKET_DEFAULT_STATUS,
+    ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS,
+    MARKET_LISTING_HIGH_DEMAND_COUNT,
     get_item_base_catalog,
     get_item_base_market,
     get_pasted_item_market,
@@ -632,7 +634,8 @@ def _latest_rates_snapshot(league: str, category: str, target: str, cache: dict 
     if cache is not None and key in cache:
         return cache[key]
     result = None
-    for status in ("any", "online"):
+    statuses = ("securable", "any", "online") if category == "ItemBases" else ("any", "online")
+    for status in statuses:
         snapshot = read_latest_rates(league=league, category=category, target=target, status=status)
         if snapshot:
             result = snapshot
@@ -640,6 +643,77 @@ def _latest_rates_snapshot(league: str, category: str, target: str, cache: dict 
     if cache is not None:
         cache[key] = result
     return result
+
+
+def _latest_itembase_recent_demand(
+    league: str,
+    target: str,
+    item_id: str,
+    cache: dict | None = None,
+) -> dict:
+    key = ("latest_itembase_recent_demand", league, target, item_id)
+    if cache is not None and key in cache:
+        return cache[key]
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cutoff = now_ts - ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS
+    result: dict = {}
+    for status in ("securable", "any"):
+        snapshots = read_history(
+            limit=200,
+            league=league,
+            category="ItemBases",
+            target=target,
+            status=status,
+        )
+        for snapshot in snapshots:
+            try:
+                created_ts = float(snapshot.get("created_ts") or 0)
+            except (TypeError, ValueError):
+                continue
+            if created_ts <= 0 or created_ts < cutoff:
+                continue
+            row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
+            if not row:
+                continue
+            try:
+                recent_count = int(row.get("recent_listing_count") or 0)
+            except (TypeError, ValueError):
+                recent_count = 0
+            if not (row.get("high_demand") or recent_count >= MARKET_LISTING_HIGH_DEMAND_COUNT):
+                continue
+            result = {
+                "recent_high_demand": True,
+                "recent_high_demand_created_ts": created_ts,
+                "recent_high_demand_age_seconds": max(0.0, now_ts - created_ts),
+                "recent_high_demand_count": recent_count,
+                "recent_high_demand_threshold": MARKET_LISTING_HIGH_DEMAND_COUNT,
+                "recent_high_demand_window_seconds": ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS,
+                "demand_trigger": "recent_high_demand",
+            }
+            break
+        if result:
+            break
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _enrich_itembase_recent_demand(
+    league: str,
+    target: str,
+    item_id: str,
+    market: dict,
+    cache: dict | None = None,
+) -> dict:
+    if not market:
+        return market
+    demand_fields = _latest_itembase_recent_demand(league, target, item_id, cache)
+    if not demand_fields:
+        return market
+    enriched = {**market, **demand_fields}
+    if not enriched.get("high_demand"):
+        enriched["weak_activity"] = False
+    return enriched
 
 
 def _latest_item_market(league: str, category: str, target: str, item_id: str, cache: dict | None = None) -> dict:
@@ -655,21 +729,26 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str, c
         if cache is not None and history_key in cache:
             series = cache[history_key]
         else:
-            series = read_item_history(
-                league=league,
-                category=category,
-                target=target,
-                status="any",
-                item_id=item_id,
-                metric="price",
-                limit=200,
-            )
+            series = []
+            statuses = ("securable", "any", "online") if category == "ItemBases" else ("any", "online")
+            for status in statuses:
+                series = read_item_history(
+                    league=league,
+                    category=category,
+                    target=target,
+                    status=status,
+                    item_id=item_id,
+                    metric="price",
+                    limit=200,
+                )
+                if series:
+                    break
             if cache is not None:
                 cache[history_key] = series
         if not series:
             return {}
         latest = series[-1]
-        return {
+        market = {
             "target_currency": target,
             "price": latest.get("price") or latest.get("value"),
             "source": latest.get("source"),
@@ -678,8 +757,21 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str, c
             "sparkline": [],
             "sparkline_kind": "price",
             "volume": latest.get("volume", 0),
+            "offers": latest.get("offers", 0),
+            "raw_count": latest.get("raw_count"),
+            "clean_count": latest.get("clean_count"),
+            "stale_count": latest.get("stale_count"),
+            "recent_listing_count": latest.get("recent_listing_count"),
+            "high_demand": latest.get("high_demand"),
+            "recent_high_demand": latest.get("recent_high_demand"),
+            "recent_high_demand_count": latest.get("recent_high_demand_count"),
+            "recent_high_demand_age_seconds": latest.get("recent_high_demand_age_seconds"),
+            "weak_activity": latest.get("weak_activity"),
         }
-    return {
+        if category == "ItemBases":
+            market = _enrich_itembase_recent_demand(league, target, item_id, market, cache)
+        return market
+    market = {
         "target_currency": snapshot.get("target") or target,
         "price": price,
         "source": snapshot.get("source"),
@@ -688,7 +780,20 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str, c
         "sparkline": row.get("sparkline") or [],
         "sparkline_kind": row.get("sparkline_kind"),
         "volume": row.get("volume", 0),
+        "offers": row.get("offers", 0),
+        "raw_count": row.get("raw_count"),
+        "clean_count": row.get("clean_count"),
+        "stale_count": row.get("stale_count"),
+        "recent_listing_count": row.get("recent_listing_count"),
+        "high_demand": row.get("high_demand"),
+        "recent_high_demand": row.get("recent_high_demand"),
+        "recent_high_demand_count": row.get("recent_high_demand_count"),
+        "recent_high_demand_age_seconds": row.get("recent_high_demand_age_seconds"),
+        "weak_activity": row.get("weak_activity"),
     }
+    if category == "ItemBases":
+        market = _enrich_itembase_recent_demand(league, target, item_id, market, cache)
+    return market
 
 
 def _benchmark_price(
@@ -1424,7 +1529,7 @@ def api_account_notification_create(
     if not event_type:
         return account_api_error("Выберите тип Telegram-уведомления.", key="accountErrorTelegramEvent")
     threshold = _float_value(payload, "threshold_value")
-    if event_type != "any_update" and (threshold is None or threshold <= 0):
+    if event_type not in {"any_update", "high_demand"} and (threshold is None or threshold <= 0):
         return account_api_error("Укажите положительный порог уведомления.", key="accountErrorTelegramThreshold")
     chat_id = _text(payload, "chat_id")
     if not chat_id:
@@ -1435,7 +1540,7 @@ def api_account_notification_create(
         pin_id=pin.id,
         chat_id=chat_id,
         event_type=event_type,
-        threshold_value=None if event_type == "any_update" else threshold,
+        threshold_value=None if event_type in {"any_update", "high_demand"} else threshold,
         enabled=1,
         last_price=pin.last_price,
         created_at=now,
@@ -1472,11 +1577,13 @@ def api_account_notification_update(
         if not event_type:
             return account_api_error("Выберите тип Telegram-уведомления.", key="accountErrorTelegramEvent")
         rule.event_type = event_type
+        if rule.event_type in {"any_update", "high_demand"}:
+            rule.threshold_value = None
     if "threshold_value" in payload:
         threshold = _float_value(payload, "threshold_value")
-        if rule.event_type != "any_update" and (threshold is None or threshold <= 0):
+        if rule.event_type not in {"any_update", "high_demand"} and (threshold is None or threshold <= 0):
             return account_api_error("Укажите положительный порог уведомления.", key="accountErrorTelegramThreshold")
-        rule.threshold_value = None if rule.event_type == "any_update" else threshold
+        rule.threshold_value = None if rule.event_type in {"any_update", "high_demand"} else threshold
     rule.updated_at = now_iso()
     db.commit()
     db.refresh(rule)

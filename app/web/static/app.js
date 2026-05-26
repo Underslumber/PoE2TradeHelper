@@ -1060,6 +1060,7 @@ function notificationEventOptions() {
     { id: 'price_above', text: t('notificationPriceAbove') },
     { id: 'price_below', text: t('notificationPriceBelow') },
     { id: 'change_pct', text: t('notificationChangePct') },
+    { id: 'high_demand', text: t('notificationHighDemand') },
     { id: 'any_update', text: t('notificationAnyUpdate') },
   ];
 }
@@ -1091,7 +1092,7 @@ async function createNotification(event) {
     await sendAccountJson('/api/account/notifications', {
       pin_id: byId('notification-pin')?.value || '',
       event_type: eventType,
-      threshold_value: eventType === 'any_update' ? null : byId('notification-threshold')?.value || '',
+      threshold_value: ['any_update', 'high_demand'].includes(eventType) ? null : byId('notification-threshold')?.value || '',
       chat_id: byId('notification-chat-id')?.value || '',
     });
     await refreshAccountData(t('notificationCreated'));
@@ -3652,16 +3653,32 @@ function baseMarketRecentListings(row) {
 
 function baseMarketDemandText(row) {
   const recent = baseMarketRecentListings(row);
+  if (row?.high_demand) {
+    return `${t('baseMarketHighDemand')} · ${t('baseMarketRecentListings')}: ${formatAmount(recent)}`;
+  }
+  if (row?.recent_high_demand) {
+    const triggerCount = Number(row?.recent_high_demand_count || 0);
+    const countText = triggerCount > 0 ? ` · ${t('baseMarketRecentListings')}: ${formatAmount(triggerCount)}` : '';
+    const age = Number(row?.recent_high_demand_age_seconds);
+    const ageText = Number.isFinite(age) ? ` · ${t('baseMarketLastDemandSpike')}: ${formatAgeSeconds(age)}` : '';
+    return `${t('baseMarketRecentDemand')}${countText}${ageText}`;
+  }
   if (!recent) return t('baseMarketDemandNormal');
-  return `${row?.high_demand ? t('baseMarketHighDemand') : t('baseMarketDemandNormal')} · ${t('baseMarketRecentListings')}: ${formatAmount(recent)}`;
+  return `${t('baseMarketDemandNormal')} · ${t('baseMarketRecentListings')}: ${formatAmount(recent)}`;
 }
 
 function baseMarketDemandBadge(row) {
-  if (!row?.high_demand) return '';
-  return `<span class="advice-badge demand">${escapeHtml(t('baseMarketHighDemand'))}</span>`;
+  if (row?.high_demand) {
+    return `<span class="advice-badge demand">${escapeHtml(t('baseMarketHighDemand'))}</span>`;
+  }
+  if (row?.recent_high_demand) {
+    return `<span class="advice-badge demand">${escapeHtml(t('baseMarketRecentDemand'))}</span>`;
+  }
+  return '';
 }
 
 function baseMarketWeakActivityText(row) {
+  if (row?.recent_high_demand) return '';
   if (!row?.weak_activity) return '';
   const fresh = Number(row?.clean_count ?? row?.count ?? 0);
   const threshold = Number(row?.weak_activity_fresh_threshold || 5);
@@ -3677,6 +3694,7 @@ function baseMarketWeakActivityText(row) {
 }
 
 function baseMarketWeakActivityBadge(row) {
+  if (row?.recent_high_demand) return '';
   if (!row?.weak_activity) return '';
   return `<span class="advice-badge weak-activity">${escapeHtml(t('baseMarketWeakActivity'))}</span>`;
 }
@@ -3701,7 +3719,7 @@ function baseMarketErrorLabel(errorText) {
 
 function baseMarketRowState(row) {
   const stateText = baseMarketLowPrice(row) ? t('baseMarketHasPriceData') : (baseMarketErrorLabel(row?.error) || t('baseMarketPricesPending'));
-  const demandText = row?.high_demand ? baseMarketDemandText(row) : '';
+  const demandText = (row?.high_demand || row?.recent_high_demand) ? baseMarketDemandText(row) : '';
   const weakActivityText = baseMarketWeakActivityText(row);
   return [weakActivityText, demandText, stateText].filter(Boolean).join(' · ');
 }
@@ -4314,7 +4332,11 @@ function marketSourceNote(market) {
   }
   const stale = Number(market?.stale_count || 0);
   const staleText = stale > 0 ? ` · ${t('staleListingsIgnored')}: ${formatAmount(stale)}` : '';
-  const demandText = market?.high_demand ? ` · ${t('baseMarketHighDemand')}: ${formatAmount(market?.recent_listing_count || 0)}` : '';
+  const demandText = market?.high_demand
+    ? ` · ${t('baseMarketHighDemand')}: ${formatAmount(market?.recent_listing_count || 0)}`
+    : market?.recent_high_demand
+      ? ` · ${t('baseMarketRecentDemand')}: ${formatAmount(market?.recent_high_demand_count || 0)}`
+      : '';
   return `${t('marketLots')}: ${formatAmount(market?.count || 0)}${demandText}${staleText}`;
 }
 

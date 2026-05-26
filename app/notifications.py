@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -11,7 +13,9 @@ from app.account import now_iso
 from app.db.models import PinnedPosition, TelegramNotificationRule
 
 
-SUPPORTED_TELEGRAM_EVENTS = {"price_above", "price_below", "change_pct", "any_update"}
+SUPPORTED_TELEGRAM_EVENTS = {"price_above", "price_below", "change_pct", "any_update", "high_demand"}
+HIGH_DEMAND_NOTIFICATION_COOLDOWN_SECONDS = 24 * 60 * 60
+HIGH_DEMAND_RECENT_LISTING_THRESHOLD = 3
 
 
 def telegram_bot_token() -> str:
@@ -36,6 +40,27 @@ def row_price(row: dict[str, Any] | None) -> float | None:
     except (TypeError, ValueError):
         return None
     return price if price > 0 else None
+
+
+def row_has_high_demand(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    if row.get("high_demand") or row.get("recent_high_demand"):
+        return True
+    try:
+        recent_count = int(row.get("recent_listing_count") or 0)
+    except (TypeError, ValueError):
+        recent_count = 0
+    return recent_count >= HIGH_DEMAND_RECENT_LISTING_THRESHOLD
+
+
+def _timestamp_from_iso(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def notification_rule_payload(rule: TelegramNotificationRule, pin: PinnedPosition | None) -> dict[str, Any]:
@@ -85,14 +110,35 @@ def should_trigger(rule: TelegramNotificationRule, current_price: float) -> tupl
     return False, "unsupported"
 
 
+def should_trigger_market_event(
+    rule: TelegramNotificationRule,
+    row: dict[str, Any] | None,
+    *,
+    now_ts: float | None = None,
+) -> tuple[bool, str]:
+    if rule.event_type != "high_demand":
+        current_price = row_price(row)
+        if current_price is None:
+            return False, "missing_price"
+        return should_trigger(rule, current_price)
+    if not row_has_high_demand(row):
+        return False, "not_high_demand"
+    last_triggered_ts = _timestamp_from_iso(rule.last_triggered_at)
+    now = time.time() if now_ts is None else now_ts
+    if last_triggered_ts is not None and now - last_triggered_ts < HIGH_DEMAND_NOTIFICATION_COOLDOWN_SECONDS:
+        return False, "high_demand_cooldown"
+    return True, "high_demand"
+
+
 def message_for_rule(
     rule: TelegramNotificationRule,
     pin: PinnedPosition,
-    current_price: float,
+    current_price: float | None,
     target: str,
     reason: str,
 ) -> str:
     previous = "-" if rule.last_price is None else f"{rule.last_price:g} {target}"
+    price = "-" if current_price is None else f"{current_price:g} {target}"
     threshold = "" if rule.threshold_value is None else f"\nПорог: {rule.threshold_value:g}"
     name = pin.item_name_ru or pin.item_name
     return (
@@ -100,7 +146,7 @@ def message_for_rule(
         f"{name}\n"
         f"{pin.league} / {pin.category}\n"
         f"Событие: {reason}\n"
-        f"Цена: {current_price:g} {target}\n"
+        f"Цена: {price}\n"
         f"Было: {previous}"
         f"{threshold}"
     )
@@ -162,11 +208,11 @@ async def process_telegram_notifications(
             continue
         row = row_map.get(pin.item_id)
         current_price = row_price(row)
-        if current_price is None:
+        if current_price is None and rule.event_type != "high_demand":
             result["skipped"] += 1
             continue
         result["checked"] += 1
-        triggered, reason = should_trigger(rule, current_price)
+        triggered, reason = should_trigger_market_event(rule, row)
         if triggered and configured:
             try:
                 await send_telegram_message(
@@ -179,10 +225,11 @@ async def process_telegram_notifications(
                 result["failed"] += 1
         elif triggered:
             result["skipped"] += 1
-        rule.last_price = current_price
+        if current_price is not None:
+            rule.last_price = current_price
+            pin.last_price = current_price
+            pin.last_source = source
+            pin.updated_at = now
         rule.updated_at = now
-        pin.last_price = current_price
-        pin.last_source = source
-        pin.updated_at = now
     db.commit()
     return result

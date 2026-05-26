@@ -35,9 +35,12 @@ async def process_due_telegram_notifications(*, league: str | None = None) -> di
             "missing_snapshots": 0,
         }
         for group_league, category, target in groups:
-            snapshot = read_latest_rates(group_league, category, target=target, status="any")
-            if not snapshot:
-                snapshot = read_latest_rates(group_league, category, target=target, status="online")
+            statuses = ("securable", "any", "online") if category == "ItemBases" else ("any", "online")
+            snapshot = None
+            for status in statuses:
+                snapshot = read_latest_rates(group_league, category, target=target, status=status)
+                if snapshot:
+                    break
             if not snapshot:
                 summary["missing_snapshots"] += 1
                 continue

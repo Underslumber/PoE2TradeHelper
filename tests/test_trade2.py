@@ -1295,6 +1295,7 @@ def test_base_market_stats_mark_weak_activity_only_when_old_lots_dominate(monkey
 
     fresh_lots = [clean_lot(f"fresh-{index}", 2 * 86400) for index in range(4)]
     weak_stats = trade2._base_market_stats(fresh_lots, raw_count=10, stale_count=6)
+    stale_dominated_stats = trade2._base_market_stats([clean_lot("fresh", 2 * 86400)], raw_count=9, stale_count=8)
     rare_stats = trade2._base_market_stats(fresh_lots, raw_count=4, stale_count=0)
     active_lots = [
         clean_lot("recent-1", 10 * 60),
@@ -1306,9 +1307,53 @@ def test_base_market_stats_mark_weak_activity_only_when_old_lots_dominate(monkey
 
     assert weak_stats["weak_activity"] is True
     assert weak_stats["weak_activity_observed_count"] == 10
+    assert stale_dominated_stats["weak_activity"] is True
+    assert stale_dominated_stats["weak_activity_observed_count"] == 9
     assert rare_stats["weak_activity"] is False
     assert active_stats["high_demand"] is True
     assert active_stats["weak_activity"] is False
+
+
+def test_recent_high_demand_suppresses_weak_activity(monkeypatch):
+    now = datetime(2026, 5, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(trade2.time, "time", lambda: now.timestamp())
+    monkeypatch.setattr(
+        trade2,
+        "read_market_history",
+        lambda **_: [
+            {
+                "created_ts": now.timestamp() - 30 * 60,
+                "rows": [
+                    {
+                        "id": "base:heavy-belt",
+                        "high_demand": True,
+                        "recent_listing_count": 3,
+                    }
+                ],
+            }
+        ],
+    )
+
+    row = {
+        "id": "base:heavy-belt",
+        "count": 4,
+        "low": 2.0,
+        "stored_price_evidence": True,
+        "weak_activity": True,
+    }
+    demand = trade2._item_base_market_recent_demand_map(
+        league="Standard",
+        target="exalted",
+        status="securable",
+        item_ids={"base:heavy-belt"},
+    )
+    enriched = trade2._enrich_item_base_market_recent_demand_rows([row], demand)[0]
+    visible = trade2._visible_item_base_market_rows([enriched], hide_weak_activity=True)
+
+    assert enriched["recent_high_demand"] is True
+    assert enriched["weak_activity"] is False
+    assert enriched["weak_activity_suppressed_by_recent_demand"] is True
+    assert visible == [enriched]
 
 
 def test_visible_item_base_market_rows_can_hide_weak_activity_rows():
@@ -2768,6 +2813,13 @@ def test_item_base_market_aggregates_latest_rows_from_history_batches(monkeypatc
         "base:amber-amulet": 2.0,
         "base:pearl-ring": 3.0,
     }
+
+
+def test_item_base_market_reuses_history_snapshot_source_with_overview_marker():
+    assert trade2._item_base_market_can_reuse_previous_source("trade2/search+fetch:rough+overview+history") is True
+    assert trade2._item_base_market_can_reuse_previous_source("trade2/search+fetch:rough") is True
+    assert trade2._item_base_market_can_reuse_previous_source("trade2/search+fetch:overview") is False
+    assert trade2._item_base_market_can_reuse_previous_source("trade2/search+fetch:exact") is False
 
 
 def test_filter_comparable_lots_uses_text_affixes_for_pasted_items():
