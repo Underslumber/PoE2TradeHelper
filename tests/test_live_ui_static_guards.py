@@ -82,9 +82,9 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "data-base-refine" in app_js
     assert "status: 'securable'" in app_js
     assert "sample_limit: '100'" in app_js
-    assert 'value="0" data-i18n="baseMarketLimitAll" selected' in template
-    assert 'value="40"' in template
+    assert 'value="40" selected' in template
     assert 'value="10"' in template
+    assert 'value="0" data-i18n="baseMarketLimitAll"' in template
     assert 'id="base-market-price-trigger"' in template
     assert 'class="form-select base-market-operator-select"' in template
     assert '<option value="above">&gt;</option>' in template

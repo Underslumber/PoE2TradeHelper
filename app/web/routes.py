@@ -105,10 +105,33 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # garbage-collect them mid-execution.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
 REFERENCE_BOOTSTRAP_TIMEOUT_SECONDS = 4.0
+TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS = float(os.environ.get("TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS", "12"))
 FALLBACK_TRADE_LEAGUES = [
     {"id": "Fate of the Vaal", "text": "Fate of the Vaal", "realm": "poe2"},
     {"id": "Standard", "text": "Standard", "realm": "poe2"},
 ]
+
+
+def _stored_category_rates_fallback(
+    *,
+    league: str,
+    category: str,
+    target: str,
+    status: str,
+    error: str,
+) -> dict | None:
+    latest = read_latest_rates(league=league, category=category, target=target, status=status)
+    if not latest:
+        return None
+    errors = list(latest.get("errors") or [])
+    errors.append({"source": "trade2/live-refresh", "error": error})
+    return {
+        **latest,
+        "stored": True,
+        "cached": True,
+        "live_refresh_timeout": True,
+        "errors": errors,
+    }
 FALLBACK_STATIC_CATEGORIES = {
     "Currency": [
         {"id": "transmute", "text": "Orb of Transmutation", "text_ru": "Сфера превращения", "image": None},
@@ -1696,7 +1719,23 @@ async def api_trade_category_rates(
     db: Session = Depends(get_db),
 ):
     try:
-        data = await get_category_rates(league=league, category=category, target=target, status=status)
+        try:
+            data = await asyncio.wait_for(
+                get_category_rates(league=league, category=category, target=target, status=status),
+                timeout=TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            timeout_text = f"live refresh timed out after {TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS:g}s"
+            fallback = _stored_category_rates_fallback(
+                league=league,
+                category=category,
+                target=target,
+                status=status,
+                error=timeout_text,
+            )
+            if fallback:
+                return fallback
+            return JSONResponse({"error": timeout_text}, status_code=504)
         if isinstance(data, dict):
             data["notifications"] = await process_telegram_notifications(
                 db,

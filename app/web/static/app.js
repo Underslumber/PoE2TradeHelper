@@ -78,6 +78,7 @@ const BASE_MARKET_PRICE_TRIGGER_STORAGE_KEY = 'poe2-base-market-price-trigger';
 const BASE_MARKET_PRICE_VALUE_STORAGE_KEY = 'poe2-base-market-price-value';
 const BASE_MARKET_PRICE_CURRENCY_STORAGE_KEY = 'poe2-base-market-price-currency';
 const BASE_MARKET_HIDE_WEAK_ACTIVITY_STORAGE_KEY = 'poe2-base-market-hide-weak-activity';
+const BASE_MARKET_DEFAULT_LIMIT = '40';
 const BASE_MARKET_LIMIT_VALUES = new Set(['0', '40', '10']);
 
 function loadJsonState(key, fallback) {
@@ -515,6 +516,7 @@ function listingAgeText(lot) {
 }
 
 function snapshotLabel(data = {}) {
+  if (data.live_refresh_timeout) return t('liveRefreshFallbackLabel');
   if (data.stored) return t('savedSnapshotLabel');
   if (data.cached) return t('cacheLabel');
   return '';
@@ -663,21 +665,21 @@ async function selectedItemPayload(targetOverride = null) {
 
 async function loadAccountCollections() {
   if (!state.account.authenticated) return;
-  const [pinsData, tradesData] = await Promise.all([
+  const accountRequests = Promise.all([
     fetchAccountJson('/api/account/pins'),
     fetchAccountJson('/api/account/trades'),
+    fetchAccountJson('/api/account/notifications'),
   ]);
+  const adminRequests = state.account.user?.is_admin
+    ? Promise.all([fetchAccountJson('/api/admin/users'), fetchAccountJson('/api/admin/metrics')])
+    : Promise.resolve([null, null]);
+  const [[pinsData, tradesData, notificationsData], [adminData, metricsData]] = await Promise.all([accountRequests, adminRequests]);
   state.account.pins = pinsData.pins || [];
   state.account.trades = tradesData.trades || [];
   state.account.tradeReport = tradesData.report || null;
-  const notificationsData = await fetchAccountJson('/api/account/notifications');
   state.account.notifications = notificationsData.notifications || [];
   state.account.telegramConfigured = Boolean(notificationsData.telegram_configured);
-  if (state.account.user?.is_admin) {
-    const [adminData, metricsData] = await Promise.all([
-      fetchAccountJson('/api/admin/users'),
-      fetchAccountJson('/api/admin/metrics'),
-    ]);
+  if (adminData) {
     state.account.adminUsers = adminData.users || [];
     state.account.adminMetrics = metricsData || null;
   } else {
@@ -686,7 +688,16 @@ async function loadAccountCollections() {
   }
 }
 
-async function loadAccountState() {
+function renderAccountAccessState() {
+  renderCabinet();
+  renderAdminNavigation();
+  renderAdminPanel();
+  renderAiNavigation();
+  renderAiPanel();
+  renderDetailAccountStatus();
+}
+
+async function loadAccountState(options = {}) {
   state.isAccountLoading = true;
   try {
     const data = await fetchAccountJson('/api/auth/me');
@@ -703,8 +714,16 @@ async function loadAccountState() {
     state.rubMarket.context = null;
     state.rubMarket.error = '';
     state.rubMarket.loadedKey = '';
+    renderAccountAccessState();
+    if (options.deferredMainView && allowedMainViews().includes(options.deferredMainView)) {
+      switchMainView(options.deferredMainView);
+    }
     if (state.account.authenticated) {
-      await loadAccountCollections();
+      try {
+        await loadAccountCollections();
+      } catch (error) {
+        setAccountStatus(error.message || String(error));
+      }
     }
   } catch (error) {
     state.account.authenticated = false;
@@ -722,12 +741,7 @@ async function loadAccountState() {
     setAccountStatus(error.message || String(error));
   } finally {
     state.isAccountLoading = false;
-    renderCabinet();
-    renderAdminNavigation();
-    renderAdminPanel();
-    renderAiNavigation();
-    renderAiPanel();
-    renderDetailAccountStatus();
+    renderAccountAccessState();
   }
 }
 
@@ -3207,9 +3221,9 @@ function switchLotSubtab(tab) {
   }
 }
 
-function normalizeBaseMarketLimit(value) {
+function normalizeBaseMarketLimit(value, fallback = BASE_MARKET_DEFAULT_LIMIT) {
   const normalized = String(value ?? '').trim();
-  return BASE_MARKET_LIMIT_VALUES.has(normalized) ? normalized : '0';
+  return BASE_MARKET_LIMIT_VALUES.has(normalized) ? normalized : fallback;
 }
 
 function normalizeBaseMarketMinIlvl(value) {
@@ -3545,7 +3559,7 @@ function baseMarketIconMarkup(row, extraClass = '') {
   const image = row?.image || row?.icon_url || '';
   const key = String(row?.icon_key || 'base').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'base';
   if (image) {
-    return `<span class="base-market-icon ${extraClass}"><img src="${escapeHtml(image)}" alt="" loading="lazy" data-icon-key="${escapeHtml(key)}"></span>`;
+    return `<span class="base-market-icon ${extraClass}"><img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async" data-icon-key="${escapeHtml(key)}"></span>`;
   }
   return `<span class="base-market-icon base-market-icon-fallback base-market-icon-${escapeHtml(key)} ${extraClass}" aria-hidden="true"></span>`;
 }
@@ -7053,11 +7067,8 @@ async function initLiveTrade() {
       setLiveError(t('staticFallbackNotice'));
     }
     loadLatestCachedRates();
-    loadAccountState().then(() => {
+    loadAccountState({ deferredMainView }).then(() => {
       showVerificationQueryStatus();
-      if (deferredMainView) {
-        switchMainView(deferredMainView);
-      }
     });
     scheduleAutoRefresh();
   } catch (error) {
