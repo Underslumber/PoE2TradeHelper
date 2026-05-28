@@ -95,6 +95,31 @@ def test_category_rates_returns_stored_snapshot_on_live_timeout(monkeypatch) -> 
     assert payload["errors"][-1]["source"] == "trade2/live-refresh"
 
 
+def test_category_rates_returns_empty_payload_on_live_timeout_without_snapshot(monkeypatch) -> None:
+    async def slow_get_category_rates(**kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(routes, "TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(routes, "get_category_rates", slow_get_category_rates)
+    monkeypatch.setattr(routes, "read_latest_rates", lambda **kwargs: None)
+
+    payload = asyncio.run(
+        routes.api_trade_category_rates(
+            league="Standard",
+            category="Incursion",
+            target="exalted",
+            status="any",
+        )
+    )
+
+    assert payload["stored"] is False
+    assert payload["cached"] is False
+    assert payload["live_refresh_timeout"] is True
+    assert payload["rows"] == []
+    assert payload["errors"][-1]["source"] == "trade2/live-refresh"
+    assert "error" not in payload
+
+
 def test_latest_item_market_falls_back_to_item_history(monkeypatch) -> None:
     def fake_read_latest_rates(**kwargs):
         return {

@@ -132,6 +132,30 @@ def _stored_category_rates_fallback(
         "live_refresh_timeout": True,
         "errors": errors,
     }
+
+
+def _category_rates_timeout_payload(
+    *,
+    league: str,
+    category: str,
+    target: str,
+    status: str,
+    error: str,
+) -> dict:
+    return {
+        "league": league,
+        "category": category,
+        "target": target,
+        "status": status,
+        "source": "trade2/live-refresh",
+        "stored": False,
+        "cached": False,
+        "live_refresh_timeout": True,
+        "rows": [],
+        "advice": [],
+        "recipes": [],
+        "errors": [{"source": "trade2/live-refresh", "error": error}],
+    }
 FALLBACK_STATIC_CATEGORIES = {
     "Currency": [
         {"id": "transmute", "text": "Orb of Transmutation", "text_ru": "Сфера превращения", "image": None},
@@ -1735,7 +1759,13 @@ async def api_trade_category_rates(
             )
             if fallback:
                 return fallback
-            return JSONResponse({"error": timeout_text}, status_code=504)
+            return _category_rates_timeout_payload(
+                league=league,
+                category=category,
+                target=target,
+                status=status,
+                error=timeout_text,
+            )
         if isinstance(data, dict):
             data["notifications"] = await process_telegram_notifications(
                 db,

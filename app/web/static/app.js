@@ -516,7 +516,8 @@ function listingAgeText(lot) {
 }
 
 function snapshotLabel(data = {}) {
-  if (data.live_refresh_timeout) return t('liveRefreshFallbackLabel');
+  if (data.live_refresh_timeout && (data.stored || data.cached)) return t('liveRefreshFallbackLabel');
+  if (data.live_refresh_timeout) return t('liveRefreshTimeoutLabel');
   if (data.stored) return t('savedSnapshotLabel');
   if (data.cached) return t('cacheLabel');
   return '';
