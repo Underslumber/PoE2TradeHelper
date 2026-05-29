@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
-from app.market_service import MarketSnapshotService, MarketSnapshotServiceSettings, known_league_start_ts, select_market_league
+from app.market_service import (
+    DEFAULT_SERVICE_CATEGORIES,
+    MarketSnapshotService,
+    MarketSnapshotServiceSettings,
+    known_league_start_ts,
+    select_market_league,
+)
 
 
 def test_select_market_league_prefers_first_trade_challenge_league():
@@ -54,6 +60,13 @@ def test_market_snapshot_service_status_includes_funpay_rub_settings():
     assert status["funpay_rub"]["enabled"] is True
     assert status["funpay_rub"]["target_currency"] == "divine"
     assert status["funpay_rub"]["last_collection_ts"] is None
+
+
+def test_market_snapshot_service_default_categories_skip_heavy_trade2_scans():
+    service = MarketSnapshotService(MarketSnapshotServiceSettings())
+
+    assert service.settings.categories == DEFAULT_SERVICE_CATEGORIES
+    assert "ItemBases" not in service.settings.categories
 
 
 def test_market_snapshot_service_does_not_guess_league_when_refresh_fails(monkeypatch):

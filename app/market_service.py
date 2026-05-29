@@ -47,6 +47,23 @@ LEAGUE_EXCLUDE_TOKENS = (
     "ssf",
     "private",
 )
+DEFAULT_SERVICE_CATEGORIES = [
+    "Currency",
+    "Fragments",
+    "Runes",
+    "Expedition",
+    "Delirium",
+    "Breach",
+    "Ritual",
+    "Abyss",
+    "Essences",
+    "UncutGems",
+    "LineageSupportGems",
+]
+
+
+def _default_service_categories() -> list[str]:
+    return split_csv(MARKET_SNAPSHOT_CATEGORIES) or list(DEFAULT_SERVICE_CATEGORIES)
 
 
 @dataclass
@@ -55,7 +72,7 @@ class MarketSnapshotServiceSettings:
     preferred_league: str = MARKET_SNAPSHOT_LEAGUE
     target: str = MARKET_SNAPSHOT_TARGET
     status: str = MARKET_SNAPSHOT_STATUS
-    categories: list[str] = field(default_factory=lambda: split_csv(MARKET_SNAPSHOT_CATEGORIES))
+    categories: list[str] = field(default_factory=_default_service_categories)
     currency_targets: list[str] = field(default_factory=lambda: split_csv(MARKET_SNAPSHOT_CURRENCY_TARGETS))
     include_unsupported: bool = MARKET_SNAPSHOT_INCLUDE_UNSUPPORTED
     interval_minutes: float = MARKET_SNAPSHOT_INTERVAL_MINUTES
