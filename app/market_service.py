@@ -39,7 +39,7 @@ from app.trade2 import get_trade_leagues
 KNOWN_LEAGUE_STARTS = {
     "runes of aldur": "2026-05-29T19:00:00+00:00",
 }
-FALLBACK_MARKET_LEAGUE = "Fate of the Vaal"
+FALLBACK_MARKET_LEAGUE = "Runes of Aldur"
 LEAGUE_REFRESH_TIMEOUT_SECONDS = 10.0
 LEAGUE_EXCLUDE_TOKENS = (
     "standard",

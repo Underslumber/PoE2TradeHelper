@@ -224,7 +224,7 @@ def test_trade_leagues_uses_bootstrap_fallback_without_error_field(monkeypatch) 
 
     assert payload["fallback"] is True
     assert "error" not in payload
-    assert payload["leagues"][0]["id"] == "Fate of the Vaal"
+    assert payload["leagues"][0]["id"] == "Runes of Aldur"
 
 
 def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:

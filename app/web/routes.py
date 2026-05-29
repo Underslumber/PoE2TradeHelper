@@ -107,8 +107,10 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 REFERENCE_BOOTSTRAP_TIMEOUT_SECONDS = 4.0
 TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS = float(os.environ.get("TRADE_CATEGORY_LIVE_TIMEOUT_SECONDS", "12"))
 FALLBACK_TRADE_LEAGUES = [
-    {"id": "Fate of the Vaal", "text": "Fate of the Vaal", "realm": "poe2"},
+    {"id": "Runes of Aldur", "text": "Runes of Aldur", "realm": "poe2"},
+    {"id": "HC Runes of Aldur", "text": "HC Runes of Aldur", "realm": "poe2"},
     {"id": "Standard", "text": "Standard", "realm": "poe2"},
+    {"id": "Hardcore", "text": "Hardcore", "realm": "poe2"},
 ]
 
 

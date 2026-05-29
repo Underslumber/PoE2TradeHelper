@@ -54,5 +54,5 @@ def test_market_snapshot_service_uses_fallback_league_when_refresh_fails(monkeyp
 
     asyncio.run(service._refresh_league())
 
-    assert service.current_league == "Fate of the Vaal"
-    assert service.current_league_text == "Fate of the Vaal"
+    assert service.current_league == "Runes of Aldur"
+    assert service.current_league_text == "Runes of Aldur"

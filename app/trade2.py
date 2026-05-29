@@ -37,6 +37,9 @@ HISTORY_PATH = DATA_DIR / "trade_rate_history.jsonl"
 TRADE_STATIC_CACHE_TTL = 3600
 TRADE_STATIC_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None}
 TRADE_STATIC_LOCK = asyncio.Lock()
+TRADE_LEAGUES_CACHE_TTL = 60
+TRADE_LEAGUES_CACHE: dict[str, Any] = {"created_ts": 0.0, "data": None}
+TRADE_LEAGUES_LOCK = asyncio.Lock()
 SELLER_LOTS_CACHE_TTL = 900
 SELLER_LOTS_FETCH_LIMIT = 200
 SELLER_MARKET_CACHE_TTL = 600
@@ -418,30 +421,44 @@ def normalize_exchange_result(payload: dict[str, Any], limit: int = 50) -> dict[
 
 
 async def get_trade_leagues() -> list[dict[str, str]]:
+    cached = TRADE_LEAGUES_CACHE.get("data")
+    if cached and time.time() - float(TRADE_LEAGUES_CACHE.get("created_ts") or 0) < TRADE_LEAGUES_CACHE_TTL:
+        return cached
+
     last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-                response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
-                if response.status_code == 429 and attempt < 2:
-                    wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
-                    await asyncio.sleep(wait)
-                    continue
-                response.raise_for_status()
-            leagues = response.json().get("result", [])
-            return [
-                {
-                    "id": league.get("id", ""),
-                    "text": league.get("text") or league.get("id", ""),
-                    "realm": league.get("realm", "poe2"),
-                }
-                for league in leagues
-                if league.get("realm") == "poe2" and league.get("id")
-            ]
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            last_exc = exc
-            if attempt < 2:
-                await asyncio.sleep(2 * (attempt + 1))
+    async with TRADE_LEAGUES_LOCK:
+        cached = TRADE_LEAGUES_CACHE.get("data")
+        if cached and time.time() - float(TRADE_LEAGUES_CACHE.get("created_ts") or 0) < TRADE_LEAGUES_CACHE_TTL:
+            return cached
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                    response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
+                    if response.status_code == 429 and attempt < 2:
+                        wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
+                        await asyncio.sleep(wait)
+                        continue
+                    response.raise_for_status()
+                leagues = response.json().get("result", [])
+                result = [
+                    {
+                        "id": league.get("id", ""),
+                        "text": league.get("text") or league.get("id", ""),
+                        "realm": league.get("realm", "poe2"),
+                    }
+                    for league in leagues
+                    if league.get("realm") == "poe2" and league.get("id")
+                ]
+                TRADE_LEAGUES_CACHE["created_ts"] = time.time()
+                TRADE_LEAGUES_CACHE["data"] = result
+                return result
+            except (httpx.HTTPStatusError, httpx.RequestError, RuntimeError) as exc:
+                last_exc = exc
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
+        cached = TRADE_LEAGUES_CACHE.get("data")
+        if cached:
+            return cached
     raise last_exc if last_exc else RuntimeError("trade leagues fetch failed")
 
 
@@ -454,17 +471,23 @@ async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
         cached = TRADE_STATIC_CACHE.get("data")
         if cached and time.time() - float(TRADE_STATIC_CACHE.get("created_ts") or 0) < TRADE_STATIC_CACHE_TTL:
             return cached
-        async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
-            response, ru_response = await asyncio.gather(
-                trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
-                trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
-            )
-            response.raise_for_status()
-            ru_response.raise_for_status()
-        data = normalize_static_entries(response.json(), ru_response.json())
-        TRADE_STATIC_CACHE["created_ts"] = time.time()
-        TRADE_STATIC_CACHE["data"] = data
-        return data
+        try:
+            async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                response, ru_response = await asyncio.gather(
+                    trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
+                    trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
+                )
+                response.raise_for_status()
+                ru_response.raise_for_status()
+            data = normalize_static_entries(response.json(), ru_response.json())
+            TRADE_STATIC_CACHE["created_ts"] = time.time()
+            TRADE_STATIC_CACHE["data"] = data
+            return data
+        except Exception:
+            cached = TRADE_STATIC_CACHE.get("data")
+            if cached:
+                return cached
+            raise
 
 
 async def _post_exchange(

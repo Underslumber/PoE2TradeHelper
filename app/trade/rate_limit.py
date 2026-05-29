@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -8,10 +9,15 @@ from typing import Any
 MIN_LIMITED_REQUEST_INTERVAL_SECONDS = 0.35
 RATE_LIMIT_SAFETY_SECONDS = 0.25
 RATE_LIMIT_REMAINING_HEADROOM = 1
+MAX_RATE_LIMIT_WAIT_SECONDS = float(os.environ.get("TRADE2_MAX_RATE_LIMIT_WAIT_SECONDS", "8"))
 
 _trade2_request_lock: asyncio.Lock | None = None
 _trade2_request_lock_loop: asyncio.AbstractEventLoop | None = None
 _trade2_next_request_ts = 0.0
+
+
+class Trade2RateLimitWaitError(RuntimeError):
+    pass
 
 
 def _split_header_list(value: Any) -> list[str]:
@@ -99,7 +105,10 @@ async def trade2_rate_limited_request(
     async with _trade2_lock():
         now = time.time()
         if _trade2_next_request_ts > now:
-            await asyncio.sleep(_trade2_next_request_ts - now)
+            wait_seconds = _trade2_next_request_ts - now
+            if MAX_RATE_LIMIT_WAIT_SECONDS > 0 and wait_seconds > MAX_RATE_LIMIT_WAIT_SECONDS:
+                raise Trade2RateLimitWaitError(f"trade2 rate limited; retry after {wait_seconds:.0f}s")
+            await asyncio.sleep(wait_seconds)
         response = await request()
         delay = trade2_rate_limit_delay(getattr(response, "headers", None))
         if delay > 0:

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
+import app.trade.rate_limit as rate_limit
 from app.trade.rate_limit import trade2_rate_limit_delay
+from app.trade.rate_limit import trade2_rate_limited_request
+from app.trade.rate_limit import Trade2RateLimitWaitError
 
 
 def test_trade2_rate_limit_delay_uses_retry_after() -> None:
@@ -29,3 +36,23 @@ def test_trade2_rate_limit_delay_uses_active_restriction() -> None:
     )
 
     assert delay >= 10
+
+
+def test_trade2_rate_limited_request_fails_fast_on_long_wait(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"Retry-After": "30"}
+
+    async def fake_request():
+        return FakeResponse()
+
+    async def run_check() -> None:
+        rate_limit.reset_trade2_rate_limit_state()
+        await trade2_rate_limited_request(fake_request)
+        with pytest.raises(Trade2RateLimitWaitError, match="retry after"):
+            await trade2_rate_limited_request(fake_request)
+
+    monkeypatch.setattr(rate_limit, "MAX_RATE_LIMIT_WAIT_SECONDS", 1.0)
+    try:
+        asyncio.run(run_check())
+    finally:
+        rate_limit.reset_trade2_rate_limit_state()

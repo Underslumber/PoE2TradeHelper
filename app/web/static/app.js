@@ -218,7 +218,10 @@ const STATIC_REFERENCE_TIMEOUT_MS = 5000;
 
 function fallbackTradeLeagues() {
   return [
-    { id: 'Fate of the Vaal', text: 'Fate of the Vaal', realm: 'poe2' },
+    { id: 'Runes of Aldur', text: 'Runes of Aldur', realm: 'poe2' },
+    { id: 'HC Runes of Aldur', text: 'HC Runes of Aldur', realm: 'poe2' },
+    { id: 'Standard', text: 'Standard', realm: 'poe2' },
+    { id: 'Hardcore', text: 'Hardcore', realm: 'poe2' },
   ];
 }
 
