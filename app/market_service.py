@@ -39,7 +39,6 @@ from app.trade2 import get_trade_leagues
 KNOWN_LEAGUE_STARTS = {
     "runes of aldur": "2026-05-29T19:00:00+00:00",
 }
-FALLBACK_MARKET_LEAGUE = "Runes of Aldur"
 LEAGUE_REFRESH_TIMEOUT_SECONDS = 10.0
 LEAGUE_EXCLUDE_TOKENS = (
     "standard",
@@ -89,23 +88,11 @@ def _is_trade_challenge_league(league: dict[str, Any]) -> bool:
 
 
 def select_market_league(leagues: list[dict[str, Any]], preferred_league: str = "") -> dict[str, Any] | None:
-    if preferred_league:
-        preferred_lower = preferred_league.lower()
-        for league in leagues:
-            if str(league.get("id") or "").lower() == preferred_lower or _league_name(league).lower() == preferred_lower:
-                return league
+    _ = preferred_league
     for league in leagues:
         if _is_trade_challenge_league(league):
             return league
-    for league in leagues:
-        if _is_poe2_league(league):
-            return league
     return None
-
-
-def fallback_market_league(preferred_league: str = "") -> dict[str, str]:
-    league = preferred_league or FALLBACK_MARKET_LEAGUE
-    return {"id": league, "text": league, "realm": "poe2"}
 
 
 def known_league_start_ts(league_id: str | None, league_text: str | None) -> float | None:
@@ -291,11 +278,13 @@ class MarketSnapshotService:
         except Exception as exc:
             self.last_error = str(exc)
             self.last_league_check_ts = time.time()
-            leagues = [fallback_market_league(self.settings.preferred_league)]
+            return
         self.last_league_check_ts = time.time()
         self.known_leagues = [_league_name(league) for league in leagues if _is_poe2_league(league)]
         selected = select_market_league(leagues, self.settings.preferred_league)
         if not selected:
+            self.current_league = ""
+            self.current_league_text = ""
             return
         selected_id = str(selected.get("id") or "")
         selected_text = _league_name(selected)
