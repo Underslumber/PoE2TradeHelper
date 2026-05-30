@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import (
+    ITEM_BASE_MARKET_BACKGROUND_ENABLED,
+    ITEM_BASE_MARKET_BACKGROUND_SAMPLE_LIMIT,
+    ITEM_BASE_MARKET_BACKGROUND_STATUS,
     MARKET_SNAPSHOT_CATEGORIES,
     MARKET_SNAPSHOT_CURRENCY_TARGETS,
     MARKET_SNAPSHOT_EARLY_DAYS,
@@ -34,7 +37,7 @@ from app.market_snapshots import (
     split_csv,
 )
 from app.notification_worker import process_due_telegram_notifications
-from app.trade2 import get_trade_leagues
+from app.trade2 import get_item_base_market, get_trade_leagues, start_item_base_market_refresh_job
 
 KNOWN_LEAGUE_STARTS = {
     "runes of aldur": "2026-05-29T19:00:00+00:00",
@@ -81,6 +84,9 @@ class MarketSnapshotServiceSettings:
     league_start_ts: float | None = field(default_factory=lambda: parse_league_start(MARKET_SNAPSHOT_LEAGUE_START))
     league_check_minutes: float = MARKET_SNAPSHOT_LEAGUE_CHECK_MINUTES
     pause_seconds: float = MARKET_SNAPSHOT_PAUSE_SECONDS
+    item_base_market_enabled: bool = ITEM_BASE_MARKET_BACKGROUND_ENABLED
+    item_base_market_status: str = ITEM_BASE_MARKET_BACKGROUND_STATUS
+    item_base_market_sample_limit: int = ITEM_BASE_MARKET_BACKGROUND_SAMPLE_LIMIT
     funpay_rub_enabled: bool = FUNPAY_RUB_SNAPSHOT_ENABLED
     funpay_rub_target: str = FUNPAY_RUB_SNAPSHOT_TARGET
     notification_worker_enabled: bool = NOTIFICATION_WORKER_ENABLED
@@ -137,6 +143,9 @@ class MarketSnapshotService:
         self.last_funpay_rub_collection_ts: float | None = None
         self.last_funpay_rub_summary: dict[str, Any] | None = None
         self.last_funpay_rub_error: str = ""
+        self.last_item_base_market_collection_ts: float | None = None
+        self.last_item_base_market_summary: dict[str, Any] | None = None
+        self.last_item_base_market_error: str = ""
         self.last_notification_check_ts: float | None = None
         self.last_notification_summary: dict[str, Any] | None = None
         self.last_notification_error: str = ""
@@ -187,6 +196,14 @@ class MarketSnapshotService:
                 "last_summary": self.last_funpay_rub_summary,
                 "last_error": self.last_funpay_rub_error,
             },
+            "item_base_market": {
+                "enabled": self.settings.item_base_market_enabled,
+                "status": self.settings.item_base_market_status,
+                "sample_limit": self.settings.item_base_market_sample_limit,
+                "last_collection_ts": self.last_item_base_market_collection_ts,
+                "last_summary": self.last_item_base_market_summary,
+                "last_error": self.last_item_base_market_error,
+            },
             "notifications": {
                 "enabled": self.settings.notification_worker_enabled,
                 "last_check_ts": self.last_notification_check_ts,
@@ -234,8 +251,14 @@ class MarketSnapshotService:
                     self.last_error = str(exc)
                     summary = None
 
+                item_base_summary = None
+                if self.settings.item_base_market_enabled:
+                    item_base_summary = await self._collect_item_base_market_snapshot()
+
                 if summary is not None and rub_summary is not None:
                     summary["funpay_rub"] = rub_summary
+                if summary is not None and item_base_summary is not None:
+                    summary["item_base_market"] = item_base_summary
                 if summary is not None:
                     notifications_summary = await self._process_notifications()
                     if notifications_summary is not None:
@@ -333,6 +356,70 @@ class MarketSnapshotService:
             raise
         except Exception as exc:
             self.last_funpay_rub_error = str(exc)
+            return None
+
+    async def _collect_item_base_market_snapshot(self) -> dict[str, Any] | None:
+        try:
+            job, coroutine = start_item_base_market_refresh_job(
+                league=self.current_league,
+                target=self.settings.target,
+                status=self.settings.item_base_market_status,
+                q="",
+                limit=0,
+                min_ilvl=None,
+                sample_limit=self.settings.item_base_market_sample_limit,
+            )
+            if coroutine is not None:
+                payload = await coroutine
+            else:
+                payload = await get_item_base_market(
+                    league=self.current_league,
+                    target=self.settings.target,
+                    status=self.settings.item_base_market_status,
+                    q="",
+                    limit=0,
+                    force_refresh=False,
+                    sample_limit=self.settings.item_base_market_sample_limit,
+                )
+            rows = list(payload.get("rows") or [])
+            job_view = payload.get("refresh_job") or job or {}
+            priced_rows = [
+                row
+                for row in rows
+                if row.get("best_native") or row.get("low") is not None or row.get("best") is not None
+            ]
+            high_demand_rows = [
+                row
+                for row in rows
+                if row.get("high_demand") or row.get("recent_high_demand")
+            ]
+            summary = {
+                "ok": True,
+                "league": self.current_league,
+                "category": "ItemBases",
+                "target": self.settings.target,
+                "status": self.settings.item_base_market_status,
+                "source": payload.get("source") or "",
+                "rows": len(rows),
+                "priced_rows": len(priced_rows),
+                "high_demand_rows": len(high_demand_rows),
+                "job_status": job_view.get("status"),
+                "processed_count": job_view.get("processed_count"),
+                "base_total": job_view.get("base_total"),
+                "priority_recheck_count": job_view.get("priority_recheck_count"),
+                "fetched_count": job_view.get("fetched_count"),
+                "clean_count": job_view.get("clean_count"),
+                "retry_after": job_view.get("retry_after"),
+                "error": job_view.get("error"),
+            }
+            self.last_item_base_market_summary = summary
+            self.last_item_base_market_collection_ts = float(payload.get("created_ts") or time.time())
+            self.last_item_base_market_error = ""
+            return summary
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.last_item_base_market_error = str(exc)
             return None
 
     async def _process_notifications(self) -> dict[str, Any] | None:

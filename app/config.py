@@ -31,6 +31,14 @@ MARKET_SNAPSHOT_INCLUDE_UNSUPPORTED: Final = os.environ.get("MARKET_SNAPSHOT_INC
     "no",
     "off",
 }
+ITEM_BASE_MARKET_BACKGROUND_ENABLED: Final = os.environ.get("ITEM_BASE_MARKET_BACKGROUND_ENABLED", "true").lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+ITEM_BASE_MARKET_BACKGROUND_STATUS: Final = os.environ.get("ITEM_BASE_MARKET_BACKGROUND_STATUS", "securable")
+ITEM_BASE_MARKET_BACKGROUND_SAMPLE_LIMIT: Final = int(os.environ.get("ITEM_BASE_MARKET_BACKGROUND_SAMPLE_LIMIT", "100"))
 FUNPAY_RUB_SNAPSHOT_ENABLED: Final = os.environ.get("FUNPAY_RUB_SNAPSHOT_ENABLED", "true").lower() not in {
     "0",
     "false",
