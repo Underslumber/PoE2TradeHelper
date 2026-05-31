@@ -1,5 +1,15 @@
 // Economy table page
 
+const ACCOUNT_API_ORIGIN = 'https://xapct.ru';
+
+function accountApiUrl(url) {
+  const value = String(url || '');
+  if (window.location.hostname === 'xapct.ru' && window.location.port === '9038' && value.startsWith('/api/')) {
+    return `${ACCOUNT_API_ORIGIN}${value}`;
+  }
+  return value;
+}
+
 function buildColumns(data) {
   const cols = [
     { data: 'name', title: t('item'), render: (data, type, row) => {
@@ -602,8 +612,8 @@ function applyAccountUserPreferences(user) {
 }
 
 async function fetchAccountJson(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: 'same-origin',
+  const response = await fetch(accountApiUrl(url), {
+    credentials: 'include',
     ...options,
     headers: {
       ...(options.headers || {}),

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,11 +17,14 @@ CANONICAL_PUBLIC_PORT = 9038
 CANONICAL_PUBLIC_ORIGIN = f"https://{CANONICAL_PUBLIC_HOST}:{CANONICAL_PUBLIC_PORT}"
 REDIRECT_TO_CANONICAL_PORT_HOSTS = {CANONICAL_PUBLIC_HOST, f"{CANONICAL_PUBLIC_HOST}:443"}
 DISABLE_ALT_SVC_HEADER = "clear"
+NO_PORT_API_PREFIXES = ("/api/",)
 
 
 def canonical_public_redirect_url(request: Request) -> str | None:
     host = request.headers.get("host", "").lower()
     if host not in REDIRECT_TO_CANONICAL_PORT_HOSTS:
+        return None
+    if request.url.path.startswith(NO_PORT_API_PREFIXES):
         return None
     query = request.url.query
     suffix = f"?{query}" if query else ""
@@ -38,6 +42,13 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="PoE2 Trade Helper", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[CANONICAL_PUBLIC_ORIGIN],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
