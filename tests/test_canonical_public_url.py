@@ -10,6 +10,7 @@ def test_xapct_without_port_redirects_to_canonical_port() -> None:
 
     assert response.status_code == 308
     assert response.headers["location"] == "https://xapct.ru:9038/?view=lots"
+    assert response.headers["alt-svc"] == "clear"
 
 
 def test_xapct_with_canonical_port_is_not_redirected() -> None:
@@ -19,6 +20,7 @@ def test_xapct_with_canonical_port_is_not_redirected() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert response.headers["alt-svc"] == "clear"
 
 
 def test_local_test_host_is_not_redirected() -> None:

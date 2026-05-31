@@ -15,6 +15,7 @@ CANONICAL_PUBLIC_HOST = "xapct.ru"
 CANONICAL_PUBLIC_PORT = 9038
 CANONICAL_PUBLIC_ORIGIN = f"https://{CANONICAL_PUBLIC_HOST}:{CANONICAL_PUBLIC_PORT}"
 REDIRECT_TO_CANONICAL_PORT_HOSTS = {CANONICAL_PUBLIC_HOST, f"{CANONICAL_PUBLIC_HOST}:443"}
+DISABLE_ALT_SVC_HEADER = "clear"
 
 
 def canonical_public_redirect_url(request: Request) -> str | None:
@@ -43,8 +44,11 @@ app = FastAPI(title="PoE2 Trade Helper", lifespan=lifespan)
 async def redirect_public_host_to_canonical_port(request: Request, call_next):
     redirect_url = canonical_public_redirect_url(request)
     if redirect_url:
-        return RedirectResponse(url=redirect_url, status_code=308)
-    return await call_next(request)
+        response = RedirectResponse(url=redirect_url, status_code=308)
+    else:
+        response = await call_next(request)
+    response.headers["Alt-Svc"] = DISABLE_ALT_SVC_HEADER
+    return response
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
