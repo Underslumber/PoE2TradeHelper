@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import httpx
 
 from app.config import ICONS_DIR, USER_AGENT
+from app.http_client import outbound_httpx_client
 
 _icon_cache: Dict[str, Path] = {}
 
@@ -29,7 +30,7 @@ async def fetch_icon(icon_url: str) -> Optional[Path]:
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
     sha = hashlib.sha1(icon_url.encode("utf-8", "ignore")).hexdigest()
     try:
-        async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
+        async with outbound_httpx_client(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
             resp = await client.get(icon_url)
             resp.raise_for_status()
             ext = _extension_from_headers(resp.headers.get("content-type", ""), icon_url)

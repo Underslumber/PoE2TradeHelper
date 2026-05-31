@@ -14,11 +14,13 @@ from tenacity import (
 )
 
 from app.config import USER_AGENT, BASE_URL
+from app.http_client import outbound_httpx_client
 from app.trade.rate_limit import trade2_rate_limited_request
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
 POE_SITE_BASE = "https://www.pathofexile.com"
+TRADE2_FAILOVER_RESPONSE_METHODS = ("GET", "HEAD", "OPTIONS", "POST")
 
 logger = logging.getLogger(__name__)
 TRADE_STATIC_CACHE_TTL = 3600
@@ -70,7 +72,7 @@ class PoeTradeClient:
     async def get_trade_leagues() -> List[Dict[str, str]]:
         async for attempt in _make_retry():
             with attempt:
-                async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
                     response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
                     response.raise_for_status()
 
@@ -98,7 +100,7 @@ class PoeTradeClient:
                 return _trade_static_cache[1]
             async for attempt in _make_retry():
                 with attempt:
-                    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
                         response, ru_response = await asyncio.gather(
                             trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
                             trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
@@ -126,7 +128,11 @@ class PoeTradeClient:
         }
         async for attempt in _make_retry():
             with attempt:
-                async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
+                async with outbound_httpx_client(
+                    headers=_headers({"Content-Type": "application/json"}),
+                    timeout=30,
+                    failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
+                ) as client:
                     response = await trade2_rate_limited_request(
                         lambda: client.post(f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}", json=body)
                     )
@@ -142,7 +148,11 @@ class PoeTradeClient:
         body = {"query": query, "sort": sort or {"price": "asc"}}
         async for attempt in _make_retry():
             with attempt:
-                async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
+                async with outbound_httpx_client(
+                    headers=_headers({"Content-Type": "application/json"}),
+                    timeout=30,
+                    failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
+                ) as client:
                     response = await trade2_rate_limited_request(
                         lambda: client.post(f"{TRADE2_RU_BASE}/search/poe2/{quote(league, safe='')}", json=body)
                     )
@@ -158,7 +168,7 @@ class PoeTradeClient:
         results: List[Dict[str, Any]] = []
         chunks = [selected_ids[i : i + 10] for i in range(0, len(selected_ids), 10)]
 
-        async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+        async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
             for index, chunk_ids in enumerate(chunks):
                 chunk_str = ",".join(chunk_ids)
 
@@ -179,7 +189,7 @@ class PoeTradeClient:
     async def get_poe_ninja_rates(league: str, category_type: str) -> Optional[Dict[str, Any]]:
         async for attempt in _make_retry():
             with attempt:
-                async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
                     response = await client.get(
                         f"{BASE_URL}/poe2/api/economy/exchange/current/overview",
                         params={"league": league, "type": category_type},

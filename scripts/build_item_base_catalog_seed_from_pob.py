@@ -11,6 +11,8 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
+from app.http_client import outbound_httpx_client
+
 SCHEMA_VERSION = "poe2-item-base-catalog/v1"
 DEFAULT_POB_ROOT = Path(r"D:\Soft\PathOfBuilding-PoE2")
 DEFAULT_OUTPUT = Path("app/resources/item_base_catalog_seed.json")
@@ -212,7 +214,7 @@ async def _fetch_poe2db_title(client: httpx.AsyncClient, base_type: str) -> str 
 async def _load_poe2db_translations(bases: list[dict[str, Any]], concurrency: int) -> dict[str, str]:
     semaphore = asyncio.Semaphore(concurrency)
     translations: dict[str, str] = {}
-    async with httpx.AsyncClient(
+    async with outbound_httpx_client(
         timeout=30,
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},

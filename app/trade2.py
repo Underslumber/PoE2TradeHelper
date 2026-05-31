@@ -23,12 +23,14 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.config import BASE_URL, DATA_DIR, DEFAULT_RATE_LIMIT_DELAY, ICONS_DIR, USER_AGENT
+from app.http_client import outbound_httpx_client
 from app.item_parser import parse_item_text
 from app.profitability import enrich_trade_advice, execution_quality, rank_opportunities
 from app.recipes import analyze_recipes, filter_dominated_emotion_paths
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
+TRADE2_FAILOVER_RESPONSE_METHODS = ("GET", "HEAD", "OPTIONS", "POST")
 ITEM_BASE_MARKET_TRADE2_BASE = TRADE2_BASE
 POE2DB_BASE = "https://poe2db.tw"
 POE2DB_RU_BASE = "https://poe2db.tw/ru"
@@ -432,7 +434,7 @@ async def get_trade_leagues() -> list[dict[str, str]]:
             return cached
         for attempt in range(3):
             try:
-                async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+                async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
                     response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
                     if response.status_code == 429 and attempt < 2:
                         wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
@@ -472,7 +474,7 @@ async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
         if cached and time.time() - float(TRADE_STATIC_CACHE.get("created_ts") or 0) < TRADE_STATIC_CACHE_TTL:
             return cached
         try:
-            async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+            async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
                 response, ru_response = await asyncio.gather(
                     trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
                     trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
@@ -503,7 +505,11 @@ async def _post_exchange(
             "want": want,
         }
     }
-    async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
+    async with outbound_httpx_client(
+        headers=_headers({"Content-Type": "application/json"}),
+        timeout=30,
+        failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
+    ) as client:
         url = f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}"
         response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
@@ -645,7 +651,11 @@ async def _post_search(
     api_base: str = TRADE2_RU_BASE,
 ) -> dict[str, Any]:
     body = {"query": query, "sort": sort or {"price": "asc"}}
-    async with httpx.AsyncClient(headers=_headers({"Content-Type": "application/json"}), timeout=30) as client:
+    async with outbound_httpx_client(
+        headers=_headers({"Content-Type": "application/json"}),
+        timeout=30,
+        failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
+    ) as client:
         url = f"{api_base}/search/poe2/{quote(league, safe='')}"
         response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
         if response.status_code == 429:
@@ -670,7 +680,7 @@ async def _fetch_trade_items(
     if not selected_ids:
         return []
     results: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
         chunks = _chunked(selected_ids, 10)
         for index, chunk_ids in enumerate(chunks):
             chunk = ",".join(chunk_ids)
@@ -815,7 +825,10 @@ async def _cache_item_base_remote_icon(item_id: str, source_url: str | None) -> 
         return local_url
     ITEM_BASE_ICON_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        async with httpx.AsyncClient(headers=_headers({"Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*"}), timeout=20) as client:
+        async with outbound_httpx_client(
+            headers=_headers({"Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*"}),
+            timeout=20,
+        ) as client:
             response = await client.get(url)
             response.raise_for_status()
         content_type = response.headers.get("Content-Type") or ""
@@ -1137,7 +1150,7 @@ def _parse_poe2db_item_class_bases(html: str, item_class: dict[str, str]) -> lis
 
 async def _fetch_poe2db_item_base_catalog() -> list[dict[str, Any]]:
     headers = _headers({"Accept": "text/html,application/xhtml+xml"})
-    async with httpx.AsyncClient(headers=headers, timeout=30, follow_redirects=True) as client:
+    async with outbound_httpx_client(headers=headers, timeout=30, follow_redirects=True) as client:
         response = await client.get(f"{POE2DB_RU_BASE}/Items")
         response.raise_for_status()
         item_classes = _poe2db_item_class_links(response.text)
@@ -1208,7 +1221,7 @@ def _merge_poe2db_item_base_catalog(
 
 async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]:
     base_url = TRADE2_RU_BASE if locale == "ru" else TRADE2_BASE
-    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
         response = await trade2_rate_limited_request(lambda: client.get(f"{base_url}/data/items"))
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
@@ -4769,7 +4782,7 @@ async def _get_poe_ninja_rates(league: str, category: str, target: str) -> dict[
     category_type = POE_NINJA_CATEGORY_TYPES.get(category)
     if not category_type:
         return None
-    async with httpx.AsyncClient(headers=_headers(), timeout=30) as client:
+    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
         response = await client.get(
             f"{BASE_URL}/poe2/api/economy/exchange/current/overview",
             params={"league": league, "type": category_type},

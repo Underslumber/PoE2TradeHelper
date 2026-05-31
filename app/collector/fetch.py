@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Tuple
 import httpx
 
 from app.config import DEFAULT_RATE_LIMIT_DELAY, MAX_CONCURRENCY, USER_AGENT
+from app.http_client import outbound_httpx_client
 
 
 async def fetch_json(
@@ -42,7 +43,7 @@ async def fetch_all(endpoints: List[Tuple[str, Dict[str, Any] | None]]):
         url, params = pair
         async with sem:
             try:
-                async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
+                async with outbound_httpx_client(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
                     data = await fetch_json(client, url, params=params)
                 results.append({"url": url, "data": data})
             except Exception as exc:

@@ -176,6 +176,7 @@ const state = {
   focusedBaseMarketId: '',
   isLoadingBaseMarket: false,
   baseMarketAbortController: null,
+  baseMarketRequestId: 0,
   baseMarketFilterTimer: null,
   baseMarketPollTimer: null,
   baseMarketSort: {
@@ -3939,7 +3940,7 @@ function renderBaseMarket() {
   const status = byId('base-market-status');
   if (!list) return;
   renderLotSubtabs();
-  if (state.isLoadingBaseMarket) {
+  if (state.isLoadingBaseMarket && !state.baseMarket) {
     list.innerHTML = '';
     renderBaseMarketDetail();
     if (status) status.innerHTML = loadingMarkup(t('baseMarketLoading'), 'inline');
@@ -3983,6 +3984,10 @@ async function refreshBaseMarket(forceRefresh = true) {
   }
   const searchParams = new URLSearchParams(params);
   const cacheKey = searchParams.toString();
+  if (state.isLoadingBaseMarket) {
+    const currentKey = state.baseMarketParams ? new URLSearchParams(state.baseMarketParams).toString() : '';
+    if (!forceRefresh && currentKey === cacheKey) return;
+  }
   const cachedMarket = state.baseMarketCache[cacheKey];
   if (!forceRefresh && cachedMarket && cachedMarket.stored !== false && !baseMarketPayloadHasActiveJob(cachedMarket)) {
     state.baseMarket = cachedMarket;
@@ -3995,28 +4000,41 @@ async function refreshBaseMarket(forceRefresh = true) {
   }
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), 120000);
+  const requestId = state.baseMarketRequestId + 1;
+  state.baseMarketRequestId = requestId;
   state.baseMarketAbortController = controller;
   state.baseMarketParams = params;
   state.isLoadingBaseMarket = true;
   state.baseMarketError = '';
   if (button) button.disabled = true;
-  renderBaseMarket();
+  if (state.baseMarket) {
+    if (status) status.innerHTML = loadingMarkup(t('baseMarketLoading'), 'inline');
+  } else {
+    renderBaseMarket();
+  }
   try {
     const response = await fetch(`/api/trade/item-base-market?${searchParams.toString()}`, { signal: controller.signal });
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || t('tradeError'));
+    if (requestId !== state.baseMarketRequestId) return;
+    const previousFocus = state.focusedBaseMarketId;
     state.baseMarket = data;
-    state.focusedBaseMarketId = data.rows?.[0]?.id || '';
+    const rows = data.rows || [];
+    state.focusedBaseMarketId = previousFocus && rows.some(row => row.id === previousFocus)
+      ? previousFocus
+      : (rows[0]?.id || '');
     if (!baseMarketPayloadHasActiveJob(data) && (forceRefresh || data.stored !== false || (data.rows || []).length)) {
       state.baseMarketCache[cacheKey] = data;
     }
   } catch (error) {
+    if (requestId !== state.baseMarketRequestId) return;
     const isAbort = error?.name === 'AbortError';
     state.baseMarketError = isAbort ? t('baseMarketTimeout') : (error.message || String(error));
     if (status) status.textContent = state.baseMarketError;
     state.baseMarket = state.baseMarket || { rows: [] };
   } finally {
     window.clearTimeout(timeoutId);
+    if (requestId !== state.baseMarketRequestId) return;
     state.isLoadingBaseMarket = false;
     state.baseMarketAbortController = null;
     if (button) button.disabled = false;

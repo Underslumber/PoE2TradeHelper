@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
 from app.config import BASE_URL, RAW_DIR, USER_AGENT
+from app.http_client import playwright_proxy_options
 
 
 def _rows_from_dom(html: str) -> List[Dict[str, Any]]:
@@ -32,7 +33,8 @@ async def extract_dom_rows(league: str, category: str) -> List[Dict[str, Any]]:
     ts = int(time.time())
     target = RAW_DIR / "html" / f"{ts}.html"
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        proxy = playwright_proxy_options()
+        browser = await p.chromium.launch(proxy=proxy) if proxy else await p.chromium.launch()
         page = await browser.new_page(user_agent=USER_AGENT)
         await page.goto(f"{BASE_URL}/poe2/economy/{league}/{category}", wait_until="networkidle")
         content = await page.content()
