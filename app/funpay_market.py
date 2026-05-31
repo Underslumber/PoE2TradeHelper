@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.config import USER_AGENT
 from app.db.models import FunpayRubOffer, FunpayRubSnapshot
 from app.db.session import get_session
+from app.http_client import outbound_httpx_client
 from app.market_snapshots import (
     DEFAULT_EARLY_DAYS,
     DEFAULT_EARLY_INTERVAL_MINUTES,
@@ -27,6 +27,10 @@ from app.market_snapshots import (
 
 FUNPAY_POE2_CHIPS_URL = "https://funpay.com/chips/209/"
 FUNPAY_CONTEXT_SCHEMA_VERSION = "funpay-rub-market/v3"
+FUNPAY_RUB_CURRENCY_COOKIE = "cy=rub"
+FUNPAY_LEAGUE_ALIASES = {
+    "return of the ancients": "runes of aldur",
+}
 
 FUNPAY_SIDE_TO_TRADE_ID = {
     "101": "alch",
@@ -135,6 +139,7 @@ def funpay_league_key(value: str | None) -> str:
         hardcore = True
         tokens = [token for token in tokens if token != "hardcore"]
         text = " ".join(tokens).strip()
+    text = FUNPAY_LEAGUE_ALIASES.get(text, text)
     if hardcore:
         return f"hardcore:{text}" if text else "hardcore"
     return text
@@ -194,8 +199,9 @@ async def fetch_funpay_chips_html(url: str = FUNPAY_POE2_CHIPS_URL) -> str:
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "ru,en;q=0.8",
+        "Cookie": FUNPAY_RUB_CURRENCY_COOKIE,
     }
-    async with httpx.AsyncClient(headers=headers, follow_redirects=True, timeout=30) as client:
+    async with outbound_httpx_client(headers=headers, follow_redirects=True, timeout=30) as client:
         response = await client.get(url)
         response.raise_for_status()
         return response.text
@@ -252,6 +258,8 @@ def save_funpay_rub_snapshot(db: Session, parsed: dict[str, Any], *, created_ts:
 async def collect_funpay_rub_snapshot(db: Session) -> FunpayRubSnapshot:
     html = await fetch_funpay_chips_html()
     parsed = parse_funpay_chips_html(html)
+    if not parsed.get("offers"):
+        raise RuntimeError("FunPay RUB snapshot returned no parseable ruble offers")
     return save_funpay_rub_snapshot(db, parsed)
 
 
@@ -341,7 +349,11 @@ async def run_funpay_rub_snapshot_loop(
 
 
 def latest_funpay_rub_snapshot(db: Session) -> FunpayRubSnapshot | None:
-    return db.scalars(select(FunpayRubSnapshot).order_by(FunpayRubSnapshot.created_ts.desc())).first()
+    return db.scalars(
+        select(FunpayRubSnapshot)
+        .where(FunpayRubSnapshot.offer_count > 0)
+        .order_by(FunpayRubSnapshot.created_ts.desc())
+    ).first()
 
 
 async def ensure_funpay_rub_snapshot(

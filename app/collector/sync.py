@@ -17,12 +17,13 @@ from app.collector.parse import build_row_id, extract_rows, normalize_row
 from app.config import BASE_URL, INDEX_MAP_PATH, RAW_DIR, SOURCE_MAP_PATH, USER_AGENT
 from app.db.models import Artifact, Row, Snapshot
 from app.db.session import get_session
+from app.http_client import outbound_httpx_client
 
 
 async def _fetch_index_map() -> Dict[str, List[str]]:
     if INDEX_MAP_PATH.exists():
         return json.loads(INDEX_MAP_PATH.read_text(encoding="utf-8"))
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
+    async with outbound_httpx_client(headers={"User-Agent": USER_AGENT}, timeout=30) as client:
         resp = await client.get(f"{BASE_URL}/poe2/economy")
         resp.raise_for_status()
         html = resp.text

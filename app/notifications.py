@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.account import now_iso
 from app.db.models import PinnedPosition, TelegramNotificationRule
+from app.http_client import outbound_httpx_client
 
 
 SUPPORTED_TELEGRAM_EVENTS = {"price_above", "price_below", "change_pct", "any_update", "high_demand"}
@@ -156,7 +157,7 @@ async def send_telegram_message(chat_id: str, text: str) -> None:
     token = telegram_bot_token()
     if not token:
         raise RuntimeError("telegram bot token is not configured")
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with outbound_httpx_client(timeout=15) as client:
         response = await client.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={

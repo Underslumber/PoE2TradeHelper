@@ -1,7 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import create_engine, select
+import pytest
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Base, FunpayRubOffer
@@ -14,6 +15,39 @@ from app.funpay_market import (
     parse_funpay_chips_html,
     save_funpay_rub_snapshot,
 )
+
+
+def test_fetch_funpay_chips_html_requests_rub_currency(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        text = "<html></html>"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url):
+            captured["url"] = url
+            return FakeResponse()
+
+    def fake_outbound_httpx_client(**kwargs):
+        captured.update(kwargs)
+        return FakeClient()
+
+    monkeypatch.setattr(funpay_market, "outbound_httpx_client", fake_outbound_httpx_client)
+
+    html = asyncio.run(funpay_market.fetch_funpay_chips_html("https://funpay.com/chips/209/"))
+
+    assert html == "<html></html>"
+    assert captured["headers"]["Cookie"] == "cy=rub"
+    assert captured["url"] == "https://funpay.com/chips/209/"
 
 
 def test_parse_funpay_chips_html_extracts_public_offer_rows():
@@ -86,6 +120,68 @@ def test_save_funpay_rub_snapshot_deduplicates_repeated_offer_ids():
     assert rows[0].rub_per_unit == 12.5
 
 
+def test_latest_funpay_rub_snapshot_skips_empty_newer_snapshot():
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+    offer = {
+        "offer_id": "2485611-582-209-12280-106",
+        "offer_url": "https://funpay.com/chips/offer?id=2485611-582-209-12280-106",
+        "league": "Fate of the Vaal",
+        "league_id": "12280",
+        "currency_name": "Божественные сферы",
+        "side_id": "106",
+        "trade_item_id": "divine",
+        "seller_id": "2485611",
+        "seller_name": "seller",
+        "seller_reviews": 1041,
+        "seller_online": True,
+        "stock": 400,
+        "rub_per_unit": 12.5,
+    }
+
+    with Session(engine) as db:
+        saved = save_funpay_rub_snapshot(
+            db,
+            {
+                "source_url": "https://funpay.com/chips/209/",
+                "servers": {"12280": "Fate of the Vaal"},
+                "sides": {"106": "Божественные сферы"},
+                "offers": [offer],
+            },
+            created_ts=1.0,
+        )
+        save_funpay_rub_snapshot(
+            db,
+            {
+                "source_url": "https://funpay.com/chips/209/",
+                "servers": {},
+                "sides": {},
+                "offers": [],
+            },
+            created_ts=2.0,
+        )
+        latest = funpay_market.latest_funpay_rub_snapshot(db)
+
+    assert latest.id == saved.id
+
+
+def test_collect_funpay_rub_snapshot_rejects_empty_parse(monkeypatch):
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(bind=engine)
+
+    async def fake_fetch():
+        return "<html><body>No public table</body></html>"
+
+    monkeypatch.setattr(funpay_market, "fetch_funpay_chips_html", fake_fetch)
+
+    with Session(engine) as db:
+        with pytest.raises(RuntimeError, match="no parseable ruble offers"):
+            asyncio.run(funpay_market.collect_funpay_rub_snapshot(db))
+        snapshots = db.scalar(select(func.count()).select_from(funpay_market.FunpayRubSnapshot))
+
+    assert snapshots == 0
+
+
 def test_ensure_funpay_rub_snapshot_uses_saved_snapshot_without_live_refresh(monkeypatch):
     engine = create_engine("sqlite://", future=True)
     Base.metadata.create_all(bind=engine)
@@ -142,6 +238,8 @@ def test_ensure_funpay_rub_snapshot_does_not_collect_when_empty(monkeypatch):
 def test_funpay_league_key_matches_trade2_league_names():
     assert funpay_league_key("Fate of the Vaal") == funpay_league_key("Fate of the Vaal")
     assert funpay_league_key("HC Fate of the Vaal") == funpay_league_key("Fate of the Vaal [Hardcore]")
+    assert funpay_league_key("Return of the Ancients") == funpay_league_key("Runes of Aldur")
+    assert funpay_league_key("Return of the Ancients [Hardcore]") == funpay_league_key("HC Runes of Aldur")
     assert funpay_league_key("Standard") == funpay_league_key("[Standard]")
     assert funpay_league_key("Hardcore") == funpay_league_key("[Hardcore]")
 

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from playwright.async_api import async_playwright
 
 from app.config import BASE_URL, RAW_DIR, SOURCE_MAP_PATH, USER_AGENT
+from app.http_client import playwright_proxy_options
 
 
 class DiscoveryResult:
@@ -59,7 +60,8 @@ async def run_discovery(league: str, category: str) -> DiscoveryResult:
     page_url = f"{BASE_URL}/poe2/economy/{league}/{category}"
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        proxy = playwright_proxy_options()
+        browser = await p.chromium.launch(proxy=proxy) if proxy else await p.chromium.launch()
         page = await browser.new_page(user_agent=USER_AGENT)
         main_json: Optional[Any] = None
         endpoint_meta: Optional[dict] = None

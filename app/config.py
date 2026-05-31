@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 from typing import Final
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 BASE_URL: Final = "https://poe.ninja"
 DATA_DIR: Final = Path(os.environ.get("DATA_DIR", "data"))
 STORAGE_DIR: Final = Path(os.environ.get("STORAGE_DIR", "storage"))

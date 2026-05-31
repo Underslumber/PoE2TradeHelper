@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import httpx
+from app.http_client import outbound_httpx_client
 from app.trade.api_client import PoeTradeClient
 
 # Импортируем FastMCP из mcp.server.fastmcp
@@ -101,7 +102,7 @@ async def get_currency_exchange(
     path = f"/currency-exchange/{realm}" + (f"/{hour}" if hour else "")
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with httpx.AsyncClient(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()
@@ -118,7 +119,7 @@ async def list_characters(realm: str = "poe2") -> Dict[str, Any]:
     path = f"/character/{'poe2' if realm == 'poe2' else realm}"
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with httpx.AsyncClient(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()
@@ -133,7 +134,7 @@ async def get_character(name: str, realm: str = "poe2") -> Dict[str, Any]:
     path = f"/character/poe2/{name}" if realm == "poe2" else f"/character/{name}"
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with httpx.AsyncClient(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()
