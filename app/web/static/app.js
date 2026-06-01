@@ -1,10 +1,17 @@
 // Economy table page
 
-const ACCOUNT_API_ORIGIN = 'https://xapct.ru';
+const PUBLIC_CONFIG = window.POE2_PUBLIC_CONFIG || {};
+const ACCOUNT_API_ORIGIN = String(PUBLIC_CONFIG.accountApiOrigin || '').replace(/\/+$/, '');
+const CANONICAL_UI_ORIGIN = String(PUBLIC_CONFIG.canonicalOrigin || '').replace(/\/+$/, '');
 
 function accountApiUrl(url) {
   const value = String(url || '');
-  if (window.location.hostname === 'xapct.ru' && window.location.port === '9038' && value.startsWith('/api/')) {
+  if (
+    ACCOUNT_API_ORIGIN &&
+    CANONICAL_UI_ORIGIN &&
+    window.location.origin === CANONICAL_UI_ORIGIN &&
+    value.startsWith('/api/')
+  ) {
     return `${ACCOUNT_API_ORIGIN}${value}`;
   }
   return value;

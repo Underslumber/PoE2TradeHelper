@@ -1,10 +1,32 @@
 import os
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _clean_origin(value: str) -> str:
+    return value.strip().rstrip("/")
+
+
+def _split_hosts(value: str) -> frozenset[str]:
+    hosts = {host.strip().lower() for host in value.replace(";", ",").split(",") if host.strip()}
+    return frozenset(hosts)
+
+
+def _default_public_redirect_hosts(origin: str) -> frozenset[str]:
+    parsed = urlparse(origin)
+    if not parsed.hostname or parsed.port is None:
+        return frozenset()
+    host = parsed.hostname.lower()
+    default_port = "443" if parsed.scheme == "https" else "80" if parsed.scheme == "http" else ""
+    hosts = {host}
+    if default_port:
+        hosts.add(f"{host}:{default_port}")
+    return frozenset(hosts)
 
 BASE_URL: Final = "https://poe.ninja"
 DATA_DIR: Final = Path(os.environ.get("DATA_DIR", "data"))
@@ -15,6 +37,11 @@ SOURCE_MAP_PATH: Final = STORAGE_DIR / "source_map.json"
 INDEX_MAP_PATH: Final = STORAGE_DIR / "index_map.json"
 SQLITE_PATH: Final = Path(os.environ.get("SQLITE_PATH", str(DATA_DIR / "poe2_ninja.sqlite")))
 USER_AGENT: Final = os.environ.get("USER_AGENT", "poe2-trade-helper/0.1 (contact: local)")
+PUBLIC_CANONICAL_ORIGIN: Final = _clean_origin(os.environ.get("PUBLIC_CANONICAL_ORIGIN", ""))
+PUBLIC_API_ORIGIN: Final = _clean_origin(os.environ.get("PUBLIC_API_ORIGIN", ""))
+PUBLIC_REDIRECT_HOSTS: Final = _split_hosts(
+    os.environ.get("PUBLIC_REDIRECT_HOSTS", "")
+) or _default_public_redirect_hosts(PUBLIC_CANONICAL_ORIGIN)
 DEFAULT_RATE_LIMIT_DELAY: Final = 1.0
 MAX_CONCURRENCY: Final = 3
 MARKET_SNAPSHOT_ENABLED: Final = os.environ.get("MARKET_SNAPSHOT_ENABLED", "true").lower() not in {"0", "false", "no", "off"}

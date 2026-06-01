@@ -38,6 +38,7 @@ from app.account import (
 from app.ai_context import load_ai_market_context
 from app.ai_history import list_ai_analyses
 from app.benchmark import DEFAULT_BASKET_ID, benchmark_price_at, is_basket_benchmark, latest_benchmark_price, basket_price_from_snapshot
+from app.config import PUBLIC_API_ORIGIN, PUBLIC_CANONICAL_ORIGIN
 from app.codex_market_analyzer import run_codex_market_analysis
 from app.currency_cycles import load_currency_cycles
 from app.currency_analyzer import load_currency_trend_context
@@ -93,6 +94,10 @@ from app.version import APP_VERSION
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 templates.env.globals["app_version"] = APP_VERSION
+templates.env.globals["public_client_config"] = {
+    "accountApiOrigin": PUBLIC_API_ORIGIN,
+    "canonicalOrigin": PUBLIC_CANONICAL_ORIGIN,
+}
 SESSION_COOKIE = "poe2_session"
 AI_MARKET_CONTEXT_FEATURE = "market_context"
 AI_MARKET_ANALYSIS_FEATURE = "market_analysis"

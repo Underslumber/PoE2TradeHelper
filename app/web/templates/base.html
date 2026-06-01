@@ -34,6 +34,9 @@
     {% block content %}{% endblock %}
   </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    window.POE2_PUBLIC_CONFIG = {{ public_client_config | tojson }};
+  </script>
   <script src="/static/i18n.js?v={{ app_version }}"></script>
   <script src="/static/app.js?v={{ app_version }}"></script>
   {% block scripts %}{% endblock %}
