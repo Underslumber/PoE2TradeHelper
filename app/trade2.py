@@ -79,6 +79,8 @@ ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
+ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE = 60
+ITEM_BASE_MARKET_FAST_SCAN_MAX_PRIORITY = 150
 MARKET_LISTING_MAX_AGE_DAYS = 14
 MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
@@ -124,6 +126,84 @@ POE2DB_ITEM_BASE_CLASS_SLUGS = {
     "Two_Hand_Maces",
     "Two_Hand_Swords",
     "Wands",
+}
+ITEM_BASE_DISABLED_CLASS_KEYS = {
+    "axe",
+    "axes",
+    "one hand axes",
+    "two hand axes",
+    "topor",
+    "claw",
+    "claws",
+    "dagger",
+    "daggers",
+    "sword",
+    "swords",
+    "one hand swords",
+    "two hand swords",
+    "кастеты",
+    "кинжалы",
+    "когти",
+    "мечи",
+    "топоры",
+}
+ITEM_BASE_MARKET_PRIORITY_DEFAULT = 500
+ITEM_BASE_MARKET_PRIORITY_BY_CLASS = {
+    "ring": 10,
+    "rings": 10,
+    "boots": 20,
+    "boot": 20,
+    "amulet": 30,
+    "amulets": 30,
+    "helmet": 40,
+    "helmets": 40,
+    "body": 50,
+    "body armour": 50,
+    "body armours": 50,
+    "gloves": 60,
+    "glove": 60,
+    "belt": 70,
+    "belts": 70,
+    "staff": 80,
+    "staves": 80,
+    "quarterstaff": 80,
+    "bow": 90,
+    "bows": 90,
+    "quiver": 91,
+    "quivers": 91,
+    "crossbow": 100,
+    "crossbows": 100,
+    "wand": 110,
+    "wands": 110,
+    "focus": 111,
+    "foci": 111,
+    "sceptre": 120,
+    "sceptres": 120,
+    "talisman": 130,
+    "talismans": 130,
+    "mace": 140,
+    "maces": 140,
+    "shield": 141,
+    "shields": 141,
+    "spear": 150,
+    "spears": 150,
+    "flail": 250,
+    "flails": 250,
+}
+ITEM_BASE_MARKET_PRIORITY_BY_TYPE = {
+    "heavy belt": 1,
+    "тяжелый ремень": 1,
+    "тяжёлый ремень": 1,
+    "gold ring": 5,
+    "pearl ring": 5,
+    "amethyst ring": 5,
+    "ruby ring": 5,
+    "sapphire ring": 5,
+    "topaz ring": 5,
+    "emerald ring": 5,
+    "stellar amulet": 6,
+    "solar amulet": 6,
+    "gold amulet": 6,
 }
 CURRENCY_ID_ALIASES = {
     "alchemy": "alch",
@@ -1004,9 +1084,57 @@ def _skip_item_base_name(name: str) -> bool:
     return bool(re.search(r"\[(?:dnt|unused)|\bdnt\b|\bunused\b", value))
 
 
+def _item_base_class_keys(base: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+    for field in (
+        "base_class",
+        "base_class_label",
+        "base_class_label_ru",
+        "category",
+        "category_label",
+        "category_label_ru",
+        "icon_key",
+        "pob_file",
+    ):
+        key = _lookup_text_key(base.get(field))
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _skip_item_base_class(base: dict[str, Any]) -> bool:
+    return bool(_item_base_class_keys(base) & ITEM_BASE_DISABLED_CLASS_KEYS)
+
+
+def _item_base_market_priority(base: dict[str, Any]) -> int:
+    priority = _to_int(base.get("market_priority"))
+    if priority is not None and priority > 0:
+        return priority
+    for field in ("type", "type_ru", "query_type", "text", "text_ru"):
+        type_priority = ITEM_BASE_MARKET_PRIORITY_BY_TYPE.get(_lookup_text_key(base.get(field)))
+        if type_priority is not None:
+            return type_priority
+    class_priorities = [
+        ITEM_BASE_MARKET_PRIORITY_BY_CLASS[key]
+        for key in _item_base_class_keys(base)
+        if key in ITEM_BASE_MARKET_PRIORITY_BY_CLASS
+    ]
+    return min(class_priorities, default=ITEM_BASE_MARKET_PRIORITY_DEFAULT)
+
+
+def _item_base_catalog_sort_key(base: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        _item_base_market_priority(base),
+        _lookup_text_key(base.get("category_label_ru") or base.get("category_label")),
+        _lookup_text_key(base.get("type_ru") or base.get("type") or base.get("query_type")),
+    )
+
+
 def _filter_item_base_catalog_entries(bases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     filtered = []
     for base in bases:
+        if _skip_item_base_class(base):
+            continue
         category_id = str(base.get("category") or "").strip()
         category_label = str(base.get("category_label") or base.get("category_label_ru") or "").strip()
         if category_id and _skip_item_base_category(category_id, category_label):
@@ -1021,7 +1149,7 @@ def _filter_item_base_catalog_entries(bases: list[dict[str, Any]]) -> list[dict[
         if any(_skip_item_base_name(value) for value in values if value):
             continue
         filtered.append(base)
-    return filtered
+    return sorted(filtered, key=_item_base_catalog_sort_key)
 
 
 def normalize_item_base_catalog(
@@ -1676,6 +1804,7 @@ def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None
         "base_class": base.get("base_class") or "",
         "base_class_label": base.get("base_class_label") or "",
         "base_class_label_ru": base.get("base_class_label_ru") or "",
+        "market_priority": _item_base_market_priority(base),
         "icon_key": icon_key,
         "image": base.get("image") or _item_base_generated_icon_url(str(icon_key)),
         "basis": "normal-rarity clean base without explicit/rune/desecrated affixes",
@@ -2148,9 +2277,24 @@ def _item_base_market_scan_batch(
 ) -> tuple[list[dict[str, Any]], int, int, int, int]:
     if not bases:
         return [], 0, 0, 0, 0
-    batch_size = max(1, min(ITEM_BASE_MARKET_SCAN_BATCH_SIZE, len(bases), ITEM_BASE_MARKET_SCAN_LIMIT))
     start = ITEM_BASE_MARKET_SCAN_CURSORS.get(cursor_key, 0) % len(bases)
+    batch_size = _item_base_market_scan_batch_size(bases, start)
     return _item_base_market_scan_batch_from_priority(bases, start, batch_size, priority_bases)
+
+
+def _item_base_market_fast_scan_limit(bases: list[dict[str, Any]]) -> int:
+    for index, base in enumerate(bases):
+        if _item_base_market_priority(base) > ITEM_BASE_MARKET_FAST_SCAN_MAX_PRIORITY:
+            return index
+    return len(bases)
+
+
+def _item_base_market_scan_batch_size(bases: list[dict[str, Any]], start: int) -> int:
+    if not bases:
+        return 0
+    fast_scan_limit = _item_base_market_fast_scan_limit(bases)
+    configured_size = ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE if start < fast_scan_limit else ITEM_BASE_MARKET_SCAN_BATCH_SIZE
+    return max(1, min(configured_size, len(bases), ITEM_BASE_MARKET_SCAN_LIMIT))
 
 
 def _item_base_market_scan_batch_from_priority(
@@ -2226,7 +2370,10 @@ def _item_base_market_job_view(job: dict[str, Any] | None) -> dict[str, Any] | N
         "catalog_total",
         "scan_start",
         "scan_next",
+        "scan_batch_size",
+        "fast_scan_limit",
         "priority_recheck_count",
+        "selected_count",
         "processed_count",
         "fetched_count",
         "clean_count",
@@ -2818,6 +2965,8 @@ async def run_item_base_market_refresh_job(
     job["scan_start"] = scan_start
     job["scan_next"] = scan_next
     job["priority_recheck_count"] = priority_recheck_count
+    job["scan_batch_size"] = len(selected_bases)
+    job["fast_scan_limit"] = _item_base_market_fast_scan_limit(scan_bases) if not q else None
     job["total"] = len(bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
@@ -2878,6 +3027,15 @@ async def run_item_base_market_refresh_job(
                     "data": result,
                 }
         return result
+
+    def persist_priced_result(result: dict[str, Any]) -> None:
+        priced_rows = [
+            row
+            for row in result.get("rows") or []
+            if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None
+        ]
+        if priced_rows:
+            log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
 
     def update_scan_progress(processed_count: int) -> None:
         if q or scan_start is None or not bases:
@@ -2947,7 +3105,10 @@ async def run_item_base_market_refresh_job(
                 job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
                 job["updated_ts"] = time.time()
                 _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
-                return _cache_copy(publish_result())
+                result = publish_result()
+                if not q:
+                    persist_priced_result(result)
+                return _cache_copy(result)
         except Exception as exc:
             error_text = str(exc)
             retry_after = _retry_after_from_error(error_text)
@@ -2970,7 +3131,10 @@ async def run_item_base_market_refresh_job(
                 update_scan_progress(base_index + 1)
                 job["updated_ts"] = time.time()
                 _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
-                return _cache_copy(publish_result([error_row]))
+                result = publish_result([error_row])
+                if not q:
+                    persist_priced_result(result)
+                return _cache_copy(result)
             row = error_row
 
         attempts = 0
@@ -2995,9 +3159,7 @@ async def run_item_base_market_refresh_job(
     job["error"] = None
     _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
     result = publish_result()
-    priced_rows = [row for row in result.get("rows") or [] if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None]
-    if priced_rows:
-        log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
+    persist_priced_result(result)
     return _cache_copy(result)
 
 

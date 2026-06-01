@@ -86,6 +86,8 @@ def test_market_snapshot_service_collects_item_base_market_micro_batch(monkeypat
                 "status": "done",
                 "processed_count": 2,
                 "base_total": 12,
+                "scan_batch_size": 60,
+                "fast_scan_limit": 840,
                 "priority_recheck_count": 1,
                 "fetched_count": 2,
                 "clean_count": 1,
@@ -109,6 +111,8 @@ def test_market_snapshot_service_collects_item_base_market_micro_batch(monkeypat
     assert captured["q"] == ""
     assert captured["status"] == "securable"
     assert summary["processed_count"] == 2
+    assert summary["scan_batch_size"] == 60
+    assert summary["fast_scan_limit"] == 840
     assert summary["priority_recheck_count"] == 1
     assert summary["priced_rows"] == 1
     assert summary["high_demand_rows"] == 1

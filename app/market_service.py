@@ -406,6 +406,8 @@ class MarketSnapshotService:
                 "job_status": job_view.get("status"),
                 "processed_count": job_view.get("processed_count"),
                 "base_total": job_view.get("base_total"),
+                "scan_batch_size": job_view.get("scan_batch_size"),
+                "fast_scan_limit": job_view.get("fast_scan_limit"),
                 "priority_recheck_count": job_view.get("priority_recheck_count"),
                 "fetched_count": job_view.get("fetched_count"),
                 "clean_count": job_view.get("clean_count"),

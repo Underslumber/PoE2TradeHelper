@@ -2,7 +2,7 @@
   "schema_version": "poe2-item-base-catalog/v1",
   "created_ts": 1779438118.707288,
   "source": "PathOfBuilding-PoE2/Data/Bases+poe2db/ru",
-  "total": 919,
+  "total": 840,
   "bases": [
     {
       "id": "base:crimson-amulet",
@@ -8755,34 +8755,6 @@
       "image": "/icons/item-bases/generated/armour.svg"
     },
     {
-      "id": "base:cutlass",
-      "type": "Cutlass",
-      "type_ru": "Абордажная сабля",
-      "query_type": "Абордажная сабля",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:boarding-hatchet",
-      "type": "Boarding Hatchet",
-      "type_ru": "Абордажный топор",
-      "query_type": "Абордажный топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:artillery-bow",
       "type": "Artillery Bow",
       "type_ru": "Артиллерийский лук",
@@ -8795,20 +8767,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:bandit-hatchet",
-      "type": "Bandit Hatchet",
-      "type_ru": "Бандитский чекан",
-      "query_type": "Бандитский чекан",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:barrier-quarterstaff",
@@ -9007,20 +8965,6 @@
       "image": "/icons/item-bases/generated/staff.svg"
     },
     {
-      "id": "base:battle-axe",
-      "type": "Battle Axe",
-      "type_ru": "Боевой топор",
-      "query_type": "Боевой топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:greatmace",
       "type": "Greatmace",
       "type_ru": "Большая булава",
@@ -9061,90 +9005,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:obsidian-greatsword",
-      "type": "Obsidian Greatsword",
-      "type_ru": "Большой меч из обсидиана",
-      "query_type": "Большой меч из обсидиана",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:vile-greataxe",
-      "type": "Vile Greataxe",
-      "type_ru": "Большой топор грешника",
-      "query_type": "Большой топор грешника",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:savage-greataxe",
-      "type": "Savage Greataxe",
-      "type_ru": "Большой топор дикаря",
-      "query_type": "Большой топор дикаря",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:splitting-greataxe",
-      "type": "Splitting Greataxe",
-      "type_ru": "Большой топор лесоруба",
-      "query_type": "Большой топор лесоруба",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:executioner-greataxe",
-      "type": "Executioner Greataxe",
-      "type_ru": "Большой топор палача",
-      "query_type": "Большой топор палача",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:bearded-axe",
-      "type": "Bearded Axe",
-      "type_ru": "Бородовидный топор",
-      "query_type": "Бородовидный топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:akoyan-club",
@@ -9357,20 +9217,6 @@
       "image": "/icons/item-bases/generated/staff.svg"
     },
     {
-      "id": "base:arced-claw",
-      "type": "Arced Claw",
-      "type_ru": "Гнутый кастет",
-      "query_type": "Гнутый кастет",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:gothic-quarterstaff",
       "type": "Gothic Quarterstaff",
       "type_ru": "Готический боевой посох",
@@ -9427,20 +9273,6 @@
       "image": "/icons/item-bases/generated/staff.svg"
     },
     {
-      "id": "base:crude-claw",
-      "type": "Crude Claw",
-      "type_ru": "Грубый кастет",
-      "query_type": "Грубый кастет",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:crude-bow",
       "type": "Crude Bow",
       "type_ru": "Грубый лук",
@@ -9453,20 +9285,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:parrying-dagger",
-      "type": "Parrying Dagger",
-      "type_ru": "Дага",
-      "query_type": "Дага",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:twin-flail",
@@ -9581,62 +9399,6 @@
       "image": "/icons/item-bases/generated/staff.svg"
     },
     {
-      "id": "base:armoured-claw",
-      "type": "Armoured Claw",
-      "type_ru": "Доспешный коготь",
-      "query_type": "Доспешный коготь",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:treasured-blade",
-      "type": "Treasured Blade",
-      "type_ru": "Драгоценный клинок",
-      "query_type": "Драгоценный клинок",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:ancient-greatblade",
-      "type": "Ancient Greatblade",
-      "type_ru": "Древний тяжёлый меч",
-      "query_type": "Древний тяжёлый меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:carving-hatchet",
-      "type": "Carving Hatchet",
-      "type_ru": "Древотёс",
-      "query_type": "Древотёс",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:tawhoan-greatclub",
       "type": "Tawhoan Greatclub",
       "type_ru": "Дубина Тахоа",
@@ -9749,20 +9511,6 @@
       "image": "/icons/item-bases/generated/wand.svg"
     },
     {
-      "id": "base:iron-greatsword",
-      "type": "Iron Greatsword",
-      "type_ru": "Железный большой меч",
-      "query_type": "Железный большой меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:iron-flail",
       "type": "Iron Flail",
       "type_ru": "Железный кистень",
@@ -9773,34 +9521,6 @@
       "base_class": "flail",
       "base_class_label": "Flails",
       "base_class_label_ru": "Цепы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:sacrificial-axe",
-      "type": "Sacrificial Axe",
-      "type_ru": "Жертвенный топор",
-      "query_type": "Жертвенный топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:arched-greataxe",
-      "type": "Arched Greataxe",
-      "type_ru": "Загнутый большой топор",
-      "query_type": "Загнутый большой топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -9817,20 +9537,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:jagged-greataxe",
-      "type": "Jagged Greataxe",
-      "type_ru": "Зазубренный тяжёлый топор",
-      "query_type": "Зазубренный тяжёлый топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:flared-mace",
@@ -9873,48 +9579,6 @@
       "base_class_label_ru": "Посохи",
       "icon_key": "staff",
       "image": "/icons/item-bases/generated/staff.svg"
-    },
-    {
-      "id": "base:golden-blade",
-      "type": "Golden Blade",
-      "type_ru": "Золотой клинок",
-      "query_type": "Золотой клинок",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:arced-longsword",
-      "type": "Arced Longsword",
-      "type_ru": "Изогнутый длинный меч",
-      "query_type": "Изогнутый длинный меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:elegant-glaive",
-      "type": "Elegant Glaive",
-      "type_ru": "Изящная глевия",
-      "query_type": "Изящная глевия",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:graceful-quarterstaff",
@@ -9983,76 +9647,6 @@
       "base_class": "mace",
       "base_class_label": "Maces",
       "base_class_label_ru": "Булавы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:stone-greatsword",
-      "type": "Stone Greatsword",
-      "type_ru": "Каменный большой меч",
-      "query_type": "Каменный большой меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:sharktooth-claw",
-      "type": "Sharktooth Claw",
-      "type_ru": "Кастет с зубами акулы",
-      "query_type": "Кастет с зубами акулы",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:razorglass-claw",
-      "type": "Razorglass Claw",
-      "type_ru": "Кастет со стеклянным лезвием",
-      "query_type": "Кастет со стеклянным лезвием",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:bloodletting-dagger",
-      "type": "Bloodletting Dagger",
-      "type_ru": "Кинжал кровопускателя",
-      "query_type": "Кинжал кровопускателя",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:edged-claw",
-      "type": "Edged Claw",
-      "type_ru": "Кинжальный кастет",
-      "query_type": "Кинжальный кастет",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -10141,20 +9735,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:vampiric-blade",
-      "type": "Vampiric Blade",
-      "type_ru": "Клинок-кровопийца",
-      "query_type": "Клинок-кровопийца",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:solemn-maul",
       "type": "Solemn Maul",
       "type_ru": "Клятвенная дубина",
@@ -10179,62 +9759,6 @@
       "base_class": "mace",
       "base_class_label": "Maces",
       "base_class_label_ru": "Булавы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:wolfbone-claw",
-      "type": "Wolfbone Claw",
-      "type_ru": "Коготь из костей волка",
-      "query_type": "Коготь из костей волка",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:hooked-claw",
-      "type": "Hooked Claw",
-      "type_ru": "Коготь с крючьями",
-      "query_type": "Коготь с крючьями",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:talon-claw",
-      "type": "Talon Claw",
-      "type_ru": "Коготь хищника",
-      "query_type": "Коготь хищника",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:arcane-dirk",
-      "type": "Arcane Dirk",
-      "type_ru": "Колдовской кортик",
-      "query_type": "Колдовской кортик",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -10461,20 +9985,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:shortsword",
-      "type": "Shortsword",
-      "type_ru": "Короткий меч",
-      "query_type": "Короткий меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:bone-wand",
@@ -10841,20 +10351,6 @@
       "image": "/icons/item-bases/generated/bow.svg"
     },
     {
-      "id": "base:moon-dagger",
-      "type": "Moon Dagger",
-      "type_ru": "Лунный кинжал",
-      "query_type": "Лунный кинжал",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:icicle-flail",
       "type": "Icicle Flail",
       "type_ru": "Льдистый кистень",
@@ -10865,20 +10361,6 @@
       "base_class": "flail",
       "base_class_label": "Flails",
       "base_class_label_ru": "Цепы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:light-halberd",
-      "type": "Light Halberd",
-      "type_ru": "Лёгкая алебарда",
-      "query_type": "Лёгкая алебарда",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -10925,34 +10407,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:monument-greataxe",
-      "type": "Monument Greataxe",
-      "type_ru": "Мемориальная секира",
-      "query_type": "Мемориальная секира",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:messer",
-      "type": "Messer",
-      "type_ru": "Мессер",
-      "query_type": "Мессер",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:alloy-crossbow",
       "type": "Alloy Crossbow",
       "type_ru": "Металлический самострел",
@@ -10965,20 +10419,6 @@
       "base_class_label_ru": "Арбалеты",
       "icon_key": "crossbow",
       "image": "/icons/item-bases/generated/crossbow.svg"
-    },
-    {
-      "id": "base:commander-sword",
-      "type": "Commander Sword",
-      "type_ru": "Меч командира",
-      "query_type": "Меч командира",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:construct-hammer",
@@ -11065,62 +10505,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:profane-cleaver",
-      "type": "Profane Cleaver",
-      "type_ru": "Нечестивый секач",
-      "query_type": "Нечестивый секач",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:kris-knife",
-      "type": "Kris Knife",
-      "type_ru": "Нож крис",
-      "query_type": "Нож крис",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:engraved-knife",
-      "type": "Engraved Knife",
-      "type_ru": "Нож с гравировкой",
-      "query_type": "Нож с гравировкой",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:skinning-knife",
-      "type": "Skinning Knife",
-      "type_ru": "Нож скорняка",
-      "query_type": "Нож скорняка",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:wrapped-quarterstaff",
       "type": "Wrapped Quarterstaff",
       "type_ru": "Обмотанный боевой посох",
@@ -11133,34 +10517,6 @@
       "base_class_label_ru": "Посохи",
       "icon_key": "staff",
       "image": "/icons/item-bases/generated/staff.svg"
-    },
-    {
-      "id": "base:obsidian-dagger",
-      "type": "Obsidian Dagger",
-      "type_ru": "Обсидиановый кинжал",
-      "query_type": "Обсидиановый кинжал",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:charred-shortsword",
-      "type": "Charred Shortsword",
-      "type_ru": "Обугленный короткий меч",
-      "query_type": "Обугленный короткий меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:giant-maul",
@@ -11233,20 +10589,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:blessed-claymore",
-      "type": "Blessed Claymore",
-      "type_ru": "Освящённый клеймор",
-      "query_type": "Освящённый клеймор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:sanctified-staff",
       "type": "Sanctified Staff",
       "type_ru": "Освящённый посох",
@@ -11259,20 +10601,6 @@
       "base_class_label_ru": "Посохи",
       "icon_key": "staff",
       "image": "/icons/item-bases/generated/staff.svg"
-    },
-    {
-      "id": "base:glass-shank",
-      "type": "Glass Shank",
-      "type_ru": "Осколок стекла",
-      "query_type": "Осколок стекла",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:pointed-maul",
@@ -11443,20 +10771,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:pict-claw",
-      "type": "Pict Claw",
-      "type_ru": "Пиктский коготь",
-      "query_type": "Пиктский коготь",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:pyrophyte-staff",
       "type": "Pyrophyte Staff",
       "type_ru": "Пирофитовый посох",
@@ -11481,20 +10795,6 @@
       "base_class": "mace",
       "base_class_label": "Maces",
       "base_class_label_ru": "Булавы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:plated-claw",
-      "type": "Plated Claw",
-      "type_ru": "Пластинчатый коготь",
-      "query_type": "Пластинчатый коготь",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -11611,20 +10911,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:mail-breaker",
-      "type": "Mail Breaker",
-      "type_ru": "Пробиватель доспеха",
-      "query_type": "Пробиватель доспеха",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:ravenous-staff",
       "type": "Ravenous Staff",
       "type_ru": "Прожорливый посох",
@@ -11653,20 +10939,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:piercing-claw",
-      "type": "Piercing Claw",
-      "type_ru": "Пронзающий коготь",
-      "query_type": "Пронзающий коготь",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:piercing-crossbow",
       "type": "Piercing Crossbow",
       "type_ru": "Пронзающий самострел",
@@ -11681,20 +10953,6 @@
       "image": "/icons/item-bases/generated/crossbow.svg"
     },
     {
-      "id": "base:simple-dagger",
-      "type": "Simple Dagger",
-      "type_ru": "Простой кинжал",
-      "query_type": "Простой кинжал",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:sturdy-crossbow",
       "type": "Sturdy Crossbow",
       "type_ru": "Прочный самострел",
@@ -11707,20 +10965,6 @@
       "base_class_label_ru": "Арбалеты",
       "icon_key": "crossbow",
       "image": "/icons/item-bases/generated/crossbow.svg"
-    },
-    {
-      "id": "base:reaver-glaive",
-      "type": "Reaver Glaive",
-      "type_ru": "Разбойничий бердыш",
-      "query_type": "Разбойничий бердыш",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:branched-spear",
@@ -11747,20 +10991,6 @@
       "base_class": "spear",
       "base_class_label": "Spears",
       "base_class_label_ru": "Копья",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:rending-halberd",
-      "type": "Rending Halberd",
-      "type_ru": "Раздирающая алебарда",
-      "query_type": "Раздирающая алебарда",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -11849,34 +11079,6 @@
       "image": "/icons/item-bases/generated/crossbow.svg"
     },
     {
-      "id": "base:corroded-longsword",
-      "type": "Corroded Longsword",
-      "type_ru": "Ржавый длинный меч",
-      "query_type": "Ржавый длинный меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:runic-shortsword",
-      "type": "Runic Shortsword",
-      "type_ru": "Рунический короткий меч",
-      "query_type": "Рунический короткий меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:makeshift-crossbow",
       "type": "Makeshift Crossbow",
       "type_ru": "Самодельный самострел",
@@ -11961,20 +11163,6 @@
       "image": "/icons/item-bases/generated/crossbow.svg"
     },
     {
-      "id": "base:ultra-greatsword",
-      "type": "Ultra Greatsword",
-      "type_ru": "Сверхтяжёлый меч",
-      "query_type": "Сверхтяжёлый меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:holy-flail",
       "type": "Holy Flail",
       "type_ru": "Священное молотило",
@@ -12029,34 +11217,6 @@
       "base_class_label_ru": "Арбалеты",
       "icon_key": "crossbow",
       "image": "/icons/item-bases/generated/crossbow.svg"
-    },
-    {
-      "id": "base:hook-axe",
-      "type": "Hook Axe",
-      "type_ru": "Секач",
-      "query_type": "Секач",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:scimitar",
-      "type": "Scimitar",
-      "type_ru": "Скимитар",
-      "query_type": "Скимитар",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:aromatic-sceptre",
@@ -12227,20 +11387,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:crone-knife",
-      "type": "Crone Knife",
-      "type_ru": "Старый нож",
-      "query_type": "Старый нож",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:gelid-staff",
       "type": "Gelid Staff",
       "type_ru": "Студёный посох",
@@ -12283,20 +11429,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:crescent-axe",
-      "type": "Crescent Axe",
-      "type_ru": "Топор-полумесяц",
-      "query_type": "Топор-полумесяц",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:totemic-greatclub",
       "type": "Totemic Greatclub",
       "type_ru": "Тотемная палица",
@@ -12307,20 +11439,6 @@
       "base_class": "mace",
       "base_class_label": "Maces",
       "base_class_label_ru": "Булавы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:forked-claw",
-      "type": "Forked Claw",
-      "type_ru": "Трёхзубый кастет",
-      "query_type": "Трёхзубый кастет",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "claw",
-      "base_class_label": "Claws",
-      "base_class_label_ru": "Когти",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -12339,20 +11457,6 @@
       "image": "/icons/item-bases/generated/crossbow.svg"
     },
     {
-      "id": "base:dull-hatchet",
-      "type": "Dull Hatchet",
-      "type_ru": "Тупой топорик",
-      "query_type": "Тупой топорик",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:heavy-bow",
       "type": "Heavy Bow",
       "type_ru": "Тяжёлый лук",
@@ -12365,20 +11469,6 @@
       "base_class_label_ru": "Луки",
       "icon_key": "bow",
       "image": "/icons/item-bases/generated/bow.svg"
-    },
-    {
-      "id": "base:flanged-greatblade",
-      "type": "Flanged Greatblade",
-      "type_ru": "Тяжёлый меч с навершием",
-      "query_type": "Тяжёлый меч с навершием",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:heavy-greathammer",
@@ -12419,20 +11509,6 @@
       "base_class": "mace",
       "base_class_label": "Maces",
       "base_class_label_ru": "Булавы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:dark-blade",
-      "type": "Dark Blade",
-      "type_ru": "Тёмный клинок",
-      "query_type": "Тёмный клинок",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -12479,20 +11555,6 @@
       "image": "/icons/item-bases/generated/wand.svg"
     },
     {
-      "id": "base:ember-greataxe",
-      "type": "Ember Greataxe",
-      "type_ru": "Угольное рубило",
-      "query_type": "Угольное рубило",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:striking-spear",
       "type": "Striking Spear",
       "type_ru": "Ударное копьё",
@@ -12519,34 +11581,6 @@
       "base_class_label_ru": "Посохи",
       "icon_key": "staff",
       "image": "/icons/item-bases/generated/staff.svg"
-    },
-    {
-      "id": "base:extended-cleaver",
-      "type": "Extended Cleaver",
-      "type_ru": "Удлинённый тесак",
-      "query_type": "Удлинённый тесак",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:dread-hatchet",
-      "type": "Dread Hatchet",
-      "type_ru": "Ужасный топор",
-      "query_type": "Ужасный топор",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     },
     {
       "id": "base:painted-crossbow",
@@ -12605,34 +11639,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:falchion",
-      "type": "Falchion",
-      "type_ru": "Фальшион",
-      "query_type": "Фальшион",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:rippled-greatsword",
-      "type": "Rippled Greatsword",
-      "type_ru": "Фламберг",
-      "query_type": "Фламберг",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:dedalian-crossbow",
       "type": "Dedalian Crossbow",
       "type_ru": "Хитроумный самострел",
@@ -12661,20 +11667,6 @@
       "image": "/icons/item-bases/generated/wand.svg"
     },
     {
-      "id": "base:sickle-sword",
-      "type": "Sickle Sword",
-      "type_ru": "Хопеш",
-      "query_type": "Хопеш",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:temple-maul",
       "type": "Temple Maul",
       "type_ru": "Храмовая дубина",
@@ -12689,20 +11681,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:regalia-longsword",
-      "type": "Regalia Longsword",
-      "type_ru": "Царский длинный меч",
-      "query_type": "Царский длинный меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:chain-flail",
       "type": "Chain Flail",
       "type_ru": "Цепное гасило",
@@ -12713,34 +11691,6 @@
       "base_class": "flail",
       "base_class_label": "Flails",
       "base_class_label_ru": "Цепы",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:ceremonial-halberd",
-      "type": "Ceremonial Halberd",
-      "type_ru": "Церемониальная алебарда",
-      "query_type": "Церемониальная алебарда",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:cinquedea",
-      "type": "Cinquedea",
-      "type_ru": "Чинкуэда",
-      "query_type": "Чинкуэда",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "dagger",
-      "base_class_label": "Daggers",
-      "base_class_label_ru": "Кинжалы",
       "icon_key": "base",
       "image": "/icons/item-bases/generated/base.svg"
     },
@@ -12787,34 +11737,6 @@
       "image": "/icons/item-bases/generated/base.svg"
     },
     {
-      "id": "base:broad-greatsword",
-      "type": "Broad Greatsword",
-      "type_ru": "Широкий большой меч",
-      "query_type": "Широкий большой меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:broadsword",
-      "type": "Broadsword",
-      "type_ru": "Широкий меч",
-      "query_type": "Широкий меч",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
       "id": "base:broad-spear",
       "type": "Broad Spear",
       "type_ru": "Широкое копьё",
@@ -12841,34 +11763,6 @@
       "base_class_label_ru": "Жезлы",
       "icon_key": "wand",
       "image": "/icons/item-bases/generated/wand.svg"
-    },
-    {
-      "id": "base:keen-greatsword",
-      "type": "Keen Greatsword",
-      "type_ru": "Эспадон",
-      "query_type": "Эспадон",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "sword",
-      "base_class_label": "Swords",
-      "base_class_label_ru": "Мечи",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
-    },
-    {
-      "id": "base:fury-cleaver",
-      "type": "Fury Cleaver",
-      "type_ru": "Яростный рассекатель",
-      "query_type": "Яростный рассекатель",
-      "category": "weapon",
-      "category_label": "Weapons",
-      "category_label_ru": "Оружие",
-      "base_class": "axe",
-      "base_class_label": "Axes",
-      "base_class_label_ru": "Топоры",
-      "icon_key": "base",
-      "image": "/icons/item-bases/generated/base.svg"
     }
   ],
   "errors": []

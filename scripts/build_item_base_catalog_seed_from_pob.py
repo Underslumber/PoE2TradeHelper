@@ -20,7 +20,7 @@ DEFAULT_RUNTIME_OUTPUT = Path("data/item_base_catalog.json")
 POE2DB_RU_BASE = "https://poe2db.tw/ru"
 USER_AGENT = "PoE2TradeHelper item-base seed builder"
 
-ALLOWED_BASE_FILES = {
+POTENTIAL_BASE_FILES = {
     "amulet",
     "axe",
     "belt",
@@ -45,6 +45,13 @@ ALLOWED_BASE_FILES = {
     "talisman",
     "wand",
 }
+DISABLED_BASE_FILES = {
+    "axe",
+    "claw",
+    "dagger",
+    "sword",
+}
+ALLOWED_BASE_FILES = POTENTIAL_BASE_FILES - DISABLED_BASE_FILES
 ACCESSORY_FILES = {"amulet", "belt", "ring", "talisman"}
 ARMOUR_FILES = {"body", "boots", "focus", "gloves", "helmet", "quiver", "shield"}
 WEAPON_FILES = ALLOWED_BASE_FILES - ACCESSORY_FILES - ARMOUR_FILES
