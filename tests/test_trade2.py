@@ -1552,6 +1552,62 @@ def test_item_base_market_scan_rechecks_weak_activity_rows(monkeypatch):
     assert normal_count == 2
 
 
+def test_item_base_market_priority_rechecks_expensive_rows_before_demand_rows():
+    bases = [
+        {"id": "base:cheap-ring", "type": "Cheap Ring", "type_ru": "Дешевое кольцо"},
+        {"id": "base:demand-boots", "type": "Demand Boots", "type_ru": "Популярные ботинки"},
+        {"id": "base:expensive-amulet", "type": "Expensive Amulet", "type_ru": "Дорогой амулет"},
+        {"id": "base:valuable-belt", "type": "Valuable Belt", "type_ru": "Ценный пояс"},
+    ]
+    previous_rows = [
+        {"id": "base:cheap-ring", "low": 0.5, "recent_listing_count": 9, "high_demand": True},
+        {"id": "base:demand-boots", "recent_listing_count": 5, "high_demand": True},
+        {"id": "base:expensive-amulet", "low": 2.0},
+        {"id": "base:valuable-belt", "low": 6.0},
+    ]
+
+    priority_bases = trade2._item_base_market_priority_bases(bases, previous_rows, limit=3, target="exalted")
+
+    assert [base["type"] for base in priority_bases] == [
+        "Valuable Belt",
+        "Expensive Amulet",
+        "Demand Boots",
+    ]
+
+
+def test_item_base_market_scan_batch_defers_observed_sub_exalt_bases(monkeypatch):
+    monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
+    trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    bases = [
+        {"id": "base:cheap-ring", "type": "Cheap Ring", "type_ru": "Дешевое кольцо"},
+        {"id": "base:unknown-boots", "type": "Unknown Boots", "type_ru": "Неизвестные ботинки"},
+        {"id": "base:expensive-amulet", "type": "Expensive Amulet", "type_ru": "Дорогой амулет"},
+        {"id": "base:cheap-belt", "type": "Cheap Belt", "type_ru": "Дешевый пояс"},
+    ]
+    previous_rows = [
+        {"id": "base:cheap-ring", "best_native": {"amount": 0.4, "currency": "exalted"}},
+        {"id": "base:expensive-amulet", "best_native": {"amount": 4.0, "currency": "exalted"}},
+        {"id": "base:cheap-belt", "price_currency_groups": [{"currency": "Exalted Orb", "low_amount": 0.8}]},
+    ]
+    low_priority_keys = trade2._item_base_market_low_priority_base_keys(previous_rows, target="exalted")
+
+    selected, start, next_position, priority_count, normal_count = trade2._item_base_market_scan_batch(
+        bases,
+        ("PoE2 - Test", "exalted", "securable", None),
+        deprioritized_keys=low_priority_keys,
+    )
+
+    assert [base["type"] for base in selected] == [
+        "Unknown Boots",
+        "Expensive Amulet",
+        "Cheap Ring",
+    ]
+    assert start == 0
+    assert next_position == 1
+    assert priority_count == 0
+    assert normal_count == 3
+
+
 def test_item_base_market_scan_uses_larger_batch_for_meta_priority_bases(monkeypatch):
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 2)
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE", 5)

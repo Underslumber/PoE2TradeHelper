@@ -81,6 +81,7 @@ ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
 ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE = 60
 ITEM_BASE_MARKET_FAST_SCAN_MAX_PRIORITY = 150
+ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED = 1.0
 MARKET_LISTING_MAX_AGE_DAYS = 14
 MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
@@ -1958,22 +1959,40 @@ def _item_base_market_priority_bases(
     bases: list[dict[str, Any]],
     previous_rows: list[dict[str, Any]],
     limit: int = ITEM_BASE_MARKET_PRIORITY_RECHECK_LIMIT,
+    target: str = "exalted",
 ) -> list[dict[str, Any]]:
     if not bases or not previous_rows or limit <= 0:
         return []
+    expensive_rows = sorted(
+        [
+            row
+            for row in previous_rows
+            if (_item_base_market_row_exalted_price(row, target=target) or 0.0) >= ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
+        ],
+        key=lambda row: _item_base_market_row_exalted_price(row, target=target) or 0.0,
+        reverse=True,
+    )
     priority_rows = sorted(
-        [row for row in previous_rows if _item_base_market_row_has_high_demand(row)],
+        [
+            row
+            for row in previous_rows
+            if _item_base_market_row_has_high_demand(row) and not _item_base_market_row_is_low_price(row, target=target)
+        ],
         key=lambda row: (_to_int(row.get("recent_listing_count")) or 0, _to_int(row.get("clean_count")) or 0),
         reverse=True,
     )
     weak_rows = sorted(
-        [row for row in previous_rows if _item_base_market_row_has_weak_activity(row)],
+        [
+            row
+            for row in previous_rows
+            if _item_base_market_row_has_weak_activity(row) and not _item_base_market_row_is_low_price(row, target=target)
+        ],
         key=lambda row: (_to_int(row.get("stale_count")) or 0, _to_int(row.get("weak_activity_observed_count")) or 0),
         reverse=True,
     )
     selected: list[dict[str, Any]] = []
     selected_ids: set[int] = set()
-    for row in [*priority_rows, *weak_rows]:
+    for row in [*expensive_rows, *priority_rows, *weak_rows]:
         row_keys = _base_market_keys(row)
         if not row_keys:
             continue
@@ -1987,6 +2006,58 @@ def _item_base_market_priority_bases(
         if len(selected) >= limit:
             break
     return selected
+
+
+def _exalted_currency_key(value: Any) -> bool:
+    return _lookup_text_key(value) in {"exalted", "exalted orb", "сфера возвышения"}
+
+
+def _item_base_market_native_exalted_price(row: dict[str, Any]) -> float | None:
+    for native_key in ("best_native", "optimal_native"):
+        native = row.get(native_key)
+        if isinstance(native, dict) and _exalted_currency_key(native.get("currency")):
+            value = _to_float(native.get("amount"))
+            if value is not None and value > 0:
+                return value
+    for group in row.get("price_currency_groups") or []:
+        if not isinstance(group, dict) or not _exalted_currency_key(group.get("currency")):
+            continue
+        for price_key in ("low_amount", "median_amount"):
+            value = _to_float(group.get(price_key))
+            if value is not None and value > 0:
+                return value
+    for lot in row.get("sample_lots") or []:
+        if not isinstance(lot, dict) or not _exalted_currency_key(lot.get("price_currency")):
+            continue
+        value = _to_float(lot.get("price_amount"))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _item_base_market_row_exalted_price(row: dict[str, Any], target: str = "exalted") -> float | None:
+    native_price = _item_base_market_native_exalted_price(row)
+    if native_price is not None:
+        return native_price
+    if _exalted_currency_key(target):
+        return _item_base_market_row_target_price(row)
+    return None
+
+
+def _item_base_market_row_is_low_price(row: dict[str, Any], target: str = "exalted") -> bool:
+    price = _item_base_market_row_exalted_price(row, target=target)
+    return price is not None and price < ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
+
+
+def _item_base_market_low_priority_base_keys(
+    previous_rows: list[dict[str, Any]],
+    target: str = "exalted",
+) -> set[str]:
+    keys: set[str] = set()
+    for row in previous_rows:
+        if _item_base_market_row_is_low_price(row, target=target):
+            keys.update(_base_market_keys(row))
+    return keys
 
 
 def _base_market_catalog_rows(catalog: dict[str, Any], min_ilvl: int | None = None) -> list[dict[str, Any]]:
@@ -2274,12 +2345,19 @@ def _item_base_market_scan_batch(
     bases: list[dict[str, Any]],
     cursor_key: tuple[Any, ...],
     priority_bases: list[dict[str, Any]] | None = None,
+    deprioritized_keys: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int, int, int]:
     if not bases:
         return [], 0, 0, 0, 0
     start = ITEM_BASE_MARKET_SCAN_CURSORS.get(cursor_key, 0) % len(bases)
     batch_size = _item_base_market_scan_batch_size(bases, start)
-    return _item_base_market_scan_batch_from_priority(bases, start, batch_size, priority_bases)
+    return _item_base_market_scan_batch_from_priority(
+        bases,
+        start,
+        batch_size,
+        priority_bases,
+        deprioritized_keys=deprioritized_keys,
+    )
 
 
 def _item_base_market_fast_scan_limit(bases: list[dict[str, Any]]) -> int:
@@ -2302,6 +2380,7 @@ def _item_base_market_scan_batch_from_priority(
     start: int,
     batch_size: int,
     priority_bases: list[dict[str, Any]] | None = None,
+    deprioritized_keys: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int, int, int]:
     priority_selected: list[dict[str, Any]] = []
     priority_keys: set[str] = set()
@@ -2315,16 +2394,32 @@ def _item_base_market_scan_batch_from_priority(
         priority_keys.update(keys)
 
     remaining = max(0, batch_size - len(priority_selected))
-    if remaining <= 0:
-        normal_candidates: list[dict[str, Any]] = []
-        next_position = start
-    elif start + remaining <= len(bases):
-        normal_candidates = bases[start : start + remaining]
-        next_position = (start + remaining) % len(bases)
-    else:
-        normal_candidates = [*bases[start:], *bases[: start + remaining - len(bases)]]
-        next_position = (start + remaining) % len(bases)
-    normal_selected = [base for base in normal_candidates if not (_base_market_base_keys(base) & priority_keys)]
+    normal_selected: list[dict[str, Any]] = []
+    normal_keys: set[str] = set()
+    next_position = start
+    deprioritized_keys = deprioritized_keys or set()
+
+    def select_normal(*, allow_deprioritized: bool) -> None:
+        nonlocal next_position
+        if remaining <= 0 or len(normal_selected) >= remaining:
+            return
+        position = start
+        examined = 0
+        while examined < len(bases) and len(normal_selected) < remaining:
+            base = bases[position]
+            position = (position + 1) % len(bases)
+            examined += 1
+            keys = _base_market_base_keys(base)
+            if keys & priority_keys or keys & normal_keys:
+                continue
+            if not allow_deprioritized and keys & deprioritized_keys:
+                continue
+            normal_selected.append(base)
+            normal_keys.update(keys)
+            next_position = position
+
+    select_normal(allow_deprioritized=False)
+    select_normal(allow_deprioritized=True)
     selected = [*priority_selected, *normal_selected]
     return selected, start, next_position, len(priority_selected), len(normal_selected)
 
@@ -2953,11 +3048,13 @@ async def run_item_base_market_refresh_job(
     else:
         scan_cursor_key = _item_base_market_scan_cursor_key(league, target, status, min_ilvl)
         scan_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
-        priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows)
+        priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows, target=target)
+        deprioritized_keys = _item_base_market_low_priority_base_keys(previous_rows, target=target)
         selected_bases, scan_start, scan_next, priority_recheck_count, normal_scan_count = _item_base_market_scan_batch(
             scan_bases,
             scan_cursor_key,
             priority_bases=priority_bases,
+            deprioritized_keys=deprioritized_keys,
         )
     errors = list(catalog.get("errors") or [])
     job["base_total"] = len(selected_bases)
