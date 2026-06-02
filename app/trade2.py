@@ -2575,6 +2575,17 @@ def _item_base_market_payload_is_error_only(payload: dict[str, Any]) -> bool:
     )
 
 
+ITEM_BASE_MARKET_INCOMPLETE_JOB_STATUSES = {"queued", "running", "rate_limited"}
+
+
+def _item_base_market_payload_is_incomplete_background_result(payload: dict[str, Any], q: str) -> bool:
+    if q.strip():
+        return False
+    refresh_job = payload.get("refresh_job") or {}
+    status = str(refresh_job.get("status") or "")
+    return status in ITEM_BASE_MARKET_INCOMPLETE_JOB_STATUSES
+
+
 def _item_base_market_rows_matching_min_ilvl(
     rows: list[dict[str, Any]],
     min_ilvl: int | None,
@@ -3425,13 +3436,14 @@ async def get_item_base_market(
     exact_cache_key = _item_base_market_exact_cache_key(league, target, status, q, collection_min_ilvl)
     min_visible_lots = _item_base_market_min_visible_lots(q)
     active_refresh_job: dict[str, Any] | None = None
+    active_refresh_payload: dict[str, Any] | None = None
     if not force_refresh:
         cached = ITEM_BASE_MARKET_CACHE.get(cache_key)
         if not cached and q:
             cached = ITEM_BASE_MARKET_CACHE.get(exact_cache_key)
         if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
             payload = _cache_copy(cached["data"])
-            if not _item_base_market_payload_is_error_only(payload):
+            if not _item_base_market_payload_is_error_only(payload) and not _item_base_market_payload_is_incomplete_background_result(payload, q):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
@@ -3441,6 +3453,7 @@ async def get_item_base_market(
         job = ITEM_BASE_MARKET_JOBS.get(_item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit))
         if job and time.time() - float(job.get("created_ts") or 0) < ITEM_BASE_MARKET_JOB_TTL:
             active_refresh_job = _item_base_market_job_view(job)
+            job_status = str(job.get("status") or "")
             result = _cache_copy(job.get("result") or {})
             if result:
                 rows = _filter_item_base_market_rows(result.get("rows") or [], q)
@@ -3449,7 +3462,8 @@ async def get_item_base_market(
                 _apply_item_base_market_price_filter(result, rows, limit=limit, price_filter=price_filter)
                 result["refresh_job"] = active_refresh_job
                 result["cached"] = False
-                if result.get("rows") or str(job.get("status") or "") not in {"queued", "running", "rate_limited"}:
+                active_refresh_payload = result
+                if job_status not in ITEM_BASE_MARKET_INCOMPLETE_JOB_STATUSES or (q and result.get("rows")):
                     return result
             try:
                 catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
@@ -3473,14 +3487,15 @@ async def get_item_base_market(
                 hide_weak_activity=hide_weak_activity,
             )
             pending = _apply_item_base_market_price_filter(pending, rows, limit=limit, price_filter=price_filter)
-            if pending.get("rows") or str(job.get("status") or "") not in {"queued", "running", "rate_limited"}:
+            active_refresh_payload = pending
+            if job_status not in ITEM_BASE_MARKET_INCOMPLETE_JOB_STATUSES or (q and pending.get("rows")):
                 return pending
         cached = None
         if cache_key != canonical_cache_key:
             cached = ITEM_BASE_MARKET_CACHE.get(canonical_cache_key)
         if cached and time.time() - cached["created_ts"] < ITEM_BASE_MARKET_CACHE_TTL:
             payload = _cache_copy(cached["data"])
-            if not _item_base_market_payload_is_error_only(payload):
+            if not _item_base_market_payload_is_error_only(payload) and not _item_base_market_payload_is_incomplete_background_result(payload, q):
                 rows = _filter_item_base_market_rows(payload.get("rows") or [], q)
                 rows = _item_base_market_rows_matching_min_ilvl(rows, display_min_ilvl)
                 rows = _visible_item_base_market_rows(rows, min_lots=min_visible_lots, hide_weak_activity=hide_weak_activity)
@@ -3522,6 +3537,8 @@ async def get_item_base_market(
             if active_refresh_job is not None:
                 payload["refresh_job"] = active_refresh_job
             return payload
+        if active_refresh_payload is not None and active_refresh_payload.get("rows"):
+            return active_refresh_payload
         catalog = await get_item_base_catalog(q=q, limit=ITEM_BASE_CATALOG_LIMIT)
         if q and not catalog.get("bases"):
             catalog = {**catalog, "bases": [_manual_item_base_market_base(q)], "total": 1, "matched_total": 1}
