@@ -3925,7 +3925,9 @@ async function refineFocusedBaseMarket() {
   const row = rows.find(item => item.id === state.focusedBaseMarketId) || rows[0] || null;
   const input = byId('base-market-query');
   if (!row || !input) return;
-  input.value = row.query_type || row.text_ru || row.text || baseMarketRowName(row);
+  input.value = state.lang === 'ru'
+    ? (row.text_ru || row.type_ru || row.text || row.query_type || baseMarketRowName(row))
+    : (row.query_type || row.text || row.text_ru || baseMarketRowName(row));
   await refreshBaseMarket(true);
 }
 

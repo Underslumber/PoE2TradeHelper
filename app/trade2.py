@@ -1837,11 +1837,15 @@ def _base_market_sample_lots(clean_lots: list[dict[str, Any]]) -> list[dict[str,
 
 def _base_market_row_from_base(base: dict[str, Any], min_ilvl: int | None = None) -> dict[str, Any]:
     query_type = str(base.get("type") or base.get("query_type") or base.get("type_ru") or "").strip()
+    text = base.get("type") or query_type
+    text_ru = base.get("type_ru") or ITEM_BASE_RU.get(str(base.get("type") or "")) or query_type
     icon_key = base.get("icon_key") or _item_base_icon_key(str(base.get("category") or ""), str(base.get("category_label") or ""), query_type)
     return {
         "id": base.get("id") or _base_market_item_id(query_type),
-        "text": base.get("type") or query_type,
-        "text_ru": base.get("type_ru") or ITEM_BASE_RU.get(str(base.get("type") or "")) or query_type,
+        "type": text,
+        "type_ru": text_ru,
+        "text": text,
+        "text_ru": text_ru,
         "query_type": query_type,
         "category": base.get("category") or "",
         "category_label": base.get("category_label") or "",
@@ -1891,6 +1895,39 @@ def _base_market_row_from_stored_id(item_id: str, min_ilvl: int | None = None) -
         "min_ilvl": min_ilvl,
         "total_scope": "stored_snapshot",
     }
+
+
+_ITEM_BASE_CATALOG_MERGE_FIELDS = {
+    "text",
+    "text_ru",
+    "type",
+    "type_ru",
+    "query_type",
+    "category",
+    "category_label",
+    "category_label_ru",
+    "base_class",
+    "base_class_label",
+    "base_class_label_ru",
+    "icon_key",
+    "image",
+    "basis",
+    "basis_ru",
+}
+
+
+def _merge_item_base_catalog_row(base_row: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    cleaned_row = {
+        key: value
+        for key, value in row.items()
+        if key not in _ITEM_BASE_CATALOG_MERGE_FIELDS or str(value or "").strip()
+    }
+    enriched = {**base_row, **cleaned_row}
+    if not str(enriched.get("type_ru") or "").strip():
+        enriched["type_ru"] = enriched.get("text_ru") or enriched.get("text") or enriched.get("query_type")
+    if not str(enriched.get("text_ru") or "").strip():
+        enriched["text_ru"] = enriched.get("type_ru") or enriched.get("text") or enriched.get("query_type")
+    return enriched
 
 
 def _base_market_row_keys(row: dict[str, Any]) -> set[str]:
@@ -2605,7 +2642,7 @@ async def _enrich_stored_item_base_market_rows(
         matched_catalog = base_row is not None
         if base_row is None:
             base_row = stored_row
-        enriched = {**base_row, **row}
+        enriched = _merge_item_base_catalog_row(base_row, row)
         if min_ilvl is not None and "min_ilvl" not in row:
             enriched["min_ilvl"] = None
         enriched.setdefault("total_scope", "stored_snapshot")

@@ -2941,7 +2941,18 @@ def test_item_base_market_shows_stored_rough_price_rows(monkeypatch):
         return {
             "created_ts": 10.0,
             "source": "trade2/search+fetch:rough",
-            "rows": [{"id": "base:pearl-ring", "median": 0.01, "best": 0.01, "offers": 1, "volume": 1}],
+            "rows": [
+                {
+                    "id": "base:pearl-ring",
+                    "type_ru": None,
+                    "text_ru": None,
+                    "query_type": "Pearl Ring",
+                    "median": 0.01,
+                    "best": 0.01,
+                    "offers": 1,
+                    "volume": 1,
+                }
+            ],
         }
 
     async def fake_catalog(q="", limit=1000):
@@ -2976,6 +2987,8 @@ def test_item_base_market_shows_stored_rough_price_rows(monkeypatch):
 
     assert result["stored"] is True
     assert result["rows"][0]["id"] == "base:pearl-ring"
+    assert result["rows"][0]["type_ru"] == "Жемчужное кольцо"
+    assert result["rows"][0]["text_ru"] == "Жемчужное кольцо"
     assert result["rows"][0]["low"] == 0.01
     assert result["rows"][0]["clean_count"] == 1
     assert result["rows"][0]["fetched_count"] == 1
