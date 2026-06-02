@@ -57,7 +57,9 @@
 - `USER_AGENT` - идентификатор клиента для внешних API.
 - `PORT`, `APP_BASE_URL` - локальный запуск веб-приложения.
 - `PUBLIC_CANONICAL_ORIGIN`, `PUBLIC_API_ORIGIN`, `PUBLIC_REDIRECT_HOSTS` - внешний origin UI/API, если приложение опубликовано наружу.
-- `OUTBOUND_PROXY_URL`, `POE2_PROXY_URL`, `OUTBOUND_PROXY_URLS`, `POE2_PROXY_URLS` - исходящий proxy/VPN для trade2, poe.ninja, PoE2DB, FunPay, Telegram и MCP-вызовов.
+- `OUTBOUND_PROXY_URL`, `OUTBOUND_PROXY_URLS` - общий исходящий proxy/VPN для внешних вызовов.
+- `POE2_PROXY_URL`, `POE2_PROXY_URLS` - отдельный proxy/VPN только для PoE/trade2/MCP-запросов; route-specific rate limit не блокирует другие endpoints из списка.
+- `OUTBOUND_TRUST_ENV` - включение стандартных `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`; по умолчанию выключено, чтобы прод не зависел от случайного локального proxy хоста.
 - `MARKET_SNAPSHOT_*` - фоновый сбор рыночных снимков.
 - `FUNPAY_RUB_SNAPSHOT_*` - рублевый слой FunPay.
 - `SMTP_*`, `TELEGRAM_BOT_TOKEN` - подтверждение email и уведомления.

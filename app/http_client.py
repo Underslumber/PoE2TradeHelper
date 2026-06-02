@@ -23,10 +23,12 @@ _DEFAULT_FAILOVER_BODY_MARKERS = (
     "access denied|temporarily unavailable|service unavailable|bad gateway|gateway timeout|"
     "cloudflare|captcha|checking your browser|ddos protection"
 )
-_active_proxy_index = 0
-_round_robin_index = 0
-_proxy_cooldowns: dict[str, float] = {}
-_proxy_config_key: tuple[str, ...] = ()
+_DEFAULT_PROXY_GROUP = "outbound"
+_POE2_PROXY_GROUP = "poe2"
+_active_proxy_index_by_group: dict[str, int] = {}
+_round_robin_index_by_group: dict[str, int] = {}
+_proxy_cooldowns: dict[tuple[str, str], float] = {}
+_proxy_config_key_by_group: dict[str, tuple[str, ...]] = {}
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -94,8 +96,17 @@ def _failover_methods_from_env() -> set[str]:
     return {item.upper() for item in _split_env_list(raw)}
 
 
-def outbound_proxy_urls() -> list[str]:
-    for name in ("POE2_PROXY_URLS", "POE2_PROXY_URL", "OUTBOUND_PROXY_URLS", "OUTBOUND_PROXY_URL"):
+def _normalize_proxy_group(proxy_group: str | None) -> str:
+    value = str(proxy_group or _DEFAULT_PROXY_GROUP).strip().lower()
+    return value or _DEFAULT_PROXY_GROUP
+
+
+def outbound_proxy_urls(proxy_group: str | None = None) -> list[str]:
+    group = _normalize_proxy_group(proxy_group)
+    names = ("OUTBOUND_PROXY_URLS", "OUTBOUND_PROXY_URL")
+    if group == _POE2_PROXY_GROUP:
+        names = ("POE2_PROXY_URLS", "POE2_PROXY_URL", *names)
+    for name in names:
         urls = _split_proxy_urls(os.environ.get(name))
         if urls:
             return urls
@@ -111,8 +122,8 @@ def _proxy_cooldown_seconds() -> float:
     return max(0.0, _env_float("OUTBOUND_PROXY_COOLDOWN_SECONDS", 60.0))
 
 
-def _proxy_failover_attempts() -> int:
-    urls = outbound_proxy_urls()
+def _proxy_failover_attempts(proxy_group: str | None = None) -> int:
+    urls = outbound_proxy_urls(proxy_group)
     default = max(1, len(urls))
     try:
         configured = int(os.environ.get("OUTBOUND_PROXY_FAILOVER_ATTEMPTS", default))
@@ -125,19 +136,24 @@ def _failover_on_response_enabled() -> bool:
     return _env_bool("OUTBOUND_PROXY_FAILOVER_ON_RESPONSE", True)
 
 
-def _reset_state_if_config_changed(urls: list[str]) -> None:
-    global _active_proxy_index, _round_robin_index, _proxy_config_key
+def _reset_state_if_config_changed(urls: list[str], proxy_group: str | None = None) -> None:
+    group = _normalize_proxy_group(proxy_group)
     key = tuple(urls)
-    if key == _proxy_config_key:
+    if key == _proxy_config_key_by_group.get(group):
         return
-    _proxy_config_key = key
-    _active_proxy_index = 0
-    _round_robin_index = 0
-    _proxy_cooldowns.clear()
+    _proxy_config_key_by_group[group] = key
+    _active_proxy_index_by_group[group] = 0
+    _round_robin_index_by_group[group] = 0
+    for cooldown_key in [item for item in _proxy_cooldowns if item[0] == group]:
+        _proxy_cooldowns.pop(cooldown_key, None)
 
 
-def _forced_proxy_index(urls: list[str]) -> int | None:
-    value = (os.environ.get("POE2_PROXY_INDEX") or os.environ.get("OUTBOUND_PROXY_INDEX") or "").strip()
+def _forced_proxy_index(urls: list[str], proxy_group: str | None = None) -> int | None:
+    group = _normalize_proxy_group(proxy_group)
+    names = ("OUTBOUND_PROXY_INDEX",)
+    if group == _POE2_PROXY_GROUP:
+        names = ("POE2_PROXY_INDEX", *names)
+    value = next((os.environ.get(name, "").strip() for name in names if os.environ.get(name, "").strip()), "")
     if not value:
         return None
     try:
@@ -148,93 +164,106 @@ def _forced_proxy_index(urls: list[str]) -> int | None:
     return index if 0 <= index < len(urls) else None
 
 
-def _available_indices(urls: list[str], now: float) -> list[int]:
-    return [index for index, url in enumerate(urls) if _proxy_cooldowns.get(url, 0.0) <= now]
+def _available_indices(urls: list[str], now: float, proxy_group: str | None = None) -> list[int]:
+    group = _normalize_proxy_group(proxy_group)
+    return [index for index, url in enumerate(urls) if _proxy_cooldowns.get((group, url), 0.0) <= now]
 
 
-def _select_proxy_url() -> str:
-    global _active_proxy_index, _round_robin_index
-    urls = outbound_proxy_urls()
+def _select_proxy_url(proxy_group: str | None = None) -> str:
+    group = _normalize_proxy_group(proxy_group)
+    urls = outbound_proxy_urls(group)
     if not urls:
         return ""
-    _reset_state_if_config_changed(urls)
+    _reset_state_if_config_changed(urls, group)
 
-    forced_index = _forced_proxy_index(urls)
+    forced_index = _forced_proxy_index(urls, group)
     if forced_index is not None:
-        _active_proxy_index = forced_index
+        _active_proxy_index_by_group[group] = forced_index
         return urls[forced_index]
 
     now = time.time()
-    available = _available_indices(urls, now) or list(range(len(urls)))
+    available = _available_indices(urls, now, group) or list(range(len(urls)))
     strategy = _proxy_strategy()
+    active_index = _active_proxy_index_by_group.get(group, 0)
     if strategy == _ROUND_ROBIN_STRATEGY:
-        selected = available[_round_robin_index % len(available)]
-        _round_robin_index += 1
-        _active_proxy_index = selected
+        round_robin_index = _round_robin_index_by_group.get(group, 0)
+        selected = available[round_robin_index % len(available)]
+        _round_robin_index_by_group[group] = round_robin_index + 1
+        _active_proxy_index_by_group[group] = selected
         return urls[selected]
 
-    if _active_proxy_index in available:
-        return urls[_active_proxy_index]
+    if active_index in available:
+        return urls[active_index]
 
-    selected = next((index for index in available if index > _active_proxy_index), available[0])
-    _active_proxy_index = selected
+    selected = next((index for index in available if index > active_index), available[0])
+    _active_proxy_index_by_group[group] = selected
     return urls[selected]
 
 
-def outbound_proxy_url() -> str:
-    return _select_proxy_url()
+def outbound_proxy_url(proxy_group: str | None = None) -> str:
+    return _select_proxy_url(proxy_group)
 
 
 def outbound_trust_env() -> bool:
-    return _env_bool("OUTBOUND_TRUST_ENV", True)
+    return _env_bool("OUTBOUND_TRUST_ENV", False)
 
 
-def httpx_client_kwargs(*, proxy_url: str | None = None, **kwargs: Any) -> dict[str, Any]:
+def httpx_client_kwargs(*, proxy_url: str | None = None, proxy_group: str | None = None, **kwargs: Any) -> dict[str, Any]:
     options = dict(kwargs)
-    proxy_url = outbound_proxy_url() if proxy_url is None else proxy_url
+    proxy_url = outbound_proxy_url(proxy_group) if proxy_url is None else proxy_url
     if proxy_url and "proxy" not in options:
         options["proxy"] = proxy_url
     options.setdefault("trust_env", outbound_trust_env())
     return options
 
 
-def mark_outbound_proxy_failed(proxy_url: str, *, now: float | None = None) -> None:
-    global _active_proxy_index
+def mark_outbound_proxy_failed(
+    proxy_url: str,
+    *,
+    now: float | None = None,
+    proxy_group: str | None = None,
+    cooldown_seconds: float | None = None,
+) -> None:
     if not proxy_url:
         return
-    urls = outbound_proxy_urls()
-    _reset_state_if_config_changed(urls)
+    group = _normalize_proxy_group(proxy_group)
+    urls = outbound_proxy_urls(group)
+    _reset_state_if_config_changed(urls, group)
     if proxy_url not in urls:
         return
     current = time.time() if now is None else now
-    cooldown_until = current + _proxy_cooldown_seconds()
-    _proxy_cooldowns[proxy_url] = cooldown_until
-    if urls[_active_proxy_index % len(urls)] == proxy_url:
-        available = _available_indices(urls, current)
+    cooldown_until = current + (cooldown_seconds if cooldown_seconds is not None else _proxy_cooldown_seconds())
+    _proxy_cooldowns[(group, proxy_url)] = cooldown_until
+    active_index = _active_proxy_index_by_group.get(group, 0)
+    if urls[active_index % len(urls)] == proxy_url:
+        available = _available_indices(urls, current, group)
         if available:
-            _active_proxy_index = next((index for index in available if index > _active_proxy_index), available[0])
+            _active_proxy_index_by_group[group] = next((index for index in available if index > active_index), available[0])
 
 
-def mark_outbound_proxy_success(proxy_url: str) -> None:
+def mark_outbound_proxy_success(proxy_url: str, *, proxy_group: str | None = None) -> None:
     if proxy_url:
-        _proxy_cooldowns.pop(proxy_url, None)
+        _proxy_cooldowns.pop((_normalize_proxy_group(proxy_group), proxy_url), None)
 
 
-def outbound_proxy_status() -> dict[str, Any]:
-    urls = outbound_proxy_urls()
-    _reset_state_if_config_changed(urls)
+def outbound_proxy_status(proxy_group: str | None = None) -> dict[str, Any]:
+    group = _normalize_proxy_group(proxy_group)
+    urls = outbound_proxy_urls(group)
+    _reset_state_if_config_changed(urls, group)
     now = time.time()
+    active_index = _active_proxy_index_by_group.get(group, 0) if urls else None
     return {
+        "proxy_group": group,
         "strategy": _proxy_strategy(),
-        "failover_attempts": _proxy_failover_attempts(),
+        "failover_attempts": _proxy_failover_attempts(group),
         "failover_on_response": _failover_on_response_enabled(),
-        "active_index": _active_proxy_index if urls else None,
+        "active_index": active_index,
         "urls": [
             {
                 "index": index,
                 "url": url,
-                "active": index == _active_proxy_index,
-                "cooldown_seconds": max(0.0, round(_proxy_cooldowns.get(url, 0.0) - now, 3)),
+                "active": index == active_index,
+                "cooldown_seconds": max(0.0, round(_proxy_cooldowns.get((group, url), 0.0) - now, 3)),
             }
             for index, url in enumerate(urls)
         ],
@@ -268,17 +297,33 @@ def should_failover_response(response: httpx.Response) -> tuple[bool, str]:
     return False, ""
 
 
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    try:
+        retry_after = response.headers.get("Retry-After")
+    except AttributeError:
+        return None
+    try:
+        seconds = float(retry_after)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
 class OutboundHttpxClient:
     def __init__(
         self,
         *,
+        proxy_group: str | None = None,
         failover_response_methods: Iterable[str] | None = None,
         failover_on_response: bool | None = None,
+        failover_on_rate_limit: bool = False,
         **kwargs: Any,
     ):
         self._kwargs = dict(kwargs)
         self._client: httpx.AsyncClient | None = None
         self._proxy_url = ""
+        self._proxy_group = _normalize_proxy_group(proxy_group)
+        self._failover_on_rate_limit = failover_on_rate_limit
         self._failover_response_methods = (
             {item.upper() for item in failover_response_methods}
             if failover_response_methods is not None
@@ -294,12 +339,12 @@ class OutboundHttpxClient:
         await self.aclose()
 
     async def _open_client(self) -> None:
-        self._proxy_url = outbound_proxy_url()
-        self._client = httpx.AsyncClient(**httpx_client_kwargs(proxy_url=self._proxy_url, **self._kwargs))
+        self._proxy_url = outbound_proxy_url(self._proxy_group)
+        self._client = httpx.AsyncClient(**httpx_client_kwargs(proxy_url=self._proxy_url, proxy_group=self._proxy_group, **self._kwargs))
         try:
             await self._client.__aenter__()
         except httpx.TransportError:
-            mark_outbound_proxy_failed(self._proxy_url)
+            mark_outbound_proxy_failed(self._proxy_url, proxy_group=self._proxy_group)
             self._client = None
             raise
 
@@ -318,6 +363,10 @@ class OutboundHttpxClient:
         await self._open_client()
         return bool(self._proxy_url and self._proxy_url != failed_proxy_url)
 
+    @property
+    def proxy_url(self) -> str:
+        return self._proxy_url
+
     def _response_failover_allowed(self, method_name: str, args: tuple[Any, ...]) -> bool:
         if not self._failover_on_response:
             return False
@@ -325,24 +374,34 @@ class OutboundHttpxClient:
         return method in self._failover_response_methods
 
     async def _send(self, method_name: str, *args: Any, **kwargs: Any) -> httpx.Response:
-        attempts = _proxy_failover_attempts()
+        attempts = _proxy_failover_attempts(self._proxy_group)
         for attempt in range(1, attempts + 1):
             if not self._client:
                 await self._open_client()
             try:
                 response = await getattr(self._client, method_name)(*args, **kwargs)
                 should_switch, _reason = should_failover_response(response)
+                retry_after = _retry_after_seconds(response)
+                if self._failover_on_rate_limit and retry_after and self._response_failover_allowed(method_name, args):
+                    failed_proxy_url = self._proxy_url
+                    mark_outbound_proxy_failed(
+                        failed_proxy_url,
+                        proxy_group=self._proxy_group,
+                        cooldown_seconds=max(retry_after, _proxy_cooldown_seconds()),
+                    )
+                    if attempt < attempts and await self._switch_after_failure(failed_proxy_url):
+                        continue
                 if should_switch and self._response_failover_allowed(method_name, args):
                     failed_proxy_url = self._proxy_url
-                    mark_outbound_proxy_failed(failed_proxy_url)
+                    mark_outbound_proxy_failed(failed_proxy_url, proxy_group=self._proxy_group)
                     if attempt < attempts and await self._switch_after_failure(failed_proxy_url):
                         continue
                 else:
-                    mark_outbound_proxy_success(self._proxy_url)
+                    mark_outbound_proxy_success(self._proxy_url, proxy_group=self._proxy_group)
                 return response
             except httpx.TransportError:
                 failed_proxy_url = self._proxy_url
-                mark_outbound_proxy_failed(failed_proxy_url)
+                mark_outbound_proxy_failed(failed_proxy_url, proxy_group=self._proxy_group)
                 if attempt >= attempts or not await self._switch_after_failure(failed_proxy_url):
                     raise
         raise RuntimeError("outbound proxy failover exhausted")
@@ -368,8 +427,8 @@ async def outbound_httpx_client(**kwargs: Any) -> AsyncIterator[OutboundHttpxCli
         yield client
 
 
-def playwright_proxy_options() -> dict[str, str] | None:
-    proxy_url = outbound_proxy_url()
+def playwright_proxy_options(proxy_group: str | None = None) -> dict[str, str] | None:
+    proxy_url = outbound_proxy_url(proxy_group)
     if not proxy_url:
         return None
     return {"server": proxy_url}

@@ -45,6 +45,7 @@ COOL = int(os.environ.get("RATE_COOLDOWN_MS", "250"))
 POE_API_BASE = "https://api.pathofexile.com"  # официальный API
 TRADE_BASE = "https://www.pathofexile.com/api/trade2"  # веб-API PoE2
 TRADE_RU_BASE = "https://ru.pathofexile.com/api/trade2"  # тот же trade2 с русскими терминами
+POE2_PROXY_GROUP = "poe2"
 
 # Настройка логирования
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -102,7 +103,7 @@ async def get_currency_exchange(
     path = f"/currency-exchange/{realm}" + (f"/{hour}" if hour else "")
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30, proxy_group=POE2_PROXY_GROUP) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()
@@ -119,7 +120,7 @@ async def list_characters(realm: str = "poe2") -> Dict[str, Any]:
     path = f"/character/{'poe2' if realm == 'poe2' else realm}"
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30, proxy_group=POE2_PROXY_GROUP) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()
@@ -134,7 +135,7 @@ async def get_character(name: str, realm: str = "poe2") -> Dict[str, Any]:
     path = f"/character/poe2/{name}" if realm == "poe2" else f"/character/{name}"
     try:
         log_request("GET", f"{POE_API_BASE}{path}")
-        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30) as client:
+        async with outbound_httpx_client(base_url=POE_API_BASE, headers=auth_headers(), timeout=30, proxy_group=POE2_PROXY_GROUP) as client:
             response = await client.get(path)
             response.raise_for_status()
             return response.json()

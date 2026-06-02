@@ -31,6 +31,7 @@ from app.recipes import analyze_recipes, filter_dominated_emotion_paths
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
 TRADE2_FAILOVER_RESPONSE_METHODS = ("GET", "HEAD", "OPTIONS", "POST")
+TRADE2_PROXY_GROUP = "poe2"
 ITEM_BASE_MARKET_TRADE2_BASE = TRADE2_BASE
 POE2DB_BASE = "https://poe2db.tw"
 POE2DB_RU_BASE = "https://poe2db.tw/ru"
@@ -56,6 +57,21 @@ SELLER_ANALYSIS_BUDGET = 70
 TRADE2_MAX_RETRY_AFTER_WAIT_SECONDS = 8
 SELLER_LOTS_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
 SELLER_MARKET_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+
+def _poe2_httpx_client(**kwargs: Any):
+    return outbound_httpx_client(
+        proxy_group=TRADE2_PROXY_GROUP,
+        failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
+        failover_on_rate_limit=True,
+        **kwargs,
+    )
+
+
+def _trade2_route_key(client: Any):
+    return lambda: getattr(client, "proxy_url", "") or "direct"
+
+
 INSTANT_BUYOUT_PRICE_TYPES = {"~price", "~b/o"}
 ITEM_BASES_CACHE_TTL = 3600
 ITEM_BASE_CATALOG_SCHEMA_VERSION = "poe2-item-base-catalog/v1"
@@ -515,8 +531,11 @@ async def get_trade_leagues() -> list[dict[str, str]]:
             return cached
         for attempt in range(3):
             try:
-                async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
-                    response = await trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/leagues"))
+                async with _poe2_httpx_client(headers=_headers(), timeout=30) as client:
+                    response = await trade2_rate_limited_request(
+                        lambda: client.get(f"{TRADE2_BASE}/data/leagues"),
+                        route_key=_trade2_route_key(client),
+                    )
                     if response.status_code == 429 and attempt < 2:
                         wait = _retry_after_wait(response, "trade2 leagues", fallback=2 * (attempt + 1))
                         await asyncio.sleep(wait)
@@ -555,10 +574,16 @@ async def get_trade_static() -> dict[str, list[dict[str, str | None]]]:
         if cached and time.time() - float(TRADE_STATIC_CACHE.get("created_ts") or 0) < TRADE_STATIC_CACHE_TTL:
             return cached
         try:
-            async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
+            async with _poe2_httpx_client(headers=_headers(), timeout=30) as client:
                 response, ru_response = await asyncio.gather(
-                    trade2_rate_limited_request(lambda: client.get(f"{TRADE2_BASE}/data/static")),
-                    trade2_rate_limited_request(lambda: client.get(f"{TRADE2_RU_BASE}/data/static")),
+                    trade2_rate_limited_request(
+                        lambda: client.get(f"{TRADE2_BASE}/data/static"),
+                        route_key=_trade2_route_key(client),
+                    ),
+                    trade2_rate_limited_request(
+                        lambda: client.get(f"{TRADE2_RU_BASE}/data/static"),
+                        route_key=_trade2_route_key(client),
+                    ),
                 )
                 response.raise_for_status()
                 ru_response.raise_for_status()
@@ -586,17 +611,22 @@ async def _post_exchange(
             "want": want,
         }
     }
-    async with outbound_httpx_client(
+    async with _poe2_httpx_client(
         headers=_headers({"Content-Type": "application/json"}),
         timeout=30,
-        failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
     ) as client:
         url = f"{TRADE2_BASE}/exchange/poe2/{quote(league, safe='')}"
-        response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
+        response = await trade2_rate_limited_request(
+            lambda: client.post(url, json=body),
+            route_key=_trade2_route_key(client),
+        )
         if response.status_code == 429:
             wait = _retry_after_wait(response, "trade2 exchange")
             await asyncio.sleep(wait)
-            response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
+            response = await trade2_rate_limited_request(
+                lambda: client.post(url, json=body),
+                route_key=_trade2_route_key(client),
+            )
         response.raise_for_status()
     return response.json()
 
@@ -732,17 +762,22 @@ async def _post_search(
     api_base: str = TRADE2_RU_BASE,
 ) -> dict[str, Any]:
     body = {"query": query, "sort": sort or {"price": "asc"}}
-    async with outbound_httpx_client(
+    async with _poe2_httpx_client(
         headers=_headers({"Content-Type": "application/json"}),
         timeout=30,
-        failover_response_methods=TRADE2_FAILOVER_RESPONSE_METHODS,
     ) as client:
         url = f"{api_base}/search/poe2/{quote(league, safe='')}"
-        response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
+        response = await trade2_rate_limited_request(
+            lambda: client.post(url, json=body),
+            route_key=_trade2_route_key(client),
+        )
         if response.status_code == 429:
             wait = _retry_after_wait(response, "trade2 search")
             await asyncio.sleep(wait)
-            response = await trade2_rate_limited_request(lambda: client.post(url, json=body))
+            response = await trade2_rate_limited_request(
+                lambda: client.post(url, json=body),
+                route_key=_trade2_route_key(client),
+            )
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             suffix = f"; retry after {retry_after}s" if retry_after else ""
@@ -761,16 +796,22 @@ async def _fetch_trade_items(
     if not selected_ids:
         return []
     results: list[dict[str, Any]] = []
-    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
+    async with _poe2_httpx_client(headers=_headers(), timeout=30) as client:
         chunks = _chunked(selected_ids, 10)
         for index, chunk_ids in enumerate(chunks):
             chunk = ",".join(chunk_ids)
             url = f"{api_base}/fetch/{chunk}"
-            response = await trade2_rate_limited_request(lambda: client.get(url, params={"query": query_id}))
+            response = await trade2_rate_limited_request(
+                lambda: client.get(url, params={"query": query_id}),
+                route_key=_trade2_route_key(client),
+            )
             if response.status_code == 429:
                 wait = _retry_after_wait(response, "trade2 fetch")
                 await asyncio.sleep(wait)
-                response = await trade2_rate_limited_request(lambda: client.get(url, params={"query": query_id}))
+                response = await trade2_rate_limited_request(
+                    lambda: client.get(url, params={"query": query_id}),
+                    route_key=_trade2_route_key(client),
+                )
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
                 suffix = f"; retry after {retry_after}s" if retry_after else ""
@@ -906,7 +947,7 @@ async def _cache_item_base_remote_icon(item_id: str, source_url: str | None) -> 
         return local_url
     ITEM_BASE_ICON_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        async with outbound_httpx_client(
+        async with _poe2_httpx_client(
             headers=_headers({"Accept": "image/avif,image/webp,image/png,image/svg+xml,image/*,*/*"}),
             timeout=20,
         ) as client:
@@ -1350,8 +1391,11 @@ def _merge_poe2db_item_base_catalog(
 
 async def _fetch_item_base_catalog_payload(locale: str = "en") -> dict[str, Any]:
     base_url = TRADE2_RU_BASE if locale == "ru" else TRADE2_BASE
-    async with outbound_httpx_client(headers=_headers(), timeout=30) as client:
-        response = await trade2_rate_limited_request(lambda: client.get(f"{base_url}/data/items"))
+    async with _poe2_httpx_client(headers=_headers(), timeout=30) as client:
+        response = await trade2_rate_limited_request(
+            lambda: client.get(f"{base_url}/data/items"),
+            route_key=_trade2_route_key(client),
+        )
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
             suffix = f"; retry after {retry_after}s" if retry_after else ""

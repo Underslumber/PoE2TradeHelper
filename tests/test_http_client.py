@@ -42,15 +42,26 @@ def test_httpx_client_kwargs_uses_project_proxy(monkeypatch):
     kwargs = httpx_client_kwargs(timeout=30)
 
     assert kwargs["proxy"] == "http://127.0.0.1:7890"
+    assert kwargs["trust_env"] is False
+
+
+def test_httpx_client_kwargs_can_trust_system_proxy_env(monkeypatch):
+    monkeypatch.setenv("OUTBOUND_TRUST_ENV", "true")
+
+    kwargs = httpx_client_kwargs(timeout=30)
+
+    assert "proxy" not in kwargs
     assert kwargs["trust_env"] is True
 
 
-def test_poe2_proxy_overrides_general_proxy(monkeypatch):
+def test_poe2_proxy_is_scoped_to_poe2_group(monkeypatch):
     monkeypatch.setenv("OUTBOUND_PROXY_URL", "http://127.0.0.1:7890")
     monkeypatch.setenv("POE2_PROXY_URL", "socks5://127.0.0.1:1080")
 
-    assert outbound_proxy_url() == "socks5://127.0.0.1:1080"
-    assert playwright_proxy_options() == {"server": "socks5://127.0.0.1:1080"}
+    assert outbound_proxy_url() == "http://127.0.0.1:7890"
+    assert outbound_proxy_url(proxy_group="poe2") == "socks5://127.0.0.1:1080"
+    assert playwright_proxy_options() == {"server": "http://127.0.0.1:7890"}
+    assert playwright_proxy_options(proxy_group="poe2") == {"server": "socks5://127.0.0.1:1080"}
 
 
 def test_httpx_client_kwargs_can_ignore_system_proxy_env(monkeypatch):
@@ -218,6 +229,44 @@ def test_outbound_httpx_client_does_not_failover_on_rate_limit_by_default(monkey
     assert response.status_code == 429
     assert calls == [("get", "http://127.0.0.1:7900", "https://example.test/data")]
     assert outbound_proxy_url() == "http://127.0.0.1:7900"
+
+
+def test_outbound_httpx_client_can_failover_on_route_rate_limit(monkeypatch):
+    calls = []
+
+    class RateLimitThenOkAsyncClient:
+        def __init__(self, **kwargs):
+            self.proxy = kwargs.get("proxy")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            calls.append(("get", self.proxy, url))
+            if self.proxy == "http://127.0.0.1:7908":
+                return httpx.Response(429, headers={"Retry-After": "30"})
+            return httpx.Response(200, json={"ok": True})
+
+    async def use_client():
+        async with outbound_httpx_client(timeout=30, failover_on_rate_limit=True) as client:
+            return await client.get("https://example.test/data")
+
+    monkeypatch.setenv("OUTBOUND_PROXY_URLS", "http://127.0.0.1:7908, http://127.0.0.1:7909")
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", RateLimitThenOkAsyncClient)
+
+    response = asyncio.run(use_client())
+    status = outbound_proxy_status()
+
+    assert response.status_code == 200
+    assert calls == [
+        ("get", "http://127.0.0.1:7908", "https://example.test/data"),
+        ("get", "http://127.0.0.1:7909", "https://example.test/data"),
+    ]
+    assert outbound_proxy_url() == "http://127.0.0.1:7909"
+    assert status["urls"][0]["cooldown_seconds"] > 0
 
 
 def test_outbound_httpx_client_retries_body_marker_response_on_next_proxy(monkeypatch):

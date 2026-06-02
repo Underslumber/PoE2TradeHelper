@@ -56,3 +56,24 @@ def test_trade2_rate_limited_request_fails_fast_on_long_wait(monkeypatch) -> Non
         asyncio.run(run_check())
     finally:
         rate_limit.reset_trade2_rate_limit_state()
+
+
+def test_trade2_rate_limited_request_tracks_routes_independently(monkeypatch) -> None:
+    class FakeResponse:
+        headers = {"Retry-After": "30"}
+
+    async def fake_request():
+        return FakeResponse()
+
+    async def run_check() -> None:
+        rate_limit.reset_trade2_rate_limit_state()
+        await trade2_rate_limited_request(fake_request, route_key="proxy-a")
+        await trade2_rate_limited_request(fake_request, route_key="proxy-b")
+        with pytest.raises(Trade2RateLimitWaitError, match="retry after"):
+            await trade2_rate_limited_request(fake_request, route_key="proxy-a")
+
+    monkeypatch.setattr(rate_limit, "MAX_RATE_LIMIT_WAIT_SECONDS", 1.0)
+    try:
+        asyncio.run(run_check())
+    finally:
+        rate_limit.reset_trade2_rate_limit_state()

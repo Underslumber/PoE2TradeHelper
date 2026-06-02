@@ -13,7 +13,7 @@ MAX_RATE_LIMIT_WAIT_SECONDS = float(os.environ.get("TRADE2_MAX_RATE_LIMIT_WAIT_S
 
 _trade2_request_lock: asyncio.Lock | None = None
 _trade2_request_lock_loop: asyncio.AbstractEventLoop | None = None
-_trade2_next_request_ts = 0.0
+_trade2_next_request_ts_by_route: dict[str, float] = {}
 
 
 class Trade2RateLimitWaitError(RuntimeError):
@@ -85,8 +85,7 @@ def trade2_rate_limit_delay(headers: Any) -> float:
 
 
 def reset_trade2_rate_limit_state() -> None:
-    global _trade2_next_request_ts
-    _trade2_next_request_ts = 0.0
+    _trade2_next_request_ts_by_route.clear()
 
 
 def _trade2_lock() -> asyncio.Lock:
@@ -98,19 +97,32 @@ def _trade2_lock() -> asyncio.Lock:
     return _trade2_request_lock
 
 
+def _route_key(value: str | Callable[[], str] | None) -> str:
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            value = None
+    return str(value or "default").strip() or "default"
+
+
 async def trade2_rate_limited_request(
     request: Callable[[], Awaitable[Any]],
+    *,
+    route_key: str | Callable[[], str] | None = None,
 ) -> Any:
-    global _trade2_next_request_ts
     async with _trade2_lock():
+        key = _route_key(route_key)
         now = time.time()
-        if _trade2_next_request_ts > now:
-            wait_seconds = _trade2_next_request_ts - now
+        next_request_ts = _trade2_next_request_ts_by_route.get(key, 0.0)
+        if next_request_ts > now:
+            wait_seconds = next_request_ts - now
             if MAX_RATE_LIMIT_WAIT_SECONDS > 0 and wait_seconds > MAX_RATE_LIMIT_WAIT_SECONDS:
                 raise Trade2RateLimitWaitError(f"trade2 rate limited; retry after {wait_seconds:.0f}s")
             await asyncio.sleep(wait_seconds)
         response = await request()
+        key = _route_key(route_key)
         delay = trade2_rate_limit_delay(getattr(response, "headers", None))
         if delay > 0:
-            _trade2_next_request_ts = max(_trade2_next_request_ts, time.time() + delay)
+            _trade2_next_request_ts_by_route[key] = max(_trade2_next_request_ts_by_route.get(key, 0.0), time.time() + delay)
         return response
