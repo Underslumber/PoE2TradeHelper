@@ -628,6 +628,41 @@ def test_seller_base_summaries_rank_by_median_buyout_price():
     assert summaries[1]["count"] == 2
 
 
+def test_seller_lots_analysis_sorts_lots_by_highest_price_first(monkeypatch):
+    async def fake_snapshot(league, seller, status):
+        return {
+            "league": league,
+            "seller": seller,
+            "status": status,
+            "total": 4,
+            "fetched_total": 4,
+            "lots": [
+                {"id": "cheap", "display_name": "Cheap", "price_amount": 1, "price_currency": "exalted"},
+                {"id": "unknown", "display_name": "Unknown", "price_amount": 5, "price_currency": "unknown"},
+                {"id": "expensive", "display_name": "Expensive", "price_amount": 2, "price_currency": "divine"},
+                {"id": "middle", "display_name": "Middle", "price_amount": 100, "price_currency": "exalted"},
+            ],
+            "cached": False,
+        }
+
+    async def fake_rates(league, target, status="any"):
+        return {"rows": [], "target": target}, {"exalted": 1.0, "divine": 100.0}
+
+    async def fake_static():
+        return {"result": []}
+
+    monkeypatch.setattr(trade2, "_get_seller_lots_snapshot", fake_snapshot)
+    monkeypatch.setattr(trade2, "_currency_rates_for_target", fake_rates)
+    monkeypatch.setattr(trade2, "get_trade_static", fake_static)
+
+    result = asyncio.run(
+        trade2.get_seller_lots_analysis("Fate", "Seller#1234", target="exalted", limit=3, analyze=False)
+    )
+
+    assert [lot["id"] for lot in result["lots"]] == ["expensive", "middle", "cheap"]
+    assert [lot["price_target"] for lot in result["lots"]] == [200.0, 100.0, 1.0]
+
+
 def test_normalize_item_base_catalog_prefers_localized_query_text():
     payload = {
         "result": [

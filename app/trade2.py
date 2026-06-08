@@ -4396,6 +4396,11 @@ def _apply_target_price(lot: dict[str, Any], rates: dict[str, float], target: st
     return lot
 
 
+def _seller_lot_price_sort_key(lot: dict[str, Any]) -> tuple[int, float]:
+    price = _to_float(lot.get("price_target"))
+    return (0, -price) if price is not None else (1, 0.0)
+
+
 def _percentile(sorted_values: list[float], position: float) -> float | None:
     if not sorted_values:
         return None
@@ -4850,6 +4855,7 @@ async def get_seller_lots_analysis(
     category_rate_cache: dict[str, dict[str, Any]] = {"Currency": currency_rates}
     for lot in all_lots:
         _apply_target_price(lot, rates, target)
+    all_lots.sort(key=_seller_lot_price_sort_key)
 
     filtered_lots = all_lots
     if text:
