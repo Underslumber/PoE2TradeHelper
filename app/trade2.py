@@ -2478,15 +2478,13 @@ def _item_base_market_scan_batch_from_priority(
     normal_selected: list[dict[str, Any]] = []
     normal_keys: set[str] = set()
     next_position = start
-    # `examined` после инкремента равен расстоянию в порядке обхода от `start` до `position`.
-    # `max_selected_examined` хранит наибольшее такое расстояние в момент фактического выбора
-    # основы. Курсор двигаем только вперёд по нему, иначе второй проход (deprioritized) может
-    # выбрать раннюю основу и откатить курсор назад, ломая round-robin.
-    max_selected_examined = 0
     deprioritized_keys = deprioritized_keys or set()
 
+    # Курсор указывает на позицию после последней выбранной основы (в т.ч. из прохода
+    # deprioritized). Это намеренно: второй проход сдвигает курсор к следующей дешёвой
+    # основе, обеспечивая round-robin-ротацию deprioritized-основ между циклами сбора.
     def select_normal(*, allow_deprioritized: bool) -> None:
-        nonlocal next_position, max_selected_examined
+        nonlocal next_position
         if remaining <= 0 or len(normal_selected) >= remaining:
             return
         position = start
@@ -2502,9 +2500,7 @@ def _item_base_market_scan_batch_from_priority(
                 continue
             normal_selected.append(base)
             normal_keys.update(keys)
-            if examined > max_selected_examined:
-                max_selected_examined = examined
-                next_position = position
+            next_position = position
 
     select_normal(allow_deprioritized=False)
     select_normal(allow_deprioritized=True)

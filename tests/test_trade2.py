@@ -1638,12 +1638,48 @@ def test_item_base_market_scan_batch_defers_observed_sub_exalt_bases(monkeypatch
         "Cheap Ring",
     ]
     assert start == 0
-    # Курсор продвигается по максимально пройденному расстоянию обхода: второй проход
-    # (deprioritized) добирает "Cheap Ring", но не откатывает курсор назад, поэтому
-    # следующий цикл продолжит round-robin с ещё не собранной основы, а не повторно с начала.
-    assert next_position == 3
+    assert next_position == 1
     assert priority_count == 0
     assert normal_count == 3
+
+
+def test_item_base_market_scan_rotates_deprioritized_bases_across_cycles(monkeypatch):
+    # Регрессия: курсор должен ротировать deprioritized-основы между последовательными
+    # циклами, а не фиксироваться на одной дешёвой основе и не "терять" другую.
+    monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
+    trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    cursor_key = ("PoE2 - Test", "exalted", "securable", None)
+    bases = [
+        {"id": "base:cheap-ring", "type": "Cheap Ring", "type_ru": "Дешевое кольцо"},
+        {"id": "base:unknown-boots", "type": "Unknown Boots", "type_ru": "Неизвестные ботинки"},
+        {"id": "base:expensive-amulet", "type": "Expensive Amulet", "type_ru": "Дорогой амулет"},
+        {"id": "base:cheap-belt", "type": "Cheap Belt", "type_ru": "Дешевый пояс"},
+    ]
+    previous_rows = [
+        {"id": "base:cheap-ring", "best_native": {"amount": 0.4, "currency": "exalted"}},
+        {"id": "base:expensive-amulet", "best_native": {"amount": 4.0, "currency": "exalted"}},
+        {"id": "base:cheap-belt", "price_currency_groups": [{"currency": "Exalted Orb", "low_amount": 0.8}]},
+    ]
+    low_priority_keys = trade2._item_base_market_low_priority_base_keys(previous_rows, target="exalted")
+
+    deprioritized_picks: list[set[str]] = []
+    for _ in range(4):
+        selected, _start, next_position, _priority_count, _normal_count = trade2._item_base_market_scan_batch(
+            bases,
+            cursor_key,
+            deprioritized_keys=low_priority_keys,
+        )
+        trade2._advance_item_base_market_scan_cursor(cursor_key, next_position)
+        picked = {base["type"] for base in selected}
+        deprioritized_picks.append(picked & {"Cheap Ring", "Cheap Belt"})
+
+    # Каждая дешёвая основа должна повторно попадать в обход (ротация), а не выбираться
+    # один раз с последующим застреванием на другой. Поэтому проверяем, что обе основы
+    # выбраны минимум дважды за 4 цикла — это отличает ротацию от фиксации курсора.
+    ring_hits = sum("Cheap Ring" in picks for picks in deprioritized_picks)
+    belt_hits = sum("Cheap Belt" in picks for picks in deprioritized_picks)
+    assert ring_hits >= 2, deprioritized_picks
+    assert belt_hits >= 2, deprioritized_picks
 
 
 def test_item_base_market_scan_uses_larger_batch_for_meta_priority_bases(monkeypatch):
