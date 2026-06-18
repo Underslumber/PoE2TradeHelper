@@ -2478,10 +2478,14 @@ def _item_base_market_scan_batch_from_priority(
     normal_selected: list[dict[str, Any]] = []
     normal_keys: set[str] = set()
     next_position = start
+    # `examined` после инкремента равен расстоянию в порядке обхода от `start` до `position`.
+    # Курсор продвигаем только по максимально пройденному расстоянию, иначе второй проход
+    # (deprioritized) может добавить раннюю основу и откатить курсор назад, ломая round-robin.
+    max_examined = 0
     deprioritized_keys = deprioritized_keys or set()
 
     def select_normal(*, allow_deprioritized: bool) -> None:
-        nonlocal next_position
+        nonlocal next_position, max_examined
         if remaining <= 0 or len(normal_selected) >= remaining:
             return
         position = start
@@ -2497,7 +2501,9 @@ def _item_base_market_scan_batch_from_priority(
                 continue
             normal_selected.append(base)
             normal_keys.update(keys)
-            next_position = position
+            if examined > max_examined:
+                max_examined = examined
+                next_position = position
 
     select_normal(allow_deprioritized=False)
     select_normal(allow_deprioritized=True)

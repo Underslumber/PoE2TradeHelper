@@ -1638,7 +1638,10 @@ def test_item_base_market_scan_batch_defers_observed_sub_exalt_bases(monkeypatch
         "Cheap Ring",
     ]
     assert start == 0
-    assert next_position == 1
+    # Курсор продвигается по максимально пройденному расстоянию обхода: второй проход
+    # (deprioritized) добирает "Cheap Ring", но не откатывает курсор назад, поэтому
+    # следующий цикл продолжит round-robin с ещё не собранной основы, а не повторно с начала.
+    assert next_position == 3
     assert priority_count == 0
     assert normal_count == 3
 
