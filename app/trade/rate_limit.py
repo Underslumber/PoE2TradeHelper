@@ -36,6 +36,16 @@ def _get_header(headers: Any, key: str) -> Any:
     return None
 
 
+def _parse_retry_after_seconds(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
 def _parse_rate_triplet(value: str) -> tuple[float, float, float] | None:
     parts = value.split(":")
     if len(parts) != 3:
@@ -52,9 +62,9 @@ def trade2_rate_limit_delay(headers: Any) -> float:
         return 0.0
 
     delays: list[float] = []
-    retry_after = _get_header(headers, "Retry-After")
-    if retry_after and str(retry_after).isdigit():
-        delays.append(float(retry_after))
+    retry_after = _parse_retry_after_seconds(_get_header(headers, "Retry-After"))
+    if retry_after:
+        delays.append(retry_after)
 
     rules = _split_header_list(_get_header(headers, "X-Rate-Limit-Rules"))
     for rule in rules:

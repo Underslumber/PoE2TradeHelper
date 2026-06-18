@@ -2480,6 +2480,9 @@ def _item_base_market_scan_batch_from_priority(
     next_position = start
     deprioritized_keys = deprioritized_keys or set()
 
+    # Курсор указывает на позицию после последней выбранной основы (в т.ч. из прохода
+    # deprioritized). Это намеренно: второй проход сдвигает курсор к следующей дешёвой
+    # основе, обеспечивая round-robin-ротацию deprioritized-основ между циклами сбора.
     def select_normal(*, allow_deprioritized: bool) -> None:
         nonlocal next_position
         if remaining <= 0 or len(normal_selected) >= remaining:

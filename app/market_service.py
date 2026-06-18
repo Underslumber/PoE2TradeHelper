@@ -263,7 +263,7 @@ class MarketSnapshotService:
                     notifications_summary = await self._process_notifications()
                     if notifications_summary is not None:
                         summary["notifications"] = notifications_summary
-                    compaction_summary = self._compact_history_if_due()
+                    compaction_summary = await self._compact_history_if_due()
                     if compaction_summary is not None:
                         summary["history_compaction"] = compaction_summary
 
@@ -439,7 +439,7 @@ class MarketSnapshotService:
             self.last_notification_error = str(exc)
             return None
 
-    def _compact_history_if_due(self) -> dict[str, Any] | None:
+    async def _compact_history_if_due(self) -> dict[str, Any] | None:
         if not self.settings.history_compaction_enabled:
             return None
         now = time.time()
@@ -447,7 +447,9 @@ class MarketSnapshotService:
         if self.last_compaction_ts is not None and now - self.last_compaction_ts < interval:
             return None
         try:
-            summary = compact_market_history(now_ts=now)
+            # Компакция блокирующая (SQLite + bulk DML); выносим из event loop,
+            # чтобы не стопорить обработку HTTP-запросов FastAPI.
+            summary = await asyncio.to_thread(compact_market_history, now_ts=now)
             self.last_compaction_summary = summary
             self.last_compaction_ts = now
             self.last_compaction_error = ""

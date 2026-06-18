@@ -14,6 +14,15 @@ def test_trade2_rate_limit_delay_uses_retry_after() -> None:
     assert trade2_rate_limit_delay({"Retry-After": "17"}) >= 17
 
 
+def test_trade2_rate_limit_delay_accepts_fractional_and_padded_retry_after() -> None:
+    assert trade2_rate_limit_delay({"Retry-After": "1.5"}) >= 1.5
+    assert trade2_rate_limit_delay({"Retry-After": " 17 "}) >= 17
+
+
+def test_trade2_rate_limit_delay_ignores_non_numeric_retry_after() -> None:
+    assert trade2_rate_limit_delay({"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"}) == 0.0
+
+
 def test_trade2_rate_limit_delay_slows_down_when_window_is_nearly_full() -> None:
     delay = trade2_rate_limit_delay(
         {

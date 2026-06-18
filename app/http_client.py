@@ -391,6 +391,9 @@ class OutboundHttpxClient:
                     )
                     if attempt < attempts and await self._switch_after_failure(failed_proxy_url):
                         continue
+                    # Не удалось переключиться (последняя попытка или нет свободного прокси):
+                    # возвращаем ответ, сохраняя выставленный rate-limit cooldown, и не помечаем прокси успешным.
+                    return response
                 if should_switch and self._response_failover_allowed(method_name, args):
                     failed_proxy_url = self._proxy_url
                     mark_outbound_proxy_failed(failed_proxy_url, proxy_group=self._proxy_group)
