@@ -75,6 +75,7 @@ from app.trade2 import (
     get_exchange_offers,
     ITEM_BASE_CATALOG_LIMIT,
     ITEM_BASE_MARKET_DEFAULT_STATUS,
+    ITEM_BASE_MARKET_MIN_ILVL,
     ITEM_BASE_MARKET_RECENT_DEMAND_WINDOW_SECONDS,
     MARKET_LISTING_HIGH_DEMAND_COUNT,
     get_item_base_catalog,
@@ -2039,7 +2040,7 @@ async def api_trade_item_base_market(
     status: str = Query(ITEM_BASE_MARKET_DEFAULT_STATUS, pattern="^(securable|available|onlineleague|online|any)$"),
     q: str = Query(""),
     limit: int = Query(0, ge=0, le=ITEM_BASE_CATALOG_LIMIT),
-    min_ilvl: int | None = Query(None, ge=1, le=100),
+    min_ilvl: int = Query(ITEM_BASE_MARKET_MIN_ILVL, ge=ITEM_BASE_MARKET_MIN_ILVL, le=100),
     price_trigger: str = Query("", pattern="^(|above|below)$"),
     price_value: float | None = Query(None, ge=0),
     price_currency: str = Query(""),
@@ -2055,7 +2056,7 @@ async def api_trade_item_base_market(
                 status=status,
                 q=q,
                 limit=limit,
-                min_ilvl=None,
+                min_ilvl=min_ilvl,
                 sample_limit=sample_limit,
             )
             if coroutine is not None:

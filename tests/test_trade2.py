@@ -1269,7 +1269,7 @@ def test_item_base_market_overview_query_does_not_pin_single_base():
     assert query["stats"][0]["filters"] == []
     assert query["filters"]["trade_filters"]["filters"]["sale_type"]["option"] == "priced"
     assert query["filters"]["type_filters"]["filters"]["rarity"]["option"] == "normal"
-    assert query["filters"]["type_filters"]["filters"]["ilvl"] == {"min": 70}
+    assert query["filters"]["type_filters"]["filters"]["ilvl"] == {"min": 78}
 
 
 def test_clean_item_base_lot_requires_normal_item_without_affixes():
@@ -1526,6 +1526,36 @@ def test_base_market_row_uses_english_type_for_trade_query() -> None:
     assert row["text_ru"] == "Элегантный доспех"
 
 
+def test_item_base_market_queries_enforce_ilvl_78_floor():
+    default_query = trade2._item_base_market_query("Heavy Belt", "any")
+    lower_query = trade2._item_base_market_query("Heavy Belt", "any", min_ilvl=70)
+    higher_query = trade2._item_base_market_query("Heavy Belt", "any", min_ilvl=82)
+    overview_query = trade2._item_base_market_overview_query("any")
+
+    def ilvl_filter(query):
+        return query["filters"]["type_filters"]["filters"]["ilvl"]
+
+    assert trade2._item_base_market_min_ilvl(None) == 78
+    assert trade2._item_base_market_min_ilvl(70) == 78
+    assert trade2._item_base_market_min_ilvl(82) == 82
+    assert ilvl_filter(default_query) == {"min": 78}
+    assert ilvl_filter(lower_query) == {"min": 78}
+    assert ilvl_filter(higher_query) == {"min": 82}
+    assert ilvl_filter(overview_query) == {"min": 78}
+
+
+def test_item_base_market_min_ilvl_filter_rejects_legacy_unscoped_rows():
+    rows = [
+        {"id": "base:legacy", "min_ilvl": None},
+        {"id": "base:below", "min_ilvl": 77},
+        {"id": "base:eligible", "min_ilvl": 78},
+    ]
+
+    filtered = trade2._item_base_market_rows_matching_min_ilvl(rows, 78)
+
+    assert [row["id"] for row in filtered] == ["base:eligible"]
+
+
 def test_item_base_market_scan_prioritizes_high_demand_rows(monkeypatch):
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
@@ -1595,10 +1625,10 @@ def test_item_base_market_priority_rechecks_expensive_rows_before_demand_rows():
         {"id": "base:valuable-belt", "type": "Valuable Belt", "type_ru": "Ценный пояс"},
     ]
     previous_rows = [
-        {"id": "base:cheap-ring", "low": 0.5, "recent_listing_count": 9, "high_demand": True},
+        {"id": "base:cheap-ring", "low": 9.9, "recent_listing_count": 9, "high_demand": True},
         {"id": "base:demand-boots", "recent_listing_count": 5, "high_demand": True},
-        {"id": "base:expensive-amulet", "low": 2.0},
-        {"id": "base:valuable-belt", "low": 6.0},
+        {"id": "base:expensive-amulet", "low": 10.0},
+        {"id": "base:valuable-belt", "low": 25.0},
     ]
 
     priority_bases = trade2._item_base_market_priority_bases(bases, previous_rows, limit=3, target="exalted")
@@ -1610,59 +1640,53 @@ def test_item_base_market_priority_rechecks_expensive_rows_before_demand_rows():
     ]
 
 
-def test_item_base_market_scan_batch_defers_observed_sub_exalt_bases(monkeypatch):
+def test_item_base_market_scan_skips_known_sub_10_exalt_bases(monkeypatch):
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
     bases = [
         {"id": "base:cheap-ring", "type": "Cheap Ring", "type_ru": "Дешевое кольцо"},
         {"id": "base:unknown-boots", "type": "Unknown Boots", "type_ru": "Неизвестные ботинки"},
-        {"id": "base:expensive-amulet", "type": "Expensive Amulet", "type_ru": "Дорогой амулет"},
+        {"id": "base:boundary-amulet", "type": "Boundary Amulet", "type_ru": "Граничный амулет"},
         {"id": "base:cheap-belt", "type": "Cheap Belt", "type_ru": "Дешевый пояс"},
     ]
     previous_rows = [
-        {"id": "base:cheap-ring", "best_native": {"amount": 0.4, "currency": "exalted"}},
-        {"id": "base:expensive-amulet", "best_native": {"amount": 4.0, "currency": "exalted"}},
+        {"id": "base:cheap-ring", "best_native": {"amount": 9.9, "currency": "exalted"}},
+        {"id": "base:boundary-amulet", "best_native": {"amount": 10.0, "currency": "exalted"}},
         {"id": "base:cheap-belt", "price_currency_groups": [{"currency": "Exalted Orb", "low_amount": 0.8}]},
     ]
     low_priority_keys = trade2._item_base_market_low_priority_base_keys(previous_rows, target="exalted")
 
     selected, start, next_position, priority_count, normal_count = trade2._item_base_market_scan_batch(
         bases,
-        ("PoE2 - Test", "exalted", "securable", None),
+        ("PoE2 - Test", "exalted", "securable", 78),
         deprioritized_keys=low_priority_keys,
     )
 
-    assert [base["type"] for base in selected] == [
-        "Unknown Boots",
-        "Expensive Amulet",
-        "Cheap Ring",
-    ]
+    assert [base["type"] for base in selected] == ["Unknown Boots", "Boundary Amulet"]
     assert start == 0
-    assert next_position == 1
+    assert next_position == 3
     assert priority_count == 0
-    assert normal_count == 3
+    assert normal_count == 2
 
 
-def test_item_base_market_scan_rotates_deprioritized_bases_across_cycles(monkeypatch):
-    # Регрессия: курсор должен ротировать deprioritized-основы между последовательными
-    # циклами, а не фиксироваться на одной дешёвой основе и не "терять" другую.
+def test_item_base_market_scan_never_rechecks_sub_10_exalt_bases_across_cycles(monkeypatch):
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
-    cursor_key = ("PoE2 - Test", "exalted", "securable", None)
+    cursor_key = ("PoE2 - Test", "exalted", "securable", 78)
     bases = [
-        {"id": "base:cheap-ring", "type": "Cheap Ring", "type_ru": "Дешевое кольцо"},
-        {"id": "base:unknown-boots", "type": "Unknown Boots", "type_ru": "Неизвестные ботинки"},
-        {"id": "base:expensive-amulet", "type": "Expensive Amulet", "type_ru": "Дорогой амулет"},
-        {"id": "base:cheap-belt", "type": "Cheap Belt", "type_ru": "Дешевый пояс"},
+        {"id": "base:cheap-ring", "type": "Cheap Ring"},
+        {"id": "base:unknown-boots", "type": "Unknown Boots"},
+        {"id": "base:boundary-amulet", "type": "Boundary Amulet"},
+        {"id": "base:cheap-belt", "type": "Cheap Belt"},
     ]
     previous_rows = [
-        {"id": "base:cheap-ring", "best_native": {"amount": 0.4, "currency": "exalted"}},
-        {"id": "base:expensive-amulet", "best_native": {"amount": 4.0, "currency": "exalted"}},
-        {"id": "base:cheap-belt", "price_currency_groups": [{"currency": "Exalted Orb", "low_amount": 0.8}]},
+        {"id": "base:cheap-ring", "low": 9.9},
+        {"id": "base:boundary-amulet", "low": 10.0},
+        {"id": "base:cheap-belt", "low": 1.0},
     ]
-    low_priority_keys = trade2._item_base_market_low_priority_base_keys(previous_rows, target="exalted")
+    low_priority_keys = trade2._item_base_market_low_priority_base_keys(previous_rows)
 
-    deprioritized_picks: list[set[str]] = []
+    selected_names = []
     for _ in range(4):
         selected, _start, next_position, _priority_count, _normal_count = trade2._item_base_market_scan_batch(
             bases,
@@ -1670,16 +1694,14 @@ def test_item_base_market_scan_rotates_deprioritized_bases_across_cycles(monkeyp
             deprioritized_keys=low_priority_keys,
         )
         trade2._advance_item_base_market_scan_cursor(cursor_key, next_position)
-        picked = {base["type"] for base in selected}
-        deprioritized_picks.append(picked & {"Cheap Ring", "Cheap Belt"})
+        selected_names.append({base["type"] for base in selected})
 
-    # Каждая дешёвая основа должна повторно попадать в обход (ротация), а не выбираться
-    # один раз с последующим застреванием на другой. Поэтому проверяем, что обе основы
-    # выбраны минимум дважды за 4 цикла — это отличает ротацию от фиксации курсора.
-    ring_hits = sum("Cheap Ring" in picks for picks in deprioritized_picks)
-    belt_hits = sum("Cheap Belt" in picks for picks in deprioritized_picks)
-    assert ring_hits >= 2, deprioritized_picks
-    assert belt_hits >= 2, deprioritized_picks
+    assert selected_names == [
+        {"Unknown Boots", "Boundary Amulet"},
+        {"Unknown Boots", "Boundary Amulet"},
+        {"Unknown Boots", "Boundary Amulet"},
+        {"Unknown Boots", "Boundary Amulet"},
+    ]
 
 
 def test_item_base_market_scan_uses_larger_batch_for_meta_priority_bases(monkeypatch):
@@ -1880,7 +1902,7 @@ def test_item_base_market_background_job_collects_limited_exact_sample(monkeypat
         limit=40,
         sample_limit=100,
     )
-    trade2.ITEM_BASE_MARKET_CACHE[("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)] = {
+    trade2.ITEM_BASE_MARKET_CACHE[("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)] = {
         "created_ts": 9999999999,
         "data": {"source": "trade2/search+fetch:overview", "rows": [{"id": "base:other", "text": "Other"}]},
     }
@@ -2078,7 +2100,7 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
 def test_item_base_market_refresh_restarts_stale_running_job():
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     now = time.time()
-    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", None, 100)
+    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", 82, 100)
     stale_job = {
         "id": "old",
         "status": "running",
@@ -2364,7 +2386,7 @@ def test_item_base_market_zero_limit_returns_all_visible_rows(monkeypatch):
 def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     native_group = [{"currency": "exalted", "count": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS, "low_amount": 4.0, "median_amount": 4.0, "low_target": 4.0, "median_target": 4.0}]
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
@@ -2374,6 +2396,7 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
                 {
                     "id": "base:cheap",
                     "text_ru": "Дешевая основа",
+                    "min_ilvl": 78,
                     "low": 4.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                     "price_currency_groups": native_group,
@@ -2381,6 +2404,7 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
                 {
                     "id": "base:expensive",
                     "text_ru": "Дорогая основа",
+                    "min_ilvl": 78,
                     "low": 12.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                     "price_currency_groups": [
@@ -2394,7 +2418,7 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
                         }
                     ],
                 },
-                {"id": "base:empty", "text_ru": "Пустая основа"},
+                {"id": "base:empty", "text_ru": "Пустая основа", "min_ilvl": 78},
             ],
         },
     }
@@ -2423,7 +2447,7 @@ def test_item_base_market_price_filter_uses_target_prices(monkeypatch):
 def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
         "data": {
@@ -2432,6 +2456,7 @@ def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
                 {
                     "id": "base:below",
                     "text_ru": "Ниже порога",
+                    "min_ilvl": 78,
                     "low": 9.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                     "price_currency_groups": [
@@ -2448,6 +2473,7 @@ def test_item_base_market_price_filter_converts_threshold_currency(monkeypatch):
                 {
                     "id": "base:above",
                     "text_ru": "Выше порога",
+                    "min_ilvl": 78,
                     "low": 15.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                     "price_currency_groups": [
@@ -2535,22 +2561,24 @@ def test_item_base_market_hides_empty_catalog_rows(monkeypatch):
 
 def test_item_base_market_hides_price_only_rows_without_lots(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
-    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
         "data": {
             "source": "trade2/search+fetch:catalog-scan",
             "rows": [
-                {"id": "base:ghost", "text_ru": "Пустая цена", "low": 12.0, "offers": 0},
+                {"id": "base:ghost", "text_ru": "Пустая цена", "min_ilvl": 78, "low": 12.0, "offers": 0},
                 {
                     "id": "base:thin",
                     "text_ru": "Тонкая цена",
+                    "min_ilvl": 78,
                     "low": 8.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS - 1,
                 },
                 {
                     "id": "base:confirmed",
                     "text_ru": "Подтвержденная цена",
+                    "min_ilvl": 78,
                     "low": 4.0,
                     "offers": trade2.ITEM_BASE_MARKET_MIN_GENERAL_LOTS,
                     "price_currency_groups": [
@@ -2696,7 +2724,7 @@ def test_item_base_market_blank_query_uses_catalog_matched_stored_overview_snaps
 
 def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
-    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
         "data": {
@@ -2705,6 +2733,7 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
                     "id": "base:pearl-ring",
                     "text": "Pearl Ring",
                     "text_ru": "Жемчужное кольцо",
+                    "min_ilvl": 78,
                     "low": 0.01,
                     "offers": 1,
                     "price_currency_groups": [{"currency": "exalted", "count": 1, "low_amount": 0.01, "median_amount": 0.01}],
@@ -2713,6 +2742,7 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
                     "id": "base:robe",
                     "text": "Silk Robe",
                     "text_ru": "Шелковая роба",
+                    "min_ilvl": 78,
                     "low": 2.0,
                     "offers": 1,
                     "price_currency_groups": [{"currency": "exalted", "count": 1, "low_amount": 2.0, "median_amount": 2.0}],
@@ -2740,7 +2770,7 @@ def test_item_base_market_text_filter_can_use_cached_overview(monkeypatch):
 def test_item_base_market_min_ilvl_filters_cached_sample_lots(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    default_cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    default_cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 82)
     trade2.ITEM_BASE_MARKET_CACHE[default_cache_key] = {
         "created_ts": 9999999999,
         "data": {
@@ -2859,7 +2889,7 @@ def test_item_base_market_min_ilvl_uses_matching_stored_snapshot(monkeypatch):
 def test_item_base_market_running_empty_job_falls_back_to_stored_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", None, 100)
+    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", 78, 100)
     trade2.ITEM_BASE_MARKET_JOBS[key] = {
         "id": "job",
         "status": "running",
@@ -2881,7 +2911,7 @@ def test_item_base_market_running_empty_job_falls_back_to_stored_snapshot(monkey
                     "best_native": {"amount": 1.0, "currency": "exalted", "price_target": 1.0},
                     "clean_count": 1,
                     "sample_lots": [
-                        {"id": "lot1", "item_level": 12, "price_amount": 1.0, "price_currency": "exalted", "price_target": 1.0}
+                        {"id": "lot1", "item_level": 82, "price_amount": 1.0, "price_currency": "exalted", "price_target": 1.0}
                     ],
                 }
             ],
@@ -2921,13 +2951,13 @@ def test_item_base_market_running_empty_job_falls_back_to_stored_snapshot(monkey
     assert result["stored"] is True
     assert result["refresh_job"]["status"] == "running"
     assert [row["id"] for row in result["rows"]] == ["base:amber-amulet"]
-    assert result["rows"][0]["min_ilvl"] == 1
+    assert result["rows"][0]["min_ilvl"] == 78
 
 
 def test_item_base_market_running_partial_job_falls_back_to_stored_snapshot(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
-    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", None, 100)
+    key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", 78, 100)
     now = time.time()
     trade2.ITEM_BASE_MARKET_JOBS[key] = {
         "id": "job",
@@ -2955,7 +2985,7 @@ def test_item_base_market_running_partial_job_falls_back_to_stored_snapshot(monk
             "refresh_job": {"status": "rate_limited"},
         },
     }
-    cache_key = ("PoE2 - Test", "exalted", "securable", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "securable", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": now,
         "data": trade2.ITEM_BASE_MARKET_JOBS[key]["result"],
@@ -2968,8 +2998,8 @@ def test_item_base_market_running_partial_job_falls_back_to_stored_snapshot(monk
                 "created_ts": 30.0,
                 "source": "trade2/search+fetch:rough",
                 "rows": [
-                    {"id": "base:amber-amulet", "best": 2.0, "offers": 2, "volume": 2},
-                    {"id": "base:pearl-ring", "best": 3.0, "offers": 3, "volume": 3},
+                    {"id": "base:amber-amulet", "best": 2.0, "offers": 2, "volume": 2, "min_ilvl": 78},
+                    {"id": "base:pearl-ring", "best": 3.0, "offers": 3, "volume": 3, "min_ilvl": 78},
                 ],
             }
         ]
@@ -3017,7 +3047,7 @@ def test_item_base_market_running_partial_job_falls_back_to_stored_snapshot(monk
 
 def test_item_base_market_ignores_error_only_cache_and_hides_stored_price_only_rows(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
-    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None)
+    cache_key = ("PoE2 - Test", "exalted", "any", "", trade2.ITEM_BASE_MARKET_MAX_BASES, 78)
     trade2.ITEM_BASE_MARKET_CACHE[cache_key] = {
         "created_ts": 9999999999,
         "data": {
