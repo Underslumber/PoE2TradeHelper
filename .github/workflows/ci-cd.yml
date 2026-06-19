@@ -52,9 +52,14 @@ jobs:
         run: python -m compileall mcp_server.py app
 
       - name: Run unit tests
-        run: python -m pytest -q
+        id: unit_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest -q 2>&1 | tee pytest.log
 
       - name: Upload prepared source files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: item-base-monitoring-source
@@ -65,7 +70,12 @@ jobs:
             AGENTS.md
             app/version.py
             tests/test_version.py
+            pytest.log
           if-no-files-found: error
+
+      - name: Propagate unit test failure
+        if: steps.unit_tests.outcome == 'failure'
+        run: exit 1
 
   deploy:
     name: Деплой на сервер
