@@ -97,6 +97,22 @@ text = replace_in_test(
 )
 path.write_text(text, encoding="utf-8")
 
+path = ROOT / "tests/test_trade_routes.py"
+text = path.read_text(encoding="utf-8")
+text = replace_in_test(
+    text,
+    "test_item_base_market_refresh_starts_background_job",
+    'assert kwargs["min_ilvl"] is None',
+    'assert kwargs["min_ilvl"] == 82',
+)
+text = replace_in_test(
+    text,
+    "test_item_base_market_blank_refresh_starts_background_scan",
+    'assert kwargs["min_ilvl"] is None',
+    'assert kwargs["min_ilvl"] == 82',
+)
+path.write_text(text, encoding="utf-8")
+
 path = ROOT / "app/web/routes.py"
 text = path.read_text(encoding="utf-8")
 text = replace_once(
