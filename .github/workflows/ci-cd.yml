@@ -36,6 +36,7 @@ jobs:
           git show 522f7887329724182c6a2311485300923a079433:.github/workflows/apply-item-base-monitoring-floor.yml > /tmp/item-base-workflow.yml
           awk '/python - <<'"'"'PY'"'"'/{flag=1;next}/^          PY$/{flag=0}flag{sub(/^          /,""); print}' /tmp/item-base-workflow.yml > /tmp/apply_item_base_floor.py
           python /tmp/apply_item_base_floor.py
+          python scripts/finalize_item_base_monitoring.py
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -65,6 +66,7 @@ jobs:
           name: item-base-monitoring-source
           path: |
             app/trade2.py
+            app/web/routes.py
             tests/test_trade2.py
             README.md
             AGENTS.md
