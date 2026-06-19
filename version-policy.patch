@@ -1,0 +1,12 @@
+diff --git a/app/version.py b/app/version.py
+--- a/app/version.py
++++ b/app/version.py
+@@ -3 +3 @@
+-APP_VERSION = "0.2.109"
++APP_VERSION = "0.2.110"
+diff --git a/tests/test_version.py b/tests/test_version.py
+--- a/tests/test_version.py
++++ b/tests/test_version.py
+@@ -12 +12 @@
+-    assert APP_VERSION == "0.2.109"
++    assert APP_VERSION == "0.2.110"
