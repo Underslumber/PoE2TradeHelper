@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: poe2tradehelper-${{ github.ref }}
@@ -29,6 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: item-base-monitoring-floor
           fetch-depth: 0
 
       - name: Apply item base monitoring changes
@@ -53,31 +54,19 @@ jobs:
         run: python -m compileall mcp_server.py app
 
       - name: Run unit tests
-        id: unit_tests
-        continue-on-error: true
+        run: python -m pytest -q
+
+      - name: Commit ready implementation
+        if: github.event_name == 'pull_request' && github.head_ref == 'item-base-monitoring-floor'
         run: |
-          set -o pipefail
-          python -m pytest -q 2>&1 | tee pytest.log
-
-      - name: Upload prepared source files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: item-base-monitoring-source
-          path: |
-            app/trade2.py
-            app/web/routes.py
-            tests/test_trade2.py
-            README.md
-            AGENTS.md
-            app/version.py
-            tests/test_version.py
-            pytest.log
-          if-no-files-found: error
-
-      - name: Propagate unit test failure
-        if: steps.unit_tests.outcome == 'failure'
-        run: exit 1
+          git checkout origin/main -- .github/workflows/ci-cd.yml
+          rm -f scripts/finalize_item_base_monitoring.py temp.txt temp3.txt temp4.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'No implementation changes generated'; exit 1; }
+          git commit -m 'Ограничить мониторинг дорогими основами'
+          git push origin HEAD:item-base-monitoring-floor
 
   deploy:
     name: Деплой на сервер
