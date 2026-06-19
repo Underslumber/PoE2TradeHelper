@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - item-base-monitoring-floor
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.head_ref == 'item-base-monitoring-floor'
     runs-on: ubuntu-24.04
     env:
       USER_AGENT: poe2-trade-helper-ci/0.1 (contact: github-actions)
