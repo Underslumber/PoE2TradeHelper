@@ -1,1 +1,1 @@
-Use this PR only as a task container. Implement the requirements from `notes/codex-item-base-task.md` directly in source files, remove all temporary notes/patch/workflow artifacts, run compileall and pytest, then push the final implementation commit to this branch.
+This PR is not ready. It must be replaced by direct source-code changes or closed.
