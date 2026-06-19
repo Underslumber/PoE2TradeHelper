@@ -1,0 +1,17 @@
+name: Apply item base policy
+
+on:
+  push:
+    branches:
+      - codex/item-base-refresh-policy
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверить ветку
+        run: echo "item base policy branch ready"
