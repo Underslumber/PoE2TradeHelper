@@ -237,7 +237,7 @@ def test_item_base_market_refresh_starts_background_job(monkeypatch) -> None:
         calls["start"] += 1
         assert kwargs["q"] == "Амулет с янтарём"
         assert kwargs["status"] == "securable"
-        assert kwargs["min_ilvl"] is None
+        assert kwargs["min_ilvl"] == 82
         assert kwargs["sample_limit"] == 100
         return {"status": "queued"}, noop_job()
 
@@ -287,7 +287,7 @@ def test_item_base_market_blank_refresh_starts_background_scan(monkeypatch) -> N
         calls["start"] += 1
         assert kwargs["q"] == ""
         assert kwargs["status"] == "securable"
-        assert kwargs["min_ilvl"] is None
+        assert kwargs["min_ilvl"] == 82
         assert kwargs["sample_limit"] == 100
         return {"status": "queued"}, noop_job()
 
