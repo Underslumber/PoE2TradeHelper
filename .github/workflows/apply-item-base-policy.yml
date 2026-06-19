@@ -1,10 +1,23 @@
-name: Item base policy placeholder
+name: Apply item base policy
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - codex/item-base-refresh-policy
+
+permissions:
+  contents: write
 
 jobs:
-  noop:
+  apply:
     runs-on: ubuntu-24.04
+    env:
+      USER_AGENT: poe2-trade-helper-ci/0.1 (contact: github-actions)
+      MARKET_SNAPSHOT_ENABLED: false
+      FUNPAY_RUB_SNAPSHOT_ENABLED: false
     steps:
-      - run: echo "This placeholder is removed by the implementation commit."
+      - uses: actions/checkout@v4
+      - name: Prepare
+        run: |
+          echo "Workflow placeholder. Do not merge until source files are changed."
+          exit 1
