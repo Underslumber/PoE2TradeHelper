@@ -28,6 +28,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply item base monitoring changes
+        run: |
+          git show 522f7887329724182c6a2311485300923a079433:.github/workflows/apply-item-base-monitoring-floor.yml > /tmp/item-base-workflow.yml
+          awk '/python - <<'"'"'PY'"'"'/{flag=1;next}/^          PY$/{flag=0}flag{sub(/^          /,""); print}' /tmp/item-base-workflow.yml > /tmp/apply_item_base_floor.py
+          python /tmp/apply_item_base_floor.py
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -45,6 +53,19 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest -q
+
+      - name: Upload prepared source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: item-base-monitoring-source
+          path: |
+            app/trade2.py
+            tests/test_trade2.py
+            README.md
+            AGENTS.md
+            app/version.py
+            tests/test_version.py
+          if-no-files-found: error
 
   deploy:
     name: Деплой на сервер
