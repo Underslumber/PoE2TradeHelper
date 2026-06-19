@@ -1,8 +1,201 @@
-diff --git a/app/version.py b/app/version.py
---- a/app/version.py
-+++ b/app/version.py
-@@ -1,3 +1,3 @@
- from __future__ import annotations
+diff --git a/app/trade2.py b/app/trade2.py
+--- a/app/trade2.py
++++ b/app/trade2.py
+@@ -99,5 +99,6 @@
+ ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
+ ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE = 60
+ ITEM_BASE_MARKET_FAST_SCAN_MAX_PRIORITY = 150
+-ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED = 1.0
++ITEM_BASE_MARKET_MIN_ILVL = 78
++ITEM_BASE_MARKET_REFRESH_MIN_EXALTED = 10.0
+ MARKET_LISTING_MAX_AGE_DAYS = 14
+@@ -1546,7 +1546,14 @@
++def _item_base_market_min_ilvl(value: int | None = None) -> int:
++    if isinstance(value, int) and value > 0:
++        return max(ITEM_BASE_MARKET_MIN_ILVL, value)
++    return ITEM_BASE_MARKET_MIN_ILVL
++
++
+ def _item_base_market_query(base_type: str, status: str, min_ilvl: int | None = None) -> dict[str, Any]:
+-    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
+-    if min_ilvl is not None and min_ilvl > 0:
+-        type_filters["ilvl"] = {"min": min_ilvl}
++    type_filters: dict[str, Any] = {
++        "rarity": {"option": "normal"},
++        "ilvl": {"min": _item_base_market_min_ilvl(min_ilvl)},
++    }
+     filters = _priced_trade_filters()
+     filters["type_filters"] = {"filters": type_filters}
+     return {
+@@ -1558,9 +1565,10 @@
  
--APP_VERSION = "0.2.109"
-+APP_VERSION = "0.2.110"
+ 
+ def _item_base_market_overview_query(status: str, min_ilvl: int | None = None) -> dict[str, Any]:
+-    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
+-    if min_ilvl is not None and min_ilvl > 0:
+-        type_filters["ilvl"] = {"min": min_ilvl}
++    type_filters: dict[str, Any] = {
++        "rarity": {"option": "normal"},
++        "ilvl": {"min": _item_base_market_min_ilvl(min_ilvl)},
++    }
+     filters = _priced_trade_filters()
+     filters["type_filters"] = {"filters": type_filters}
+     return {
+@@ -2050,7 +2050,7 @@
+         [
+             row
+             for row in previous_rows
+-            if (_item_base_market_row_exalted_price(row, target=target) or 0.0) >= ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
++            if (_item_base_market_row_exalted_price(row, target=target) or 0.0) >= ITEM_BASE_MARKET_REFRESH_MIN_EXALTED
+         ],
+         key=lambda row: _item_base_market_row_exalted_price(row, target=target) or 0.0,
+         reverse=True,
+@@ -2059,7 +2059,8 @@
+         [
+             row
+             for row in previous_rows
+-            if _item_base_market_row_has_high_demand(row) and not _item_base_market_row_is_low_price(row, target=target)
++            if _item_base_market_row_has_high_demand(row)
++            and not _item_base_market_row_is_below_refresh_threshold(row, target=target)
+         ],
+         key=lambda row: (_to_int(row.get("recent_listing_count")) or 0, _to_int(row.get("clean_count")) or 0),
+         reverse=True,
+@@ -2068,7 +2069,8 @@
+         [
+             row
+             for row in previous_rows
+-            if _item_base_market_row_has_weak_activity(row) and not _item_base_market_row_is_low_price(row, target=target)
++            if _item_base_market_row_has_weak_activity(row)
++            and not _item_base_market_row_is_below_refresh_threshold(row, target=target)
+         ],
+         key=lambda row: (_to_int(row.get("stale_count")) or 0, _to_int(row.get("weak_activity_observed_count")) or 0),
+         reverse=True,
+@@ -2130,14 +2130,17 @@
+-def _item_base_market_row_is_low_price(row: dict[str, Any], target: str = "exalted") -> bool:
++def _item_base_market_row_is_below_refresh_threshold(
++    row: dict[str, Any],
++    target: str = "exalted",
++) -> bool:
+     price = _item_base_market_row_exalted_price(row, target=target)
+-    return price is not None and price < ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
++    return price is not None and price < ITEM_BASE_MARKET_REFRESH_MIN_EXALTED
+ 
+ 
+-def _item_base_market_low_priority_base_keys(
++def _item_base_market_below_refresh_threshold_base_keys(
+     previous_rows: list[dict[str, Any]],
+     target: str = "exalted",
+ ) -> set[str]:
+     keys: set[str] = set()
+     for row in previous_rows:
+-        if _item_base_market_row_is_low_price(row, target=target):
++        if _item_base_market_row_is_below_refresh_threshold(row, target=target):
+             keys.update(_base_market_keys(row))
+     return keys
+@@ -2428,7 +2428,7 @@
+     bases: list[dict[str, Any]],
+     cursor_key: tuple[Any, ...],
+     priority_bases: list[dict[str, Any]] | None = None,
+-    deprioritized_keys: set[str] | None = None,
++    skipped_keys: set[str] | None = None,
+ ) -> tuple[list[dict[str, Any]], int, int, int, int]:
+     if not bases:
+         return [], 0, 0, 0, 0
+@@ -2439,7 +2439,7 @@
+         start,
+         batch_size,
+         priority_bases,
+-        deprioritized_keys=deprioritized_keys,
++        skipped_keys=skipped_keys,
+     )
+ 
+ 
+@@ -2463,7 +2463,7 @@
+     start: int,
+     batch_size: int,
+     priority_bases: list[dict[str, Any]] | None = None,
+-    deprioritized_keys: set[str] | None = None,
++    skipped_keys: set[str] | None = None,
+ ) -> tuple[list[dict[str, Any]], int, int, int, int]:
+     priority_selected: list[dict[str, Any]] = []
+     priority_keys: set[str] = set()
+@@ -2480,12 +2480,11 @@
+     normal_selected: list[dict[str, Any]] = []
+     normal_keys: set[str] = set()
+     next_position = start
+-    deprioritized_keys = deprioritized_keys or set()
++    skipped_keys = skipped_keys or set()
+ 
+-    # Курсор указывает на позицию после последней выбранной основы (в т.ч. из прохода
+-    # deprioritized). Это намеренно: второй проход сдвигает курсор к следующей дешёвой
+-    # основе, обеспечивая round-robin-ротацию deprioritized-основ между циклами сбора.
+-    def select_normal(*, allow_deprioritized: bool) -> None:
++    # Уже оценённые основы дешевле порога полностью исключаются из повторных циклов.
++    # Основы без сохранённой цены остаются в обходе, пока первичный сбор не даст оценку.
++    def select_normal() -> None:
+         nonlocal next_position
+         if remaining <= 0 or len(normal_selected) >= remaining:
+             return
+@@ -2496,15 +2495,12 @@
+             position = (position + 1) % len(bases)
+             examined += 1
+             keys = _base_market_base_keys(base)
+-            if keys & priority_keys or keys & normal_keys:
+-                continue
+-            if not allow_deprioritized and keys & deprioritized_keys:
++            if keys & priority_keys or keys & normal_keys or keys & skipped_keys:
+                 continue
+             normal_selected.append(base)
+             normal_keys.update(keys)
+             next_position = position
+ 
+-    select_normal(allow_deprioritized=False)
+-    select_normal(allow_deprioritized=True)
++    select_normal()
+     selected = [*priority_selected, *normal_selected]
+     return selected, start, next_position, len(priority_selected), len(normal_selected)
+@@ -2620,4 +2620,4 @@
+         row_min_ilvl = _to_int(row.get("min_ilvl"))
+-        if row_min_ilvl is not None and row_min_ilvl < min_ilvl:
++        if row_min_ilvl is None or row_min_ilvl < min_ilvl:
+             continue
+-        matching_rows.append({**row, "min_ilvl": min_ilvl})
++        matching_rows.append(row)
+@@ -3084,3 +3084,4 @@
+     q = q.strip()
++    min_ilvl = _item_base_market_min_ilvl(min_ilvl)
+     limit = _bounded_item_base_market_limit(limit)
+     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+@@ -3135,4 +3135,7 @@
+                     stored_source=latest_source,
+                 )
+ 
++    if previous_rows:
++        previous_rows = _item_base_market_rows_matching_min_ilvl(previous_rows, min_ilvl)
++
+     priority_recheck_count = 0
+@@ -3158,8 +3158,8 @@
+         priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows, target=target)
+-        deprioritized_keys = _item_base_market_low_priority_base_keys(previous_rows, target=target)
++        skipped_keys = _item_base_market_below_refresh_threshold_base_keys(previous_rows, target=target)
+         selected_bases, scan_start, scan_next, priority_recheck_count, normal_scan_count = _item_base_market_scan_batch(
+             scan_bases,
+             scan_cursor_key,
+             priority_bases=priority_bases,
+-            deprioritized_keys=deprioritized_keys,
++            skipped_keys=skipped_keys,
+         )
+@@ -3370,4 +3370,4 @@
+     q = q.strip()
+     limit = _bounded_item_base_market_limit(limit)
+-    collection_min_ilvl = None
++    collection_min_ilvl = _item_base_market_min_ilvl(min_ilvl)
+     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
+@@ -3427,5 +3427,5 @@
+     q = q.strip()
+     limit = _bounded_item_base_market_limit(limit)
+-    display_min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
+-    collection_min_ilvl = None
++    display_min_ilvl = _item_base_market_min_ilvl(min_ilvl)
++    collection_min_ilvl = display_min_ilvl
+     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
