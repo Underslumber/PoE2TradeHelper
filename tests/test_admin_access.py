@@ -94,6 +94,35 @@ def test_non_admin_cannot_list_users(client_and_session):
     assert response.json()["error_key"] == "accountErrorAdminRequired"
 
 
+def test_admin_can_send_wake_on_lan(client_and_session, monkeypatch):
+    client, SessionLocal = client_and_session
+    add_user(SessionLocal, "admin", is_admin=True)
+    login(client, "admin")
+    monkeypatch.setattr(
+        routes.wake_on_lan,
+        "send_magic_packet",
+        lambda: {"configured": True, "target_ip": "192.168.1.2", "sent": True, "packets_sent": 3},
+    )
+
+    response = client.post("/api/admin/wake-on-lan")
+
+    assert response.status_code == 200
+    assert response.json()["sent"] is True
+    assert response.json()["target_ip"] == "192.168.1.2"
+
+
+def test_non_admin_cannot_send_wake_on_lan(client_and_session, monkeypatch):
+    client, SessionLocal = client_and_session
+    add_user(SessionLocal, "trader")
+    login(client, "trader")
+    monkeypatch.setattr(routes.wake_on_lan, "send_magic_packet", lambda: pytest.fail("must not send"))
+
+    response = client.post("/api/admin/wake-on-lan")
+
+    assert response.status_code == 403
+    assert response.json()["error_key"] == "accountErrorAdminRequired"
+
+
 def test_admin_cannot_remove_own_admin_access(client_and_session):
     client, SessionLocal = client_and_session
     admin = add_user(SessionLocal, "admin", is_admin=True)

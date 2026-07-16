@@ -91,6 +91,7 @@ from app.trade2 import (
     start_item_base_market_refresh_job,
 )
 from app.version import APP_VERSION
+from app import wake_on_lan
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
@@ -1209,6 +1210,25 @@ def api_admin_metrics(request: Request, db: Session = Depends(get_db)):
     if isinstance(admin, JSONResponse):
         return admin
     return _admin_metrics_payload(db)
+
+
+@router.get("/api/admin/wake-on-lan")
+def api_admin_wake_on_lan_status(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    if isinstance(admin, JSONResponse):
+        return admin
+    return wake_on_lan.status()
+
+
+@router.post("/api/admin/wake-on-lan")
+def api_admin_wake_on_lan_send(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        return wake_on_lan.send_magic_packet()
+    except wake_on_lan.WakeOnLanError as exc:
+        return account_api_error(str(exc), status_code=400, key="wakeOnLanError")
 
 
 @router.patch("/api/admin/users/{user_id}/permissions")

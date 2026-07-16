@@ -423,6 +423,17 @@
       <section class="admin-users-panel">
         <div class="cabinet-section-head">
           <div>
+            <h3 data-i18n="wakeOnLanTitle">Включение компьютера</h3>
+            <p class="panel-hint" data-i18n="wakeOnLanHint">Отправляет магический пакет компьютеру в домашней сети.</p>
+          </div>
+          <button id="wake-on-lan-button" class="btn btn-primary btn-sm" type="button" data-i18n="wakeOnLanButton">Разбудить компьютер</button>
+        </div>
+        <div id="wake-on-lan-target" class="text-secondary"></div>
+        <div id="wake-on-lan-status" class="muted-status"></div>
+      </section>
+      <section class="admin-users-panel">
+        <div class="cabinet-section-head">
+          <div>
             <h3 data-i18n="adminUsersTitle">Учетные записи</h3>
             <p class="panel-hint" data-i18n="adminUsersHint">Права сохраняются в локальной базе SQLite.</p>
           </div>
