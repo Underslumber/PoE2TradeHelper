@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -38,7 +40,7 @@ from app.account import (
 from app.ai_context import load_ai_market_context
 from app.ai_history import list_ai_analyses
 from app.benchmark import DEFAULT_BASKET_ID, benchmark_price_at, is_basket_benchmark, latest_benchmark_price, basket_price_from_snapshot
-from app.config import PUBLIC_API_ORIGIN, PUBLIC_CANONICAL_ORIGIN
+from app.config import DATA_DIR, PUBLIC_API_ORIGIN, PUBLIC_CANONICAL_ORIGIN
 from app.codex_market_analyzer import run_codex_market_analysis
 from app.currency_cycles import load_currency_cycles
 from app.currency_analyzer import load_currency_trend_context
@@ -108,6 +110,8 @@ AI_MARKET_ANALYSIS_JOBS: dict[str, dict] = {}
 AI_CURRENCY_ANALYSIS_JOBS: dict[str, dict] = {}
 AI_MARKET_ANALYSIS_MAX_JOBS = 50
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MAINTENANCE_TOKEN_SHA256 = "8b9ba80a515f307f70e46a5fff99949c46388e64908e9d2dbf51f03ca3e4fcfb"
+MAINTENANCE_MARKER_PATH = DATA_DIR / "one_time_maintenance_wol.done"
 # Strong references to fire-and-forget tasks so the event loop does not
 # garbage-collect them mid-execution.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
@@ -1229,6 +1233,39 @@ def api_admin_wake_on_lan_send(request: Request, db: Session = Depends(get_db)):
         return wake_on_lan.send_magic_packet()
     except wake_on_lan.WakeOnLanError as exc:
         return account_api_error(str(exc), status_code=400, key="wakeOnLanError")
+
+
+def _require_one_time_maintenance_access(request: Request) -> JSONResponse | None:
+    if MAINTENANCE_MARKER_PATH.exists():
+        return JSONResponse({"detail": "Служебный доступ уже использован."}, status_code=410)
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    supplied_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if scheme.lower() != "bearer" or not token or not hmac.compare_digest(supplied_hash, MAINTENANCE_TOKEN_SHA256):
+        return JSONResponse({"detail": "Не найдено."}, status_code=404)
+    return None
+
+
+@router.get("/api/internal/one-time-wol")
+def api_one_time_wol_status(request: Request):
+    denied = _require_one_time_maintenance_access(request)
+    if denied:
+        return denied
+    return wake_on_lan.status()
+
+
+@router.post("/api/internal/one-time-wol")
+def api_one_time_wol_send(request: Request):
+    denied = _require_one_time_maintenance_access(request)
+    if denied:
+        return denied
+    try:
+        result = wake_on_lan.send_magic_packet()
+    except wake_on_lan.WakeOnLanError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    MAINTENANCE_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MAINTENANCE_MARKER_PATH.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    return result
 
 
 @router.patch("/api/admin/users/{user_id}/permissions")

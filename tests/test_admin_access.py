@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -121,6 +123,37 @@ def test_non_admin_cannot_send_wake_on_lan(client_and_session, monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["error_key"] == "accountErrorAdminRequired"
+
+
+def test_one_time_wol_requires_token(client_and_session, monkeypatch, tmp_path):
+    client, _SessionLocal = client_and_session
+    monkeypatch.setattr(routes, "MAINTENANCE_MARKER_PATH", tmp_path / "used.done")
+
+    response = client.get("/api/internal/one-time-wol")
+
+    assert response.status_code == 404
+
+
+def test_one_time_wol_sends_and_revokes_access(client_and_session, monkeypatch, tmp_path):
+    client, _SessionLocal = client_and_session
+    token = "test-one-time-token"
+    marker = tmp_path / "used.done"
+    monkeypatch.setattr(routes, "MAINTENANCE_TOKEN_SHA256", hashlib.sha256(token.encode()).hexdigest())
+    monkeypatch.setattr(routes, "MAINTENANCE_MARKER_PATH", marker)
+    monkeypatch.setattr(
+        routes.wake_on_lan,
+        "send_magic_packet",
+        lambda: {"configured": True, "target_ip": "192.168.1.2", "sent": True, "packets_sent": 3},
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post("/api/internal/one-time-wol", headers=headers)
+    repeated = client.post("/api/internal/one-time-wol", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["sent"] is True
+    assert marker.exists()
+    assert repeated.status_code == 410
 
 
 def test_admin_cannot_remove_own_admin_access(client_and_session):
