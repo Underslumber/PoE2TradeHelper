@@ -209,7 +209,6 @@ const state = {
     notifications: [],
     adminUsers: [],
     adminMetrics: null,
-    adminWakeOnLan: null,
     telegramConfigured: false,
     targetCurrency: localStorage.getItem('poe2-account-target') || 'exalted',
     benchmarkCurrency: localStorage.getItem('poe2-account-benchmark') || 'divine',
@@ -694,13 +693,9 @@ async function loadAccountCollections() {
     fetchAccountJson('/api/account/notifications'),
   ]);
   const adminRequests = state.account.user?.is_admin
-    ? Promise.all([
-        fetchAccountJson('/api/admin/users'),
-        fetchAccountJson('/api/admin/metrics'),
-        fetchAccountJson('/api/admin/wake-on-lan'),
-      ])
-    : Promise.resolve([null, null, null]);
-  const [[pinsData, tradesData, notificationsData], [adminData, metricsData, wakeOnLanData]] = await Promise.all([accountRequests, adminRequests]);
+    ? Promise.all([fetchAccountJson('/api/admin/users'), fetchAccountJson('/api/admin/metrics')])
+    : Promise.resolve([null, null]);
+  const [[pinsData, tradesData, notificationsData], [adminData, metricsData]] = await Promise.all([accountRequests, adminRequests]);
   state.account.pins = pinsData.pins || [];
   state.account.trades = tradesData.trades || [];
   state.account.tradeReport = tradesData.report || null;
@@ -709,11 +704,9 @@ async function loadAccountCollections() {
   if (adminData) {
     state.account.adminUsers = adminData.users || [];
     state.account.adminMetrics = metricsData || null;
-    state.account.adminWakeOnLan = wakeOnLanData || null;
   } else {
     state.account.adminUsers = [];
     state.account.adminMetrics = null;
-    state.account.adminWakeOnLan = null;
   }
 }
 
@@ -1255,7 +1248,6 @@ function bindAccountEvents() {
   byId('save-default-seller')?.addEventListener('click', saveDefaultSellerFromProfile);
   byId('save-lot-default-seller')?.addEventListener('click', saveDefaultSellerFromSearch);
   byId('refresh-rub-market')?.addEventListener('click', () => loadRubMarket({ refresh: true }));
-  byId('wake-on-lan-button')?.addEventListener('click', sendWakeOnLan);
   byId('cabinet-panel')?.addEventListener('click', event => {
     const tab = event.target.closest('[data-account-tab]');
     if (!tab) return;
@@ -1875,21 +1867,6 @@ function renderAdminPanel() {
   const isAdmin = Boolean(state.account.user?.is_admin);
   panel.classList.toggle('d-none', !isAdmin);
   renderAdminMetrics(isAdmin ? state.account.adminMetrics : null);
-  const wakeOnLan = isAdmin ? state.account.adminWakeOnLan : null;
-  const wakeButton = byId('wake-on-lan-button');
-  const wakeTarget = byId('wake-on-lan-target');
-  const wakeStatus = byId('wake-on-lan-status');
-  if (wakeButton) wakeButton.disabled = !wakeOnLan?.configured;
-  if (wakeTarget) {
-    wakeTarget.textContent = wakeOnLan
-      ? `${t('wakeOnLanTarget')}: ${wakeOnLan.target_ip || '-'} (${wakeOnLan.broadcast_address || '-'})`
-      : '';
-  }
-  if (wakeStatus && !wakeStatus.dataset.result) {
-    wakeStatus.textContent = wakeOnLan?.configured
-      ? t('wakeOnLanReady')
-      : (wakeOnLan?.configuration_error || t('wakeOnLanNotConfigured'));
-  }
   const list = byId('admin-users-list');
   if (!list) return;
   if (!isAdmin) {
@@ -1899,31 +1876,6 @@ function renderAdminPanel() {
   list.innerHTML = state.account.adminUsers.length
     ? state.account.adminUsers.map(renderAdminUserCard).join('')
     : `<p class="text-secondary">${t('adminUsersEmpty')}</p>`;
-}
-
-async function sendWakeOnLan() {
-  const button = byId('wake-on-lan-button');
-  const status = byId('wake-on-lan-status');
-  if (button) button.disabled = true;
-  if (status) {
-    status.dataset.result = 'pending';
-    status.textContent = t('wakeOnLanSending');
-  }
-  try {
-    const result = await sendAccountJson('/api/admin/wake-on-lan', {});
-    state.account.adminWakeOnLan = result;
-    if (status) {
-      status.dataset.result = 'success';
-      status.textContent = t('wakeOnLanSent');
-    }
-  } catch (error) {
-    if (status) {
-      status.dataset.result = 'error';
-      status.textContent = error.message || String(error);
-    }
-  } finally {
-    if (button) button.disabled = !state.account.adminWakeOnLan?.configured;
-  }
 }
 
 function renderAdminNavigation() {
