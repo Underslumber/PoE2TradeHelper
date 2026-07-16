@@ -40,9 +40,28 @@ def test_send_magic_packet(monkeypatch):
     assert fake_socket.sent[0][0] == bytes.fromhex("FF" * 6 + "AABBCCDDEEFF" * 16)
 
 
-def test_missing_mac_is_not_configured(monkeypatch):
+def test_missing_mac_is_not_configured(monkeypatch, tmp_path):
     monkeypatch.delenv("WOL_TARGET_MAC", raising=False)
+    monkeypatch.setenv("WOL_AUTO_DISCOVER", "false")
+    monkeypatch.setenv("WOL_MAC_CACHE_PATH", str(tmp_path / "mac.json"))
 
     assert wake_on_lan.status()["configured"] is False
-    with pytest.raises(wake_on_lan.WakeOnLanError, match="WOL_TARGET_MAC"):
+    with pytest.raises(wake_on_lan.WakeOnLanError, match="MAC-адрес"):
         wake_on_lan.send_magic_packet()
+
+
+def test_discovered_mac_is_cached(monkeypatch, tmp_path):
+    cache_path = tmp_path / "mac.json"
+    monkeypatch.delenv("WOL_TARGET_MAC", raising=False)
+    monkeypatch.setenv("WOL_AUTO_DISCOVER", "true")
+    monkeypatch.setenv("WOL_MAC_CACHE_PATH", str(cache_path))
+    monkeypatch.setattr(wake_on_lan, "_discover_neighbor_mac", lambda target_ip: "AA:BB:CC:DD:EE:FF")
+
+    discovered = wake_on_lan.status()
+    monkeypatch.setattr(wake_on_lan, "_discover_neighbor_mac", lambda target_ip: "")
+    cached = wake_on_lan.status()
+
+    assert discovered["configured"] is True
+    assert discovered["mac_source"] == "neighbor"
+    assert cached["configured"] is True
+    assert cached["mac_source"] == "cache"

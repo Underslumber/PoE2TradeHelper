@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,11 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from app.config import ICONS_DIR, PUBLIC_CANONICAL_ORIGIN, PUBLIC_REDIRECT_HOSTS
 from app.db.migrate import migrate
 from app.market_service import market_snapshot_service
+from app import wake_on_lan
 from app.web.routes import router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DISABLE_ALT_SVC_HEADER = "clear"
 NO_PORT_API_PREFIXES = ("/api/",)
+logger = logging.getLogger(__name__)
 
 
 def canonical_public_redirect_url(request: Request) -> str | None:
@@ -30,6 +34,11 @@ def canonical_public_redirect_url(request: Request) -> str | None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     migrate()
+    try:
+        wake_result = await asyncio.to_thread(wake_on_lan.send_once_on_startup)
+        logger.warning("Startup Wake-on-LAN result: %s", wake_result)
+    except wake_on_lan.WakeOnLanError as exc:
+        logger.warning("Startup Wake-on-LAN was not sent: %s", exc)
     await market_snapshot_service.start()
     try:
         yield
