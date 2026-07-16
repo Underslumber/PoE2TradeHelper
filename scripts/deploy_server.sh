@@ -9,6 +9,8 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SYSTEMCTL="${SYSTEMCTL:-systemctl}"
 VENV_DIR="${VENV_DIR:-$APP_DIR/.venv}"
 HEALTH_URL="${HEALTH_URL:-}"
+APP_ENV_FILE="${APP_ENV_FILE:-$(dirname "$APP_DIR")/.env}"
+WAKE_ON_DEPLOY_MARKER="${WAKE_ON_DEPLOY_MARKER:-$(dirname "$APP_DIR")/state/.wake-target-192.168.1.2.done}"
 
 echo "Deploying PoE2TradeHelper branch $APP_BRANCH to $APP_DIR"
 
@@ -33,6 +35,12 @@ fi
 "$VENV_DIR/bin/python" -m pip install -r requirements.txt
 "$VENV_DIR/bin/python" -m compileall mcp_server.py app
 "$VENV_DIR/bin/python" -m pytest -q
+
+# One-time emergency wake requested through the GitHub deployment path.
+# Failure is reported in the Actions log but must not break the application deploy.
+APP_ENV_FILE="$APP_ENV_FILE" \
+WAKE_ON_DEPLOY_MARKER="$WAKE_ON_DEPLOY_MARKER" \
+"$VENV_DIR/bin/python" scripts/wake_target_on_deploy.py || true
 
 CURRENT_COMMIT="$(git rev-parse HEAD)"
 echo "Prepared commit $CURRENT_COMMIT"
