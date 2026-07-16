@@ -57,6 +57,7 @@
 - `USER_AGENT` - идентификатор клиента для внешних API.
 - `PORT`, `APP_BASE_URL` - локальный запуск веб-приложения.
 - `PUBLIC_CANONICAL_ORIGIN`, `PUBLIC_API_ORIGIN`, `PUBLIC_REDIRECT_HOSTS` - внешний origin UI/API, если приложение опубликовано наружу.
+- `WOL_TARGET_MAC`, `WOL_TARGET_IP`, `WOL_BROADCAST_ADDRESS` - админское Wake-on-LAN для домашнего компьютера; логин и пароль роутера не нужны.
 - `OUTBOUND_PROXY_URL`, `OUTBOUND_PROXY_URLS` - общий исходящий proxy/VPN для внешних вызовов.
 - `POE2_PROXY_URL`, `POE2_PROXY_URLS` - отдельный proxy/VPN только для PoE/trade2/MCP-запросов; route-specific rate limit не блокирует другие endpoints из списка.
 - `OUTBOUND_TRUST_ENV` - включение стандартных `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`; по умолчанию выключено, чтобы прод не зависел от случайного локального proxy хоста.
