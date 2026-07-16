@@ -50,7 +50,7 @@ jobs:
     name: Деплой на сервер
     needs: checks
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.POE2_DEPLOY_ENABLED == 'true'
     environment: production
     concurrency:
       group: poe2tradehelper-production
