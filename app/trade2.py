@@ -101,7 +101,8 @@ ITEM_BASE_MARKET_SCAN_LIMIT = ITEM_BASE_CATALOG_LIMIT
 ITEM_BASE_MARKET_SCAN_BATCH_SIZE = 12
 ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE = 60
 ITEM_BASE_MARKET_FAST_SCAN_MAX_PRIORITY = 150
-ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED = 1.0
+ITEM_BASE_MARKET_MIN_ILVL = 78
+ITEM_BASE_MARKET_REFRESH_MIN_EXALTED = 10.0
 MARKET_LISTING_MAX_AGE_DAYS = 14
 MARKET_LISTING_MAX_AGE_SECONDS = MARKET_LISTING_MAX_AGE_DAYS * 24 * 60 * 60
 MARKET_LISTING_HIGH_DEMAND_AGE_SECONDS = 60 * 60
@@ -1545,10 +1546,17 @@ def _filter_item_bases(bases: list[dict[str, Any]], q: str) -> list[dict[str, An
     ]
 
 
+def _item_base_market_min_ilvl(value: int | None = None) -> int:
+    if isinstance(value, int) and value > 0:
+        return max(ITEM_BASE_MARKET_MIN_ILVL, value)
+    return ITEM_BASE_MARKET_MIN_ILVL
+
+
 def _item_base_market_query(base_type: str, status: str, min_ilvl: int | None = None) -> dict[str, Any]:
-    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
-    if min_ilvl is not None and min_ilvl > 0:
-        type_filters["ilvl"] = {"min": min_ilvl}
+    type_filters: dict[str, Any] = {
+        "rarity": {"option": "normal"},
+        "ilvl": {"min": _item_base_market_min_ilvl(min_ilvl)},
+    }
     filters = _priced_trade_filters()
     filters["type_filters"] = {"filters": type_filters}
     return {
@@ -1560,9 +1568,10 @@ def _item_base_market_query(base_type: str, status: str, min_ilvl: int | None = 
 
 
 def _item_base_market_overview_query(status: str, min_ilvl: int | None = None) -> dict[str, Any]:
-    type_filters: dict[str, Any] = {"rarity": {"option": "normal"}}
-    if min_ilvl is not None and min_ilvl > 0:
-        type_filters["ilvl"] = {"min": min_ilvl}
+    type_filters: dict[str, Any] = {
+        "rarity": {"option": "normal"},
+        "ilvl": {"min": _item_base_market_min_ilvl(min_ilvl)},
+    }
     filters = _priced_trade_filters()
     filters["type_filters"] = {"filters": type_filters}
     return {
@@ -2052,7 +2061,7 @@ def _item_base_market_priority_bases(
         [
             row
             for row in previous_rows
-            if (_item_base_market_row_exalted_price(row, target=target) or 0.0) >= ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
+            if (_item_base_market_row_exalted_price(row, target=target) or 0.0) >= ITEM_BASE_MARKET_REFRESH_MIN_EXALTED
         ],
         key=lambda row: _item_base_market_row_exalted_price(row, target=target) or 0.0,
         reverse=True,
@@ -2131,7 +2140,7 @@ def _item_base_market_row_exalted_price(row: dict[str, Any], target: str = "exal
 
 def _item_base_market_row_is_low_price(row: dict[str, Any], target: str = "exalted") -> bool:
     price = _item_base_market_row_exalted_price(row, target=target)
-    return price is not None and price < ITEM_BASE_MARKET_LOW_PRIORITY_MAX_EXALTED
+    return price is not None and price < ITEM_BASE_MARKET_REFRESH_MIN_EXALTED
 
 
 def _item_base_market_low_priority_base_keys(
@@ -2338,21 +2347,23 @@ def _merge_item_base_market_rows(
         market_row = next((market_by_key[key] for key in keys if key in market_by_key), None)
         if market_row:
             consumed.add(id(market_row))
-            merged.append(
-                {
-                    **base_row,
-                    **{key: value for key, value in market_row.items() if value not in (None, "", [])},
-                    "id": base_row.get("id") or market_row.get("id"),
-                    "text": base_row.get("text") or market_row.get("text"),
-                    "text_ru": base_row.get("text_ru") or market_row.get("text_ru"),
-                    "query_type": base_row.get("query_type") or market_row.get("query_type"),
-                    "category": base_row.get("category") or market_row.get("category"),
-                    "category_label": base_row.get("category_label") or market_row.get("category_label"),
-                    "category_label_ru": base_row.get("category_label_ru") or market_row.get("category_label_ru"),
-                    "icon_key": base_row.get("icon_key") or market_row.get("icon_key"),
-                    "image": market_row.get("image") or base_row.get("image"),
-                }
-            )
+            merged_row = {
+                **base_row,
+                **{key: value for key, value in market_row.items() if value not in (None, "", [])},
+                "id": base_row.get("id") or market_row.get("id"),
+                "text": base_row.get("text") or market_row.get("text"),
+                "text_ru": base_row.get("text_ru") or market_row.get("text_ru"),
+                "query_type": base_row.get("query_type") or market_row.get("query_type"),
+                "category": base_row.get("category") or market_row.get("category"),
+                "category_label": base_row.get("category_label") or market_row.get("category_label"),
+                "category_label_ru": base_row.get("category_label_ru") or market_row.get("category_label_ru"),
+                "icon_key": base_row.get("icon_key") or market_row.get("icon_key"),
+                "image": market_row.get("image") or base_row.get("image"),
+            }
+            if "min_ilvl" in market_row:
+                # An explicit unknown threshold must not be promoted by catalog metadata.
+                merged_row["min_ilvl"] = market_row["min_ilvl"]
+            merged.append(merged_row)
         else:
             merged.append(base_row)
 
@@ -2624,7 +2635,10 @@ def _item_base_market_scan_batch_from_priority(
     next_position = start
     deprioritized_keys = deprioritized_keys or set()
 
-    def select_normal(*, allow_deprioritized: bool) -> None:
+    # После первичной оценки основы дешевле порога исключаются из повторных
+    # фоновых запросов. Неоценённые основы не входят в deprioritized_keys и
+    # продолжают участвовать в обходе до получения первой цены.
+    def select_normal() -> None:
         nonlocal next_position
         if remaining <= 0 or len(normal_selected) >= remaining:
             return
@@ -2635,16 +2649,13 @@ def _item_base_market_scan_batch_from_priority(
             position = (position + 1) % len(bases)
             examined += 1
             keys = _base_market_base_keys(base)
-            if keys & priority_keys or keys & normal_keys:
-                continue
-            if not allow_deprioritized and keys & deprioritized_keys:
+            if keys & priority_keys or keys & normal_keys or keys & deprioritized_keys:
                 continue
             normal_selected.append(base)
             normal_keys.update(keys)
             next_position = position
 
-    select_normal(allow_deprioritized=False)
-    select_normal(allow_deprioritized=True)
+    select_normal()
     selected = [*priority_selected, *normal_selected]
     return selected, start, next_position, len(priority_selected), len(normal_selected)
 
@@ -2758,9 +2769,9 @@ def _item_base_market_rows_matching_min_ilvl(
             continue
 
         row_min_ilvl = _to_int(row.get("min_ilvl"))
-        if row_min_ilvl is not None and row_min_ilvl < min_ilvl:
+        if row_min_ilvl is None or row_min_ilvl < min_ilvl:
             continue
-        matching_rows.append({**row, "min_ilvl": min_ilvl})
+        matching_rows.append(row)
     return matching_rows
 
 
@@ -3226,6 +3237,7 @@ async def run_item_base_market_refresh_job(
     _owner_token: str | None = None,
 ) -> dict[str, Any]:
     q = q.strip()
+    min_ilvl = _item_base_market_min_ilvl(min_ilvl)
     limit = _bounded_item_base_market_limit(limit)
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
@@ -3291,6 +3303,9 @@ async def run_item_base_market_refresh_job(
                 )
                 if not _item_base_market_job_is_owner(key, job, owner_token):
                     return _cache_copy(job.get("result") or {})
+
+    if previous_rows:
+        previous_rows = _item_base_market_rows_matching_min_ilvl(previous_rows, min_ilvl)
 
     priority_recheck_count = 0
     normal_scan_count = 0
@@ -3641,7 +3656,7 @@ def start_item_base_market_refresh_job(
 ) -> tuple[dict[str, Any], Any | None]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
-    collection_min_ilvl = None
+    collection_min_ilvl = _item_base_market_min_ilvl(min_ilvl)
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     key = _item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit)
     now = time.time()
@@ -3729,8 +3744,8 @@ async def get_item_base_market(
 ) -> dict[str, Any]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
-    display_min_ilvl = min_ilvl if isinstance(min_ilvl, int) and min_ilvl > 0 else None
-    collection_min_ilvl = None
+    display_min_ilvl = _item_base_market_min_ilvl(min_ilvl)
+    collection_min_ilvl = display_min_ilvl
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     price_filter = await _item_base_market_price_filter(
         league=league,

@@ -249,6 +249,7 @@ def migrate_history(*, verbose: bool = True) -> None:
                         "status": status,
                         "source": source,
                         "item_id": item_id,
+                        "min_ilvl": _positive_int(row.get("min_ilvl")),
                         "price": price,
                         "volume": _positive_float(row.get("volume")),
                         "offers": _positive_int(row.get("offers")),

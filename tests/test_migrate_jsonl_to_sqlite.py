@@ -19,7 +19,7 @@ def test_migrate_history_is_idempotent_on_temp_sqlite(tmp_path, monkeypatch):
                 "status": "any",
                 "source": "poe.ninja",
                 "rows": [
-                    {"id": "chaos", "median": 4, "volume": 100, "offers": 0},
+                    {"id": "chaos", "median": 4, "volume": 100, "offers": 0, "min_ilvl": 78},
                     {"id": "divine", "best": 180, "volume": 20, "offers": 0},
                 ],
             }
@@ -44,4 +44,6 @@ def test_migrate_history_is_idempotent_on_temp_sqlite(tmp_path, monkeypatch):
         rows = {row.item_id: row for row in db.query(MarketHistory).all()}
         assert rows["chaos"].source == "poe.ninja"
         assert rows["chaos"].price == 4
+        assert rows["chaos"].min_ilvl == 78
         assert rows["divine"].price == 180
+        assert rows["divine"].min_ilvl is None

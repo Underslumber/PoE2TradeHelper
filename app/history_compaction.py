@@ -92,6 +92,10 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
     clean_count = _weighted_int(records, "clean_count")
     stale_count = _weighted_int(records, "stale_count")
     recent_listing_count = _weighted_int(records, "recent_listing_count")
+    min_ilvls = [getattr(record, "min_ilvl", None) for record in records]
+    min_ilvl = None
+    if min_ilvls and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in min_ilvls):
+        min_ilvl = min(min_ilvls)
     return MarketHistory(
         league=first.league,
         category=first.category,
@@ -99,6 +103,7 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
         status=first.status or "any",
         source=latest.source,
         item_id=first.item_id,
+        min_ilvl=min_ilvl,
         price=price if price is not None else latest.price,
         volume=volume,
         offers=round(offers) if offers is not None else None,

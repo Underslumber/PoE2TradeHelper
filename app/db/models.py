@@ -173,6 +173,7 @@ class MarketHistory(Base):
     status = Column(String, nullable=False, default="any", index=True)
     source = Column(String)
     item_id = Column(String, nullable=False, index=True)
+    min_ilvl = Column(Integer)
     price = Column(Float, nullable=False)
     volume = Column(Float)
     offers = Column(Integer)

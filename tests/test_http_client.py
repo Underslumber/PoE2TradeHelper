@@ -269,6 +269,40 @@ def test_outbound_httpx_client_can_failover_on_route_rate_limit(monkeypatch):
     assert status["urls"][0]["cooldown_seconds"] > 0
 
 
+def test_outbound_httpx_client_keeps_rate_limit_cooldown_when_cannot_failover(monkeypatch):
+    calls = []
+
+    class RateLimitAsyncClient:
+        def __init__(self, **kwargs):
+            self.proxy = kwargs.get("proxy")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            calls.append(("get", self.proxy, url))
+            return httpx.Response(429, headers={"Retry-After": "30"})
+
+    async def use_client():
+        async with outbound_httpx_client(timeout=30, failover_on_rate_limit=True) as client:
+            return await client.get("https://example.test/data")
+
+    # Один прокси: переключиться некуда, но rate-limit cooldown должен сохраниться,
+    # а прокси не должен помечаться успешным.
+    monkeypatch.setenv("OUTBOUND_PROXY_URLS", "http://127.0.0.1:7920")
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", RateLimitAsyncClient)
+
+    response = asyncio.run(use_client())
+    status = outbound_proxy_status()
+
+    assert response.status_code == 429
+    assert calls == [("get", "http://127.0.0.1:7920", "https://example.test/data")]
+    assert status["urls"][0]["cooldown_seconds"] > 0
+
+
 def test_outbound_httpx_client_retries_body_marker_response_on_next_proxy(monkeypatch):
     calls = []
 

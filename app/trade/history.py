@@ -138,6 +138,7 @@ def _snapshot_from_group(records: list[MarketHistory]) -> dict[str, Any]:
         rows.append(
             {
                 "id": record.item_id,
+                "min_ilvl": record.min_ilvl,
                 "median": _positive_float(record.price),
                 "best": _positive_float(record.price),
                 "volume": volume if volume is not None else 0,
@@ -352,6 +353,7 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
                 status=status,
                 source=source,
                 item_id=item_id,
+                min_ilvl=_positive_int(row.get("min_ilvl")),
                 price=price,
                 volume=_positive_float(row.get("volume")),
                 offers=_positive_int(row.get("offers")),

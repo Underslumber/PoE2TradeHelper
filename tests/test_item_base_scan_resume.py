@@ -71,7 +71,7 @@ def _bases(*names):
 
 
 def _priced_row(base, query):
-    row = trade2._base_market_row_from_base(base)
+    row = trade2._base_market_row_from_base(base, min_ilvl=78)
     lot = {"price_amount": 2.0, "price_currency": "exalted", "price_target": 2.0}
     return {
         **row,
@@ -156,7 +156,7 @@ def test_rough_scan_resumes_pending_bases_after_rate_limit(isolated_scan, monkey
     assert waiting_job["status"] == "rate_limited"
     assert waiting_coroutine is None
     checkpoint_key = trade2._item_base_market_scan_checkpoint_key(
-        trade2._item_base_market_scan_cursor_key("PoE2 - Resume Test", "exalted", "securable", None)
+        trade2._item_base_market_scan_cursor_key("PoE2 - Resume Test", "exalted", "securable", 78)
     )
     saved_checkpoint = trade2.SQLiteCacheManager.get(checkpoint_key)
     assert saved_checkpoint["retry_at"] > time.time()
@@ -188,7 +188,7 @@ def test_rough_scan_resumes_pending_bases_after_rate_limit(isolated_scan, monkey
 
 
 def test_checkpoint_catalog_fingerprint_invalidates_changed_catalog(isolated_scan, monkeypatch):
-    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Fingerprint", "exalted", "securable", None)
+    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Fingerprint", "exalted", "securable", 78)
     old_bases = _bases("A", "B")["bases"]
     trade2._save_item_base_market_scan_checkpoint(
         cursor_key,
@@ -222,7 +222,7 @@ def test_checkpoint_catalog_fingerprint_invalidates_changed_catalog(isolated_sca
 
 def test_rate_limited_normal_base_rotates_behind_pending_and_keeps_catalog_cursor(isolated_scan, monkeypatch):
     bases = _bases("Ring 0", "Ring 1", "Ring 2", "Ring 3", "Ring 4")["bases"]
-    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Sparse", "exalted", "securable", None)
+    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Sparse", "exalted", "securable", 78)
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS[cursor_key] = 3
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_SCAN_BATCH_SIZE", 3)
     monkeypatch.setattr(trade2, "ITEM_BASE_MARKET_PRIORITY_SCAN_BATCH_SIZE", 3)
@@ -258,7 +258,7 @@ def test_rate_limited_normal_base_rotates_behind_pending_and_keeps_catalog_curso
 
 def test_fresh_prices_replace_recovered_partial_rows_during_resume(isolated_scan, monkeypatch):
     bases = _bases("A")["bases"]
-    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Fresh", "exalted", "securable", None)
+    cursor_key = trade2._item_base_market_scan_cursor_key("PoE2 - Fresh", "exalted", "securable", 78)
     old_row = _priced_row(bases[0], {"id": "old", "total": 1})
     trade2._save_item_base_market_scan_checkpoint(
         cursor_key,
@@ -292,7 +292,7 @@ def test_fresh_prices_replace_recovered_partial_rows_during_resume(isolated_scan
 def test_completed_checkpoint_recovery_does_not_override_next_batch_price(isolated_scan, monkeypatch):
     bases = _bases("A")["bases"]
     league = "PoE2 - Completed Recovery"
-    cursor_key = trade2._item_base_market_scan_cursor_key(league, "exalted", "securable", None)
+    cursor_key = trade2._item_base_market_scan_cursor_key(league, "exalted", "securable", 78)
     monkeypatch.setattr(trade2, "get_item_base_catalog", lambda **kwargs: asyncio.sleep(0, result={"source": "test", "total": 1, "bases": bases}))
     monkeypatch.setattr(trade2, "_post_search", lambda *args, **kwargs: asyncio.sleep(0, result={"id": "search", "total": 1, "result": ["listing"]}))
     price = {"low": 2.0, "best": 2.0}
@@ -335,7 +335,7 @@ def test_active_stale_runner_is_not_replaced(isolated_scan, monkeypatch):
     monkeypatch.setattr(trade2, "get_item_base_catalog", lambda **kwargs: asyncio.sleep(0, result=_bases("A")))
 
     async def scenario():
-        key = trade2._item_base_market_job_key("PoE2 - Active", "exalted", "securable", "", None, 100)
+        key = trade2._item_base_market_job_key("PoE2 - Active", "exalted", "securable", "", 78, 100)
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -365,7 +365,7 @@ def test_active_stale_runner_is_not_replaced(isolated_scan, monkeypatch):
 
 def test_superseded_runner_cannot_overwrite_new_owner(isolated_scan, monkeypatch):
     async def scenario():
-        key = trade2._item_base_market_job_key("PoE2 - Owner", "exalted", "securable", "", None, 100)
+        key = trade2._item_base_market_job_key("PoE2 - Owner", "exalted", "securable", "", 78, 100)
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -386,7 +386,7 @@ def test_superseded_runner_cannot_overwrite_new_owner(isolated_scan, monkeypatch
         task = asyncio.create_task(coroutine)
         await entered.wait()
         checkpoint_key = trade2._item_base_market_scan_checkpoint_key(
-            trade2._item_base_market_scan_cursor_key("PoE2 - Owner", "exalted", "securable", None)
+            trade2._item_base_market_scan_cursor_key("PoE2 - Owner", "exalted", "securable", 78)
         )
         original_checkpoint = trade2.SQLiteCacheManager.get(checkpoint_key)
         assert original_checkpoint["pending"] == [{"id": "base:A", "priority": False}]
@@ -407,8 +407,8 @@ def test_superseded_runner_cannot_overwrite_new_owner(isolated_scan, monkeypatch
 def test_superseded_runner_during_history_enrichment_cannot_write_checkpoint(isolated_scan, monkeypatch):
     async def scenario():
         league = "PoE2 - Enrichment Owner"
-        key = trade2._item_base_market_job_key(league, "exalted", "securable", "", None, 100)
-        cursor_key = trade2._item_base_market_scan_cursor_key(league, "exalted", "securable", None)
+        key = trade2._item_base_market_job_key(league, "exalted", "securable", "", 78, 100)
+        cursor_key = trade2._item_base_market_scan_cursor_key(league, "exalted", "securable", 78)
         entered = asyncio.Event()
         release = asyncio.Event()
 

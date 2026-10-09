@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.models import MarketHistory
 from app.db import migrate as db_migrate
+from app.history_compaction import _aggregate
 from app.trade import history
 
 
@@ -28,6 +29,7 @@ def _record(
     league="Fate",
     category="ItemBases",
     granularity="raw",
+    min_ilvl=None,
 ):
     return MarketHistory(
         league=league,
@@ -36,6 +38,7 @@ def _record(
         status="securable",
         source=source,
         item_id=item_id,
+        min_ilvl=min_ilvl,
         price=price,
         volume=volume,
         timestamp=ts,
@@ -230,9 +233,43 @@ def test_market_history_indexes_are_migrated_after_columns_and_idempotently(monk
     db_migrate._migrate_market_history_table()
     second_indexes = {index["name"] for index in inspect(engine).get_indexes("market_history")}
 
-    assert {"status", "granularity", "samples"}.issubset(first_columns)
+    assert {"status", "granularity", "samples", "min_ilvl"}.issubset(first_columns)
     assert {
         "ix_market_history_scope_timestamp",
         "ix_market_history_scope_item_timestamp",
     }.issubset(first_indexes)
     assert second_indexes == first_indexes
+
+
+def test_item_base_history_roundtrip_preserves_known_min_ilvl_and_unknown_remains_unknown(monkeypatch, tmp_path):
+    engine = _bind_database(monkeypatch, tmp_path)
+    history.log_market_history(
+        {
+            "created_ts": 10,
+            "league": "Fate",
+            "category": "ItemBases",
+            "target": "exalted",
+            "status": "securable",
+            "source": "trade2/search+fetch:rough",
+            "rows": [
+                {"id": "known", "min_ilvl": 78, "median": 2},
+                {"id": "legacy", "median": 3},
+            ],
+        }
+    )
+
+    snapshots = history.read_market_history(
+        limit=1, league="Fate", category="ItemBases", target="exalted", status="securable"
+    )
+    by_id = {row["id"]: row for row in snapshots[0]["rows"]}
+
+    assert by_id["known"]["min_ilvl"] == 78
+    assert by_id["legacy"]["min_ilvl"] is None
+
+
+def test_compaction_keeps_minimum_known_ilvl_and_drops_unknown_proof():
+    known = [_record(1, "known", 2, min_ilvl=78), _record(2, "known", 3, min_ilvl=82)]
+    unknown = [_record(1, "unknown", 2, min_ilvl=78), _record(2, "unknown", 3)]
+
+    assert _aggregate(known, "hourly").min_ilvl == 78
+    assert _aggregate(unknown, "hourly").min_ilvl is None
