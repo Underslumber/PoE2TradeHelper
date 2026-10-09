@@ -54,3 +54,28 @@ def test_backtest_signal_history_scores_buy_and_sell_direction() -> None:
     assert result["successful"] == 2
     assert result["success_rate"] == 100.0
     assert result["by_action"] == {"buy_dip": 1, "sell_momentum": 1}
+
+
+def test_backtest_does_not_compare_different_sources_or_currencies() -> None:
+    initial = {
+        "created_ts": 100.0, "source": "poe.ninja", "target": "exalted",
+        "rows": [{"id": "chaos", "median": 10, "change": -10, "volume": 50}],
+    }
+    other_source = {
+        "created_ts": 3700.0, "source": "trade2", "target": "exalted",
+        "rows": [{"id": "chaos", "median": 100}],
+    }
+    other_currency = {
+        "created_ts": 3800.0, "source": "poe.ninja", "target": "divine",
+        "rows": [{"id": "chaos", "median": 0.1}],
+    }
+    result = backtest_signal_history([initial, other_source, other_currency], horizon_hours=1)
+    assert result["evaluated"] == 0
+    assert result["pending"] == 1
+    comparable = {
+        "created_ts": 3900.0, "source": "poe.ninja", "target": "exalted",
+        "rows": [{"id": "chaos", "median": 11}],
+    }
+    result = backtest_signal_history([initial, other_source, other_currency, comparable], horizon_hours=1)
+    assert result["evaluated"] == 1
+    assert result["samples"][0]["future_price"] == 11

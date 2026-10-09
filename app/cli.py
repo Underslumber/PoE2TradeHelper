@@ -17,7 +17,13 @@ from app.db.migrate import migrate
 from app.funpay_market import collect_funpay_rub_market_snapshot, run_funpay_rub_snapshot_loop
 from app.history_compaction import compact_market_history
 from app.item_parser import parse_item_text
-from app.market_snapshots import collect_market_snapshots, parse_league_start, run_market_snapshot_loop, split_csv
+from app.market_snapshots import (
+    DEFAULT_MARKET_CURRENCY_TARGETS,
+    collect_market_snapshots,
+    parse_league_start,
+    run_market_snapshot_loop,
+    split_csv,
+)
 from app.notification_worker import process_due_telegram_notifications
 from app.trade2 import get_pasted_item_market
 
@@ -98,7 +104,14 @@ def main():
     market_snapshots_cmd.add_argument("--target", default="exalted")
     market_snapshots_cmd.add_argument("--status", choices=("online", "any"), default="any")
     market_snapshots_cmd.add_argument("--categories", help="Comma-separated category ids. Default: all stackable categories plus ItemBases")
-    market_snapshots_cmd.add_argument("--currency-targets", default="", help="Extra Currency targets, comma-separated")
+    market_snapshots_cmd.add_argument(
+        "--currency-targets",
+        default=None,
+        help=(
+            "Extra Currency targets, comma-separated. "
+            f"Default: {','.join(DEFAULT_MARKET_CURRENCY_TARGETS)}; pass an empty string to disable."
+        ),
+    )
     market_snapshots_cmd.add_argument("--once", action="store_true")
     market_snapshots_cmd.add_argument("--interval-minutes", type=float, default=15.0)
     market_snapshots_cmd.add_argument("--early-interval-minutes", type=float, default=5.0)
@@ -236,7 +249,7 @@ def main():
         sys.stdout.write("\n")
     elif args.command == "market-snapshots":
         categories = split_csv(args.categories)
-        currency_targets = split_csv(args.currency_targets)
+        currency_targets = split_csv(args.currency_targets) if args.currency_targets is not None else None
         if args.once:
             payload = asyncio.run(
                 collect_market_snapshots(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import ipaddress
 import json
 import os
 import uuid
@@ -11,6 +12,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -37,7 +39,7 @@ from app.account import (
 )
 from app.ai_context import load_ai_market_context
 from app.ai_history import list_ai_analyses
-from app.benchmark import DEFAULT_BASKET_ID, benchmark_price_at, is_basket_benchmark, latest_benchmark_price, basket_price_from_snapshot
+from app.benchmark import DEFAULT_BASKET_ID, benchmark_price_at, benchmark_snapshot_available_at, is_basket_benchmark, latest_benchmark_price, basket_price_from_snapshot
 from app.config import PUBLIC_API_ORIGIN, PUBLIC_CANONICAL_ORIGIN
 from app.codex_market_analyzer import run_codex_market_analysis
 from app.currency_cycles import load_currency_cycles
@@ -318,19 +320,70 @@ def require_fiat_rub_access(request: Request, db: Session) -> User | JSONRespons
     return user
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _normalized_http_origin(value: str | None) -> str | None:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        _ = parsed.port
+    except ValueError:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc}"
+
+
+def _is_loopback_name(value: str | None) -> bool:
+    host = str(value or "").strip().lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_local_development_request(request: Request) -> bool:
+    peer = request.client.host if request.client else None
+    return _is_loopback_name(peer) and _is_loopback_name(request.url.hostname)
+
+
+def _verification_base_url(request: Request) -> str | None:
+    for configured in (PUBLIC_CANONICAL_ORIGIN, os.environ.get("APP_BASE_URL")):
+        origin = _normalized_http_origin(configured)
+        if origin:
+            return origin
+    if _is_local_development_request(request):
+        return _normalized_http_origin(str(request.base_url))
+    return None
+
+
+def _set_session_cookie(response: Response, token: str, request: Request) -> None:
+    trusted_origin = _verification_base_url(request)
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=SESSION_DAYS * 24 * 60 * 60,
         httponly=True,
         samesite="lax",
-        secure=os.environ.get("APP_BASE_URL", "").lower().startswith("https"),
+        secure=(
+            (urlsplit(trusted_origin).scheme == "https" if trusted_origin else False)
+            or request.url.scheme.lower() == "https"
+        ),
     )
 
 
-def _verification_url(request: Request, token: str) -> str:
-    base_url = os.environ.get("APP_BASE_URL") or str(request.base_url).rstrip("/")
+def _verification_url(request: Request, token: str) -> str | None:
+    base_url = _verification_base_url(request)
+    if not base_url:
+        return None
     return f"{base_url}/auth/verify-email?token={token}"
 
 
@@ -655,8 +708,14 @@ def _admin_metrics_payload(db: Session) -> dict:
     }
 
 
-def _verification_payload(request: Request, user: User) -> dict:
+def _verification_payload(request: Request, user: User) -> dict | JSONResponse:
     verification_url = _verification_url(request, user.email_verification_token or "")
+    if not verification_url:
+        return account_api_error(
+            "Не настроен доверенный адрес для подтверждения email.",
+            status_code=503,
+            key="accountErrorVerificationOriginUnavailable",
+        )
     try:
         email_sent = send_verification_email(user.email or "", verification_url)
     except Exception:
@@ -666,7 +725,11 @@ def _verification_payload(request: Request, user: User) -> dict:
         "verification_required": True,
         "email_sent": email_sent,
         "email": user.email,
-        "dev_verification_url": None if email_sent else verification_url,
+        "dev_verification_url": (
+            verification_url
+            if not email_sent and _is_local_development_request(request)
+            else None
+        ),
     }
 
 
@@ -830,6 +893,7 @@ def _latest_item_market(league: str, category: str, target: str, item_id: str, c
         "price": price,
         "source": snapshot.get("source"),
         "created_ts": snapshot.get("created_ts"),
+        "stored_created_ts": row.get("stored_created_ts") if category == "ItemBases" else None,
         "change": row.get("change"),
         "sparkline": row.get("sparkline") or [],
         "sparkline_kind": row.get("sparkline_kind"),
@@ -915,20 +979,20 @@ def _benchmark_price_at(
             cache[history_key] = snapshots
     candidates = []
     for snapshot in snapshots:
-        created_ts = snapshot.get("created_ts")
-        if not isinstance(created_ts, (int, float)):
+        available_ts = benchmark_snapshot_available_at(snapshot)
+        if available_ts is None:
             continue
         row = next((item for item in snapshot.get("rows") or [] if item.get("id") == benchmark_currency), None)
         price = _row_price(row)
         if price is not None:
-            candidates.append((float(created_ts), price))
+            candidates.append((available_ts, price))
     if not candidates:
         return None
     before = [item for item in candidates if item[0] <= timestamp]
     if before:
-        return max(before, key=lambda item: item[0])[1]
-    nearest_ts, nearest_price = min(candidates, key=lambda item: abs(item[0] - timestamp))
-    return nearest_price if abs(nearest_ts - timestamp) <= 36 * 60 * 60 else None
+        previous_ts, previous_price = max(before, key=lambda item: item[0])
+        return previous_price if timestamp - previous_ts <= 36 * 60 * 60 else None
+    return None
 
 
 def _prefixed(prefix: str, values: dict) -> dict:
@@ -1102,6 +1166,12 @@ def api_auth_register(
     existing_email = db.scalars(select(User).where(User.email == email)).first()
     if existing_email:
         return account_api_error("Такой email уже зарегистрирован.", status_code=409, key="accountErrorEmailTaken")
+    if not _verification_base_url(request):
+        return account_api_error(
+            "Не настроен доверенный адрес для подтверждения email.",
+            status_code=503,
+            key="accountErrorVerificationOriginUnavailable",
+        )
     is_first_user = db.scalars(select(User.id)).first() is None
     user = User(
         username=username,
@@ -1135,7 +1205,7 @@ def auth_verify_email(
     db.commit()
     db.refresh(user)
     response = RedirectResponse(url="/?view=cabinet&verified=1", status_code=303)
-    _set_session_cookie(response, _create_session(db, user))
+    _set_session_cookie(response, _create_session(db, user), request)
     return response
 
 
@@ -1156,6 +1226,12 @@ def api_auth_resend_verification(
         return account_api_error("Неверный логин или пароль.", status_code=401, key="accountErrorInvalidLogin")
     if user.email_verified_at:
         return {"verification_required": False, "email": user.email}
+    if not _verification_base_url(request):
+        return account_api_error(
+            "Не настроен доверенный адрес для подтверждения email.",
+            status_code=503,
+            key="accountErrorVerificationOriginUnavailable",
+        )
     user.email_verification_token = new_email_verification_token()
     user.email_verification_sent_at = now_iso()
     db.commit()
@@ -1165,6 +1241,7 @@ def api_auth_resend_verification(
 
 @router.post("/api/auth/login")
 def api_auth_login(
+    request: Request,
     response: Response,
     payload: dict = Body(...),
     db: Session = Depends(get_db),
@@ -1177,7 +1254,7 @@ def api_auth_login(
     if user.email and not user.email_verified_at:
         return account_api_error("Подтвердите email перед входом.", status_code=403, key="accountErrorEmailNotVerified")
     token = _create_session(db, user)
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, token, request)
     return _user_payload(user)
 
 

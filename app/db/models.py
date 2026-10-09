@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -153,6 +153,18 @@ class TelegramNotificationRule(Base):
 
 class MarketHistory(Base):
     __tablename__ = "market_history"
+    __table_args__ = (
+        Index("ix_market_history_scope_timestamp", "league", "category", "target", "status", "timestamp"),
+        Index(
+            "ix_market_history_scope_item_timestamp",
+            "league",
+            "category",
+            "target",
+            "status",
+            "item_id",
+            "timestamp",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     league = Column(String, nullable=False, index=True)

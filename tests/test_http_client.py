@@ -344,3 +344,42 @@ def test_outbound_httpx_client_only_retries_post_when_allowed(monkeypatch):
         ("post", "http://127.0.0.1:7906", "https://example.test/search"),
         ("post", "http://127.0.0.1:7907", "https://example.test/search"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("proxy_urls", "expected_calls"),
+    [
+        ("http://127.0.0.1:7910", 1),
+        ("http://127.0.0.1:7911, http://127.0.0.1:7912", 2),
+    ],
+)
+def test_rate_limit_cooldown_survives_exhausted_failover(monkeypatch, proxy_urls, expected_calls):
+    calls = []
+
+    class RateLimitedAsyncClient:
+        def __init__(self, **kwargs):
+            self.proxy = kwargs.get("proxy")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, **kwargs):
+            calls.append(self.proxy)
+            return httpx.Response(429, headers={"Retry-After": "30"})
+
+    async def use_client():
+        async with outbound_httpx_client(timeout=30, failover_on_rate_limit=True) as client:
+            return await client.get("https://example.test/data")
+
+    monkeypatch.setenv("OUTBOUND_PROXY_URLS", proxy_urls)
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", RateLimitedAsyncClient)
+
+    response = asyncio.run(use_client())
+    status = outbound_proxy_status()
+
+    assert response.status_code == 429
+    assert len(calls) == expected_calls
+    assert all(item["cooldown_seconds"] > 0 for item in status["urls"])

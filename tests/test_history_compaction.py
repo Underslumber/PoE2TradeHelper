@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import math
+
 from app.db.models import Base, MarketHistory
 from app.history_compaction import HOURLY_GRANULARITY, RAW_GRANULARITY, CompactionPolicy, compact_market_history
+from app.trade.history import log_market_history, read_item_history, read_market_history
 
 
 def test_compact_market_history_writes_hourly_aggregates(tmp_path, monkeypatch):
@@ -31,6 +34,7 @@ def test_compact_market_history_writes_hourly_aggregates(tmp_path, monkeypatch):
                     status="any",
                     item_id="divine",
                     price=100,
+                    change=-12.5,
                     volume=10,
                     timestamp=1000,
                     created_at="1970-01-01T00:16:40+00:00",
@@ -44,6 +48,7 @@ def test_compact_market_history_writes_hourly_aggregates(tmp_path, monkeypatch):
                     status="any",
                     item_id="divine",
                     price=120,
+                    change=-12.5,
                     volume=20,
                     timestamp=1200,
                     created_at="1970-01-01T00:20:00+00:00",
@@ -63,6 +68,7 @@ def test_compact_market_history_writes_hourly_aggregates(tmp_path, monkeypatch):
     assert len(rows) == 1
     assert rows[0].granularity == HOURLY_GRANULARITY
     assert rows[0].price == 110
+    assert rows[0].change == -12.5
     assert rows[0].samples == 2
 
     with session_module.get_session() as db:
@@ -93,3 +99,162 @@ def test_compact_market_history_writes_hourly_aggregates(tmp_path, monkeypatch):
     assert rows[0].price == 120
     assert rows[0].volume == 20
     assert rows[0].samples == 3
+
+
+def test_log_market_history_preserves_signed_finite_changes(tmp_path, monkeypatch):
+    sqlite_path = tmp_path / "history_changes.sqlite"
+    monkeypatch.setenv("SQLITE_PATH", str(sqlite_path))
+
+    from app.db import session as session_module
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.trade.history as history_module
+
+    engine = create_engine(f"sqlite:///{sqlite_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(autoflush=False, bind=engine)
+    monkeypatch.setattr(session_module, "engine", engine)
+    monkeypatch.setattr(session_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(history_module, "get_session", session_module.get_session)
+    Base.metadata.create_all(bind=engine)
+
+    history = {
+        "league": "Fate",
+        "category": "Currency",
+        "target": "exalted",
+        "created_ts": 10000.0,
+        "rows": [
+            {"id": "negative", "best": 1.0, "volume": 0.25, "offers": 2, "change": -12.5},
+            {"id": "zero", "best": 1.0, "change": 0.0},
+            {"id": "nan", "best": 1.0, "change": math.nan},
+            {"id": "positive_infinity", "best": 1.0, "change": math.inf},
+            {"id": "negative_infinity", "best": 1.0, "change": -math.inf},
+            {"id": "invalid-price", "best": math.inf, "change": 1.0},
+        ],
+    }
+    log_market_history(history, history_path=None)
+
+    with session_module.get_session() as db:
+        rows = {record.item_id: record for record in db.query(MarketHistory).all()}
+
+    assert {item_id: record.change for item_id, record in rows.items()} == {
+        "negative": -12.5,
+        "zero": 0.0,
+        "nan": None,
+        "positive_infinity": None,
+        "negative_infinity": None,
+    }
+    assert rows["negative"].volume == 0.25
+    assert rows["negative"].offers == 2
+    assert "invalid-price" not in rows
+
+
+def test_history_reader_sanitizes_nonfinite_persisted_values(tmp_path, monkeypatch):
+    sqlite_path = tmp_path / "history_nonfinite.sqlite"
+    monkeypatch.setenv("SQLITE_PATH", str(sqlite_path))
+
+    from app.db import session as session_module
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.trade.history as history_module
+
+    engine = create_engine(f"sqlite:///{sqlite_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(autoflush=False, bind=engine)
+    monkeypatch.setattr(session_module, "engine", engine)
+    monkeypatch.setattr(session_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(history_module, "get_session", session_module.get_session)
+    Base.metadata.create_all(bind=engine)
+
+    with session_module.get_session() as db:
+        db.add(
+            MarketHistory(
+                league="Fate",
+                category="ItemBases",
+                target="exalted",
+                status="securable",
+                source="trade2",
+                item_id="base:heavy-belt",
+                price=math.inf,
+                volume=math.inf,
+                offers=math.inf,
+                change=-12.5,
+                max_volume_rate=math.inf,
+                timestamp=10000,
+                created_at="1970-01-01T02:46:40+00:00",
+                granularity=RAW_GRANULARITY,
+                samples=1,
+            )
+        )
+        db.commit()
+
+    snapshot = read_market_history(
+        limit=1, league="Fate", category="ItemBases", target="exalted", status="securable"
+    )[0]
+    row = snapshot["rows"][0]
+    assert row["median"] is None
+    assert row["best"] is None
+    assert row["volume"] == 0
+    assert row["offers"] == 0
+    assert row["change"] == -12.5
+    assert row["max_volume_rate"] is None
+
+
+def test_compaction_preserves_source_series_and_duplicate_write_is_idempotent(tmp_path, monkeypatch):
+    sqlite_path = tmp_path / "history_sources.sqlite"
+    monkeypatch.setenv("SQLITE_PATH", str(sqlite_path))
+
+    from app.db import session as session_module
+    from sqlalchemy import create_engine, func, select
+    from sqlalchemy.orm import sessionmaker
+    import app.history_compaction as compaction_module
+    import app.trade.history as history_module
+
+    engine = create_engine(f"sqlite:///{sqlite_path}", connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(autoflush=False, bind=engine)
+    monkeypatch.setattr(session_module, "engine", engine)
+    monkeypatch.setattr(session_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(compaction_module, "get_session", session_module.get_session)
+    monkeypatch.setattr(history_module, "get_session", session_module.get_session)
+    Base.metadata.create_all(bind=engine)
+
+    first = {
+        "league": "Fate",
+        "category": "ItemBases",
+        "target": "exalted",
+        "status": "securable",
+        "created_ts": 10000.0,
+        "source": "poe.ninja",
+        "rows": [{"id": "base:heavy-belt", "median": 100, "volume": 0.25}],
+    }
+    second = {**first, "created_ts": 10100.0, "source": "trade2", "rows": [{"id": "base:heavy-belt", "median": 200}]}
+    log_market_history(first, history_path=None)
+    log_market_history(first, history_path=None)
+    log_market_history(second, history_path=None)
+
+    with session_module.get_session() as db:
+        assert db.scalar(select(func.count(MarketHistory.id))) == 2
+
+    policy = CompactionPolicy(raw_days=7, hourly_days=30)
+    compact_market_history(policy, now_ts=10 * 86400)
+    compact_market_history(policy, now_ts=10 * 86400)
+
+    with session_module.get_session() as db:
+        rows = db.scalars(select(MarketHistory).order_by(MarketHistory.source)).all()
+
+    assert [(row.source, row.price, row.volume, row.samples, row.granularity) for row in rows] == [
+        ("poe.ninja", 100, 0.25, 1, HOURLY_GRANULARITY),
+        ("trade2", 200, None, 1, HOURLY_GRANULARITY),
+    ]
+    snapshots = read_market_history(
+        limit=1, league="Fate", category="ItemBases", target="exalted", status="securable"
+    )
+    series = read_item_history(
+        "Fate", "ItemBases", "exalted", "securable", "base:heavy-belt", limit=1
+    )
+    assert {(item["source"], item["granularity"]) for item in snapshots} == {
+        ("poe.ninja", HOURLY_GRANULARITY),
+        ("trade2", HOURLY_GRANULARITY),
+    }
+    assert {(item["source"], item["granularity"], item["price"], item["value"]) for item in series} == {
+        ("poe.ninja", HOURLY_GRANULARITY, 100, 100),
+        ("trade2", HOURLY_GRANULARITY, 200, 200),
+    }

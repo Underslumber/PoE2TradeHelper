@@ -116,7 +116,11 @@ def _rows_by_id(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _future_snapshot(history: list[dict[str, Any]], index: int, horizon_seconds: float) -> dict[str, Any] | None:
     current_ts = float(history[index].get("created_ts") or 0)
     target_ts = current_ts + horizon_seconds
+    identity_fields = ("league", "category", "target", "status", "source")
+    identity = tuple(history[index].get(key) or "" for key in identity_fields)
     for candidate in history[index + 1 :]:
+        if tuple(candidate.get(key) or "" for key in identity_fields) != identity:
+            continue
         if float(candidate.get("created_ts") or 0) >= target_ts:
             return candidate
     return None

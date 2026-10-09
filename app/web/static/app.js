@@ -87,6 +87,8 @@ window.initEconomyTable = initEconomyTable;
 
 const i18n = window.POE2_I18N || { ru: {}, en: {} };
 const HISTORY_SERIES_LIMIT = 1500;
+const HISTORY_SERIES_CACHE_TTL_MS = 5 * 60 * 1000;
+const HISTORY_SERIES_RETRY_MS = 30 * 1000;
 const MAIN_VIEW_STORAGE_KEY = 'poe2-main-view';
 const PUBLIC_MAIN_VIEWS = ['market', 'signals', 'lots', 'cabinet'];
 const BASE_MARKET_LIMIT_STORAGE_KEY = 'poe2-base-market-limit';
@@ -117,10 +119,12 @@ const state = {
   detailTarget: 'auto',
   detailChartMetric: 'price',
   chartDays: Number(localStorage.getItem('poe2-chart-days') || 7),
-  detailDemandCache: {},
   detailSeriesCache: {},
+  detailSeriesLoading: {},
+  detailSeriesRetryAt: {},
   accountChartSeriesCache: {},
   accountChartSeriesLoading: {},
+  accountChartSeriesRetryAt: {},
   maxChartDaysAvailable: 7,
   rates: {},
   detailRates: {},
@@ -137,6 +141,7 @@ const state = {
   isLoadingActiveTrades: false,
   historyTrends: [],
   historyTrendsKey: '',
+  pendingHistoryTrendsData: null,
   isLoadingHistoryTrends: false,
   marketDiagnostics: null,
   marketDiagnosticsKey: '',
@@ -186,9 +191,9 @@ const state = {
   lotSubtab: localStorage.getItem('poe2-lot-subtab') || 'seller',
   baseMarket: null,
   baseMarketParams: null,
-  baseMarketCache: {},
   baseMarketHistoryCache: {},
   baseMarketHistoryLoading: {},
+  baseMarketHistoryRetryAt: {},
   baseMarketError: '',
   focusedBaseMarketId: '',
   isLoadingBaseMarket: false,
@@ -3021,13 +3026,15 @@ function renderCategories() {
       state.activeTradesKey = '';
       state.historyTrends = [];
       state.historyTrendsKey = '';
+      state.pendingHistoryTrendsData = null;
       state.isLoadingHistoryTrends = false;
       state.marketDiagnostics = null;
       state.marketDiagnosticsKey = '';
       state.marketDiagnosticsError = '';
       state.isLoadingMarketDiagnostics = false;
-      state.detailDemandCache = {};
       state.detailSeriesCache = {};
+      state.detailSeriesLoading = {};
+      state.detailSeriesRetryAt = {};
       setText('category-title', categoryName(category));
       byId('item-detail-panel')?.classList.add('d-none');
       if (!categorySidebarPinned()) {
@@ -3520,10 +3527,6 @@ function baseMarketJobIsActive(job = baseMarketRefreshJob()) {
   return ['queued', 'running', 'rate_limited'].includes(String(job?.status || ''));
 }
 
-function baseMarketPayloadHasActiveJob(payload) {
-  return baseMarketJobIsActive(payload?.refresh_job || null);
-}
-
 function baseMarketJobText(job = baseMarketRefreshJob()) {
   const status = String(job?.status || '');
   if (!status) return '';
@@ -3760,14 +3763,38 @@ function baseMarketRowState(row) {
   return [weakActivityText, demandText, stateText].filter(Boolean).join(' · ');
 }
 
-function baseMarketHistoryKey(row) {
-  const data = state.baseMarket || {};
+function historySeriesCacheIsFresh(entry, revisionTs) {
+  const age = Date.now() - Number(entry?.fetchedAt || 0);
+  return (
+    Array.isArray(entry?.series)
+    && Number(entry?.revisionTs || 0) === Number(revisionTs || 0)
+    && age >= 0
+    && age < HISTORY_SERIES_CACHE_TTL_MS
+  );
+}
+
+function historySeriesRetryPending(retryAt, key) {
+  return Number(retryAt?.[key] || 0) > Date.now();
+}
+
+function baseMarketHistoryKey(row, market = state.baseMarket || {}) {
+  const data = market || {};
   return `${data.league || ''}|${data.target || ''}|${data.status || ''}|${row?.id || ''}`;
 }
 
 async function loadBaseMarketHistory(row) {
-  const key = baseMarketHistoryKey(row);
-  if (!row?.id || state.baseMarketHistoryCache[key] || state.baseMarketHistoryLoading[key]) return;
+  const market = state.baseMarket || {};
+  const key = baseMarketHistoryKey(row, market);
+  const revisionTs = Number(market.created_ts || 0);
+  const currentPrice = baseMarketLowPrice(row);
+  const currentTs = Number(row?.stored_created_ts || 0);
+  const cached = state.baseMarketHistoryCache[key];
+  if (
+    !row?.id
+    || historySeriesCacheIsFresh(cached, revisionTs)
+    || state.baseMarketHistoryLoading[key]
+    || historySeriesRetryPending(state.baseMarketHistoryRetryAt, key)
+  ) return;
   state.baseMarketHistoryLoading[key] = true;
   try {
     const params = new URLSearchParams({
@@ -3793,17 +3820,16 @@ async function loadBaseMarketHistory(row) {
         return { ts, value };
       })
       .filter(Boolean);
-    const current = baseMarketLowPrice(row);
-    const currentTs = Number(state.baseMarket?.created_ts || 0);
-    if (current && currentTs && !seen.has(currentTs)) {
-      series.push({ ts: currentTs, value: current });
+    if (currentPrice && currentTs && !seen.has(currentTs)) {
+      series.push({ ts: currentTs, value: currentPrice });
     }
-    state.baseMarketHistoryCache[key] = series;
+    state.baseMarketHistoryCache[key] = { series, revisionTs, fetchedAt: Date.now() };
+    delete state.baseMarketHistoryRetryAt[key];
   } catch {
-    state.baseMarketHistoryCache[key] = [];
+    state.baseMarketHistoryRetryAt[key] = Date.now() + HISTORY_SERIES_RETRY_MS;
   } finally {
     delete state.baseMarketHistoryLoading[key];
-    renderBaseMarketDetail();
+    if (baseMarketHistoryKey(row) === key) renderBaseMarketDetail();
   }
 }
 
@@ -3840,8 +3866,9 @@ function renderBaseMarketDetail() {
   state.focusedBaseMarketId = row.id || state.focusedBaseMarketId;
   const target = state.baseMarket.target || selectedTarget();
   const key = baseMarketHistoryKey(row);
-  const history = state.baseMarketHistoryCache[key] || [];
-  if (!state.baseMarketHistoryCache[key] && !state.baseMarketHistoryLoading[key]) {
+  const historyEntry = state.baseMarketHistoryCache[key];
+  const history = historyEntry?.series || [];
+  if (!historySeriesCacheIsFresh(historyEntry, state.baseMarket?.created_ts) && !state.baseMarketHistoryLoading[key]) {
     loadBaseMarketHistory(row);
   }
   const chart = history.length >= 2
@@ -4002,17 +4029,14 @@ async function refreshBaseMarket(forceRefresh = true) {
     return;
   }
   const searchParams = new URLSearchParams(params);
-  const cacheKey = searchParams.toString();
+  const requestIdentity = { ...params };
+  delete requestIdentity.refresh;
+  const requestKey = new URLSearchParams(requestIdentity).toString();
   if (state.isLoadingBaseMarket) {
-    const currentKey = state.baseMarketParams ? new URLSearchParams(state.baseMarketParams).toString() : '';
-    if (!forceRefresh && currentKey === cacheKey) return;
-  }
-  const cachedMarket = state.baseMarketCache[cacheKey];
-  if (!forceRefresh && cachedMarket && cachedMarket.stored !== false && !baseMarketPayloadHasActiveJob(cachedMarket)) {
-    state.baseMarket = cachedMarket;
-    renderBaseMarket();
-    scheduleBaseMarketPoll();
-    return;
+    const currentIdentity = { ...(state.baseMarketParams || {}) };
+    delete currentIdentity.refresh;
+    const currentKey = new URLSearchParams(currentIdentity).toString();
+    if (!forceRefresh && currentKey === requestKey) return;
   }
   if (state.baseMarketAbortController) {
     state.baseMarketAbortController.abort();
@@ -4042,9 +4066,6 @@ async function refreshBaseMarket(forceRefresh = true) {
     state.focusedBaseMarketId = previousFocus && rows.some(row => row.id === previousFocus)
       ? previousFocus
       : (rows[0]?.id || '');
-    if (!baseMarketPayloadHasActiveJob(data) && (forceRefresh || data.stored !== false || (data.rows || []).length)) {
-      state.baseMarketCache[cacheKey] = data;
-    }
   } catch (error) {
     if (requestId !== state.baseMarketRequestId) return;
     const isAbort = error?.name === 'AbortError';
@@ -4902,6 +4923,7 @@ function accountChartKey(item) {
 
 function accountChartRequest(item) {
   const market = item?.market || {};
+  const isItemBase = item?.category === 'ItemBases';
   return {
     key: accountChartKey(item),
     league: item?.league || '',
@@ -4909,7 +4931,10 @@ function accountChartRequest(item) {
     target: market.target_currency || item?.target_currency || item?.entry_currency || selectedTarget(),
     status: 'any',
     itemId: item?.item_id || '',
-    currentTs: Number(market.created_ts || 0),
+    revisionTs: Number(market.created_ts || 0),
+    currentTs: isItemBase
+      ? Number(market.stored_created_ts || item?.stored_created_ts || 0)
+      : Number(market.created_ts || 0),
     currentValue: Number(market.price || item?.last_price || 0),
   };
 }
@@ -4963,12 +4988,17 @@ function updateMaxChartDaysFromSeries(seriesList = []) {
 }
 
 function accountChartCachedSeries(item) {
-  return state.accountChartSeriesCache[accountChartKey(item)] || [];
+  return state.accountChartSeriesCache[accountChartKey(item)]?.series || [];
 }
 
 async function loadAccountChartSeries(request) {
   if (!request.itemId || !request.league || !request.category || !request.target) return;
-  if (state.accountChartSeriesCache[request.key] || state.accountChartSeriesLoading[request.key]) return;
+  const cached = state.accountChartSeriesCache[request.key];
+  if (
+    historySeriesCacheIsFresh(cached, request.revisionTs || request.currentTs)
+    || state.accountChartSeriesLoading[request.key]
+    || historySeriesRetryPending(state.accountChartSeriesRetryAt, request.key)
+  ) return;
   state.accountChartSeriesLoading[request.key] = true;
   try {
     const params = new URLSearchParams({
@@ -4998,9 +5028,10 @@ async function loadAccountChartSeries(request) {
     if (request.currentTs > 0 && request.currentValue > 0 && !seen.has(request.currentTs)) {
       series.push({ ts: request.currentTs, value: request.currentValue });
     }
-    state.accountChartSeriesCache[request.key] = series;
+    state.accountChartSeriesCache[request.key] = { series, revisionTs: request.revisionTs || request.currentTs, fetchedAt: Date.now() };
+    delete state.accountChartSeriesRetryAt[request.key];
   } catch {
-    state.accountChartSeriesCache[request.key] = [];
+    state.accountChartSeriesRetryAt[request.key] = Date.now() + HISTORY_SERIES_RETRY_MS;
   } finally {
     delete state.accountChartSeriesLoading[request.key];
   }
@@ -5015,7 +5046,12 @@ function queueAccountChartSeriesLoad() {
   const requests = Array.from(new Map(items.map(item => {
     const request = accountChartRequest(item);
     return [request.key, request];
-  })).values()).filter(request => request.itemId && !state.accountChartSeriesCache[request.key] && !state.accountChartSeriesLoading[request.key]);
+  })).values()).filter(request => (
+    request.itemId
+    && !historySeriesCacheIsFresh(state.accountChartSeriesCache[request.key], request.revisionTs || request.currentTs)
+    && !state.accountChartSeriesLoading[request.key]
+    && !historySeriesRetryPending(state.accountChartSeriesRetryAt, request.key)
+  ));
   updateMaxChartDaysFromSeries(items.map(accountChartCachedSeries));
   if (!requests.length) return;
   Promise.all(requests.map(loadAccountChartSeries)).then(() => {
@@ -5037,59 +5073,71 @@ function renderDetailChartTabs() {
   });
 }
 
-function demandHistoryKey(currentData, itemId) {
-  return `${historyTrendsKey(currentData)}|${itemId}|demand`;
-}
-
 function detailSeriesKey(currentData, itemId, metric) {
   return `${historyTrendsKey(currentData)}|${itemId}|${metric}`;
 }
 
 async function loadHistoricalItemSeries(currentData, itemId, metric) {
   const key = detailSeriesKey(currentData, itemId, metric);
-  if (state.detailSeriesCache[key]) return state.detailSeriesCache[key];
-  const params = new URLSearchParams({
-    limit: String(HISTORY_SERIES_LIMIT),
-    league: currentData.league || byId('live-league')?.value || '',
-    category: currentData.category || state.selectedCategory,
-    item_id: itemId,
-    target: currentData.target || selectedTarget(),
-    status: currentData.status || byId('live-status')?.value || 'any',
-    metric,
-  });
-  const response = await fetch(`/api/trade/history/item?${params.toString()}`);
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
-  const currentRow = rowsById(currentData).get(itemId);
-  const currentValue = metric === 'demand' ? Number(currentRow?.volume) : rateValue(currentRow);
-  const points = [...(data.series || [])];
-  if (currentValue > 0 && Number(currentData?.created_ts || 0) > 0) {
-    points.push({ created_ts: currentData.created_ts, value: currentValue });
-  }
-  const sortedPoints = points
-    .filter(point => point && Number(point.created_ts || 0) > 0)
-    .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0));
-  const seen = new Set();
-  const series = sortedPoints
-    .map(point => {
-      const createdTs = Number(point.created_ts || 0);
-      if (seen.has(createdTs)) return null;
-      seen.add(createdTs);
-      const value = Number(point.value);
-      return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
-    })
-    .filter(value => value !== null);
-  state.detailSeriesCache[key] = series;
-  updateMaxChartDaysFromSeries([series]);
-  return series;
+  const revisionTs = Number(currentData?.created_ts || 0);
+  const cached = state.detailSeriesCache[key];
+  if (historySeriesCacheIsFresh(cached, revisionTs)) return cached.series;
+  if (state.detailSeriesLoading[key]) return state.detailSeriesLoading[key];
+  if (historySeriesRetryPending(state.detailSeriesRetryAt, key)) return cached?.series || [];
+
+  const request = (async () => {
+    try {
+      const params = new URLSearchParams({
+        limit: String(HISTORY_SERIES_LIMIT),
+        league: currentData.league || byId('live-league')?.value || '',
+        category: currentData.category || state.selectedCategory,
+        item_id: itemId,
+        target: currentData.target || selectedTarget(),
+        status: currentData.status || byId('live-status')?.value || 'any',
+        metric,
+      });
+      const response = await fetch(`/api/trade/history/item?${params.toString()}`);
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || t('cacheLoadError'));
+      const currentRow = rowsById(currentData).get(itemId);
+      const currentValue = metric === 'demand' ? Number(currentRow?.volume) : rateValue(currentRow);
+      const currentTs = currentData.category === 'ItemBases'
+        ? Number(currentRow?.stored_created_ts || 0)
+        : revisionTs;
+      const points = [...(data.series || [])];
+      if (currentValue > 0 && currentTs > 0) {
+        points.push({ created_ts: currentTs, value: currentValue });
+      }
+      const sortedPoints = points
+        .filter(point => point && Number(point.created_ts || 0) > 0)
+        .sort((left, right) => Number(left.created_ts || 0) - Number(right.created_ts || 0));
+      const seen = new Set();
+      const series = sortedPoints
+        .map(point => {
+          const createdTs = Number(point.created_ts || 0);
+          if (seen.has(createdTs)) return null;
+          seen.add(createdTs);
+          const value = Number(point.value);
+          return Number.isFinite(value) && value > 0 ? { ts: createdTs, value } : null;
+        })
+        .filter(value => value !== null);
+      state.detailSeriesCache[key] = { series, revisionTs, fetchedAt: Date.now() };
+      delete state.detailSeriesRetryAt[key];
+      updateMaxChartDaysFromSeries([series]);
+      return series;
+    } catch {
+      state.detailSeriesRetryAt[key] = Date.now() + HISTORY_SERIES_RETRY_MS;
+      return cached?.series || [];
+    } finally {
+      delete state.detailSeriesLoading[key];
+    }
+  })();
+  state.detailSeriesLoading[key] = request;
+  return request;
 }
 
 async function loadDemandSeries(currentData, itemId) {
-  const key = demandHistoryKey(currentData, itemId);
-  if (state.detailDemandCache[key]) return state.detailDemandCache[key];
-  const series = await loadHistoricalItemSeries(currentData, itemId, 'demand');
-  state.detailDemandCache[key] = series;
-  return series;
+  return loadHistoricalItemSeries(currentData, itemId, 'demand');
 }
 
 function historyChartLabels(series) {
@@ -6638,7 +6686,12 @@ async function fetchLatestStoredRates({ league, category, target, status, sinceT
 
 async function loadHistoryTrends(currentData) {
   const key = historyTrendsKey(currentData);
-  if (!currentData?.created_ts || state.historyTrendsKey === key || state.isLoadingHistoryTrends) return;
+  if (!currentData?.created_ts) return;
+  if (state.isLoadingHistoryTrends) {
+    if (state.historyTrendsKey !== key) state.pendingHistoryTrendsData = currentData;
+    return;
+  }
+  if (state.historyTrendsKey === key) return;
   state.historyTrendsKey = key;
   state.historyTrends = [];
   state.isLoadingHistoryTrends = true;
@@ -6662,6 +6715,9 @@ async function loadHistoryTrends(currentData) {
     if (state.historyTrendsKey === key) {
       state.isLoadingHistoryTrends = false;
       renderMarketSignals();
+      const pending = state.pendingHistoryTrendsData;
+      state.pendingHistoryTrendsData = null;
+      if (pending && historyTrendsKey(pending) !== key) loadHistoryTrends(pending);
     }
   }
 }
@@ -7049,6 +7105,7 @@ async function initLiveTrade() {
         state.activeTradesKey = '';
         state.historyTrends = [];
         state.historyTrendsKey = '';
+        state.pendingHistoryTrendsData = null;
         state.isLoadingHistoryTrends = false;
         state.marketDiagnostics = null;
         state.marketDiagnosticsKey = '';
@@ -7060,15 +7117,16 @@ async function initLiveTrade() {
         state.rubMarket.context = null;
         state.rubMarket.error = '';
         state.rubMarket.loadedKey = '';
-        state.detailDemandCache = {};
         state.detailSeriesCache = {};
+        state.detailSeriesLoading = {};
+        state.detailSeriesRetryAt = {};
         state.sellerLots = null;
         state.sellerLotsParams = null;
         state.baseMarket = null;
         state.baseMarketParams = null;
-        state.baseMarketCache = {};
         state.baseMarketHistoryCache = {};
         state.baseMarketHistoryLoading = {};
+        state.baseMarketHistoryRetryAt = {};
         state.baseMarketError = '';
         state.focusedBaseMarketId = '';
         setText('last-snapshot', '-');

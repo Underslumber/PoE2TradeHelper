@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime, timezone
 from statistics import mean, pstdev
@@ -16,14 +17,15 @@ def _positive_number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def _number(value: Any) -> float | None:
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _timestamp(value: Any) -> float | None:
@@ -31,7 +33,7 @@ def _timestamp(value: Any) -> float | None:
         timestamp = float(value)
     except (TypeError, ValueError):
         return None
-    return timestamp if timestamp > 0 else None
+    return timestamp if math.isfinite(timestamp) and timestamp > 0 else None
 
 
 def _ts_to_iso(value: Any) -> str | None:
@@ -53,9 +55,21 @@ def _row_name(row: dict[str, Any] | None, currency_id: str) -> str:
     return str(row.get("text_ru") or row.get("text") or row.get("name") or row.get("id") or currency_id)
 
 
-def _normalize_history(series: list[dict[str, Any]], current_row: dict[str, Any] | None, current_ts: Any) -> list[dict[str, Any]]:
+def _normalize_history(
+    series: list[dict[str, Any]],
+    current_row: dict[str, Any] | None,
+    current_ts: Any,
+    source: str | None,
+) -> list[dict[str, Any]]:
     points: dict[float, dict[str, Any]] = {}
-    for item in series:
+    compatible_series = series
+    if not source:
+        sourced = [item for item in series if item.get("source") and _timestamp(item.get("created_ts")) is not None]
+        if sourced:
+            source = max(sourced, key=lambda item: _timestamp(item.get("created_ts")) or 0).get("source")
+    if source:
+        compatible_series = [item for item in series if not item.get("source") or item.get("source") == source]
+    for item in compatible_series:
         timestamp = _timestamp(item.get("created_ts"))
         value = _positive_number(item.get("value"))
         if timestamp is None or value is None:
@@ -321,7 +335,9 @@ def build_currency_trend_context(
     snapshot = snapshot or {}
     rows = list(snapshot.get("rows") or [])
     current_row = next((row for row in rows if row.get("id") == currency_id), None)
-    normalized_history = _hourly_series(_normalize_history(history, current_row, snapshot.get("created_ts")))
+    normalized_history = _hourly_series(
+        _normalize_history(history, current_row, snapshot.get("created_ts"), snapshot.get("source"))
+    )
     latest = normalized_history[-1] if normalized_history else None
     earliest = normalized_history[0] if normalized_history else None
     span_hours = 0.0
@@ -330,12 +346,13 @@ def build_currency_trend_context(
 
     latest_value = _positive_number((latest or {}).get("value"))
     returns = _log_returns(normalized_history)
+    change_7d = _window_change(normalized_history, 24 * 7)
     changes = {
         "1h": _window_change(normalized_history, 1),
         "6h": _window_change(normalized_history, 6),
         "24h": _window_change(normalized_history, 24),
         "72h": _window_change(normalized_history, 72),
-        "7d": _window_change(normalized_history, 24 * 7) or _number((current_row or {}).get("change")),
+        "7d": change_7d if change_7d is not None else _number((current_row or {}).get("change")),
     }
     forecast, slope_pct_hour, forecast_diagnostics = _forecast_series(
         normalized_history,
@@ -451,8 +468,15 @@ async def load_currency_trend_context(
             force_refresh=True,
         )
     else:
-        snapshot = read_latest_rates(league=league, category="Currency", target=target, status=status)
-    history = read_item_history(
+        snapshot = await asyncio.to_thread(
+            read_latest_rates,
+            league=league,
+            category="Currency",
+            target=target,
+            status=status,
+        )
+    history = await asyncio.to_thread(
+        read_item_history,
         league=league,
         category="Currency",
         target=target,

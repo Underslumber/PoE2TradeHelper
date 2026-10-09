@@ -22,7 +22,7 @@ def test_market_snapshot_interval_uses_early_window():
     ) == 900
 
 
-def test_build_market_snapshot_jobs_uses_all_static_categories(monkeypatch):
+def test_build_market_snapshot_jobs_uses_all_static_categories_and_default_currency_targets(monkeypatch):
     async def fake_static():
         return {
             "Currency": [{"id": "exalted"}],
@@ -39,7 +39,6 @@ def test_build_market_snapshot_jobs_uses_all_static_categories(monkeypatch):
             league="Fate",
             target="exalted",
             status="any",
-            currency_targets=["divine", "chaos", "exalted"],
         )
     )
 
@@ -50,6 +49,31 @@ def test_build_market_snapshot_jobs_uses_all_static_categories(monkeypatch):
         ("ItemBases", "exalted", "any"),
         ("Currency", "divine", "any"),
         ("Currency", "chaos", "any"),
+    ]
+
+
+def test_build_market_snapshot_jobs_allows_disabling_extra_currency_targets(monkeypatch):
+    async def fake_static():
+        return {
+            "Currency": [{"id": "exalted"}],
+            "Delirium": [{"id": "liquid-paranoia"}],
+        }
+
+    monkeypatch.setattr(market_snapshots, "get_trade_static", fake_static)
+
+    jobs = asyncio.run(
+        market_snapshots.build_market_snapshot_jobs(
+            league="Fate",
+            target="exalted",
+            status="any",
+            currency_targets=[],
+        )
+    )
+
+    assert [(job.category, job.target, job.status) for job in jobs] == [
+        ("Currency", "exalted", "any"),
+        ("Delirium", "exalted", "any"),
+        ("ItemBases", "exalted", "any"),
     ]
 
 

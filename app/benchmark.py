@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 
@@ -32,13 +33,23 @@ def _positive_number(value: Any) -> float | None:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def _row_price(row: dict[str, Any] | None) -> float | None:
     if not row:
         return None
     return _positive_number(row.get("median")) or _positive_number(row.get("best"))
+
+
+def benchmark_snapshot_available_at(snapshot: dict[str, Any]) -> float | None:
+    """Время, когда все наблюдения снимка уже были доступны."""
+    created_ts = _positive_number(snapshot.get("created_ts"))
+    if created_ts is None:
+        return None
+    granularity = str(snapshot.get("granularity") or "raw").lower()
+    bucket_seconds = {"hourly": 3600, "daily": 86400}.get(granularity, 0)
+    return created_ts + bucket_seconds
 
 
 def basket_price_from_snapshot(snapshot: dict[str, Any] | None, target_currency: str, basket_id: str | None = DEFAULT_BASKET_ID) -> dict[str, Any]:
@@ -65,7 +76,7 @@ def basket_price_from_snapshot(snapshot: dict[str, Any] | None, target_currency:
                 "target": target_currency,
             }
         )
-    value = weighted_sum / weight_sum if weight_sum > 0 else None
+    value = weighted_sum / weight_sum if weight_sum > 0 and not missing else None
     return {
         "id": basket_id or DEFAULT_BASKET_ID,
         "label_ru": DEFAULT_BASKET_LABEL_RU,
@@ -127,16 +138,16 @@ def benchmark_price_at(
             cache[key] = snapshots
     candidates: list[tuple[float, float]] = []
     for snapshot in snapshots:
-        created_ts = _positive_number(snapshot.get("created_ts"))
-        if created_ts is None:
+        available_ts = benchmark_snapshot_available_at(snapshot)
+        if available_ts is None:
             continue
         value = _positive_number(basket_price_from_snapshot(snapshot, target_currency, benchmark).get("value"))
         if value is not None:
-            candidates.append((created_ts, value))
+            candidates.append((available_ts, value))
     if not candidates:
         return None
     before = [item for item in candidates if item[0] <= timestamp]
     if before:
-        return max(before, key=lambda item: item[0])[1]
-    nearest_ts, nearest_price = min(candidates, key=lambda item: abs(item[0] - timestamp))
-    return nearest_price if abs(nearest_ts - timestamp) <= 36 * 60 * 60 else None
+        previous_ts, previous_price = max(before, key=lambda item: item[0])
+        return previous_price if timestamp - previous_ts <= 36 * 60 * 60 else None
+    return None

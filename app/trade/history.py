@@ -1,9 +1,10 @@
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import DATA_DIR
@@ -31,15 +32,23 @@ def _json_load(value: str | None, fallback: Any) -> Any:
 def _positive_float(value: Any) -> float | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _positive_int(value: Any) -> int | None:
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number > 0 else None
 
@@ -47,7 +56,7 @@ def _positive_int(value: Any) -> int | None:
 def _nonnegative_int(value: Any) -> int | None:
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number >= 0 else None
 
@@ -124,24 +133,26 @@ def _snapshot_from_group(records: list[MarketHistory]) -> dict[str, Any]:
     first = records[0]
     rows = []
     for record in records:
+        volume = _finite_float(record.volume)
+        offers = _nonnegative_int(record.offers)
         rows.append(
             {
                 "id": record.item_id,
-                "median": record.price,
-                "best": record.price,
-                "volume": record.volume or 0,
-                "offers": record.offers or 0,
-                "raw_count": record.raw_count,
-                "clean_count": record.clean_count,
-                "stale_count": record.stale_count,
-                "recent_listing_count": record.recent_listing_count,
+                "median": _positive_float(record.price),
+                "best": _positive_float(record.price),
+                "volume": volume if volume is not None else 0,
+                "offers": offers if offers is not None else 0,
+                "raw_count": _nonnegative_int(record.raw_count),
+                "clean_count": _nonnegative_int(record.clean_count),
+                "stale_count": _nonnegative_int(record.stale_count),
+                "recent_listing_count": _nonnegative_int(record.recent_listing_count),
                 "high_demand": bool(record.high_demand) if record.high_demand is not None else False,
                 "weak_activity": bool(record.weak_activity) if record.weak_activity is not None else False,
-                "change": record.change,
+                "change": _finite_float(record.change),
                 "sparkline": _json_load(record.sparkline_json, []),
                 "sparkline_kind": record.sparkline_kind,
                 "max_volume_currency": record.max_volume_currency,
-                "max_volume_rate": record.max_volume_rate,
+                "max_volume_rate": _positive_float(record.max_volume_rate),
             }
         )
     return {
@@ -151,6 +162,7 @@ def _snapshot_from_group(records: list[MarketHistory]) -> dict[str, Any]:
         "target": first.target,
         "status": first.status or "any",
         "source": first.source or "",
+        "granularity": first.granularity or "raw",
         "query_ids": _json_load(first.query_ids_json, []),
         "errors": _json_load(first.errors_json, []),
         "rows": rows,
@@ -195,15 +207,107 @@ def _read_sqlite_history(
     except SQLAlchemyError:
         return []
 
-    grouped: dict[float, list[MarketHistory]] = {}
-    ordered_timestamps: list[float] = []
+    grouped: dict[tuple[Any, ...], list[MarketHistory]] = {}
+    ordered_keys: list[tuple[Any, ...]] = []
     for record in records:
         timestamp = float(record.timestamp)
-        if timestamp not in grouped:
-            grouped[timestamp] = []
-            ordered_timestamps.append(timestamp)
-        grouped[timestamp].append(record)
-    return [_snapshot_from_group(grouped[timestamp]) for timestamp in ordered_timestamps[:limit]]
+        key = (
+            timestamp,
+            record.league,
+            record.category,
+            record.target,
+            record.status or "any",
+            record.source or "",
+            record.granularity or "raw",
+        )
+        if key not in grouped:
+            grouped[key] = []
+            ordered_keys.append(key)
+        grouped[key].append(record)
+    if limit <= 0:
+        return []
+    return [_snapshot_from_group(grouped[key]) for key in ordered_keys]
+
+
+def _read_sqlite_item_snapshots(
+    *,
+    limit: int,
+    league: str,
+    category: str,
+    target: str,
+    status: str,
+    item_id: str,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Сначала выбирает окно меток категории, затем читает строки нужного предмета."""
+    try:
+        with get_session() as db:
+            filters = (
+                MarketHistory.league == league,
+                MarketHistory.category == category,
+                MarketHistory.target == target,
+                MarketHistory.status == status,
+            )
+            timestamp_stmt = (
+                select(MarketHistory.timestamp)
+                .where(*filters)
+                .distinct()
+                .order_by(desc(MarketHistory.timestamp))
+                .limit(max(1, limit))
+            )
+            timestamps = db.scalars(timestamp_stmt).all()
+            if not timestamps:
+                return False, []
+            if limit <= 0:
+                return True, []
+
+            # Прежняя функция брала метаданные снимка из строки с наименьшим id
+            # для каждой метки времени, даже если снимки имели одинаковую метку.
+            representatives = (
+                select(func.min(MarketHistory.id).label("id"))
+                .where(*filters, MarketHistory.timestamp.in_(timestamps))
+                .group_by(
+                    MarketHistory.timestamp,
+                    func.coalesce(MarketHistory.source, ""),
+                    func.coalesce(MarketHistory.granularity, "raw"),
+                )
+                .subquery()
+            )
+            representative_stmt = (
+                select(MarketHistory)
+                .join(representatives, MarketHistory.id == representatives.c.id)
+                .order_by(MarketHistory.timestamp.desc(), MarketHistory.id.asc())
+            )
+            representative_rows = db.scalars(representative_stmt).all()
+
+            item_stmt = (
+                select(MarketHistory)
+                .where(*filters, MarketHistory.timestamp.in_(timestamps), MarketHistory.item_id == item_id)
+                .order_by(MarketHistory.timestamp.desc(), MarketHistory.id.asc())
+            )
+            item_rows = db.scalars(item_stmt).all()
+    except SQLAlchemyError:
+        return False, []
+
+    metadata = {
+        (float(record.timestamp), record.source or "", record.granularity or "raw"): record
+        for record in representative_rows
+    }
+    grouped: dict[tuple[float, str, str], list[MarketHistory]] = {}
+    for record in item_rows:
+        key = (float(record.timestamp), record.source or "", record.granularity or "raw")
+        grouped.setdefault(key, []).append(record)
+
+    snapshots: list[dict[str, Any]] = []
+    for timestamp in sorted(timestamps, reverse=True):
+        timestamp = float(timestamp)
+        keys = sorted(key for key in grouped if key[0] == timestamp)
+        for key in keys:
+            snapshot = _snapshot_from_group(grouped[key])
+            representative = metadata.get(key)
+            if representative is not None:
+                snapshot["source"] = representative.source or ""
+            snapshots.append(snapshot)
+    return True, snapshots
 
 
 def _write_jsonl(snapshot: Dict[str, Any], history_path: Path) -> None:
@@ -221,17 +325,25 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
     if not (league and category and target and created_ts):
         return
 
-    created_at = datetime.fromtimestamp(float(created_ts), tz=timezone.utc).isoformat()
+    timestamp = _finite_float(created_ts)
+    if timestamp is None:
+        return
+    try:
+        created_at = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return
     status = snapshot.get("status") or "any"
     source = snapshot.get("source") or ""
     query_ids_json = _json_dump(snapshot.get("query_ids"))
     errors_json = _json_dump(snapshot.get("errors"))
     records = []
+    seen_item_ids: set[str] = set()
     for row in rows:
         item_id = row.get("id")
         price = _history_row_price(row)
-        if not item_id or price is None:
+        if not item_id or price is None or item_id in seen_item_ids:
             continue
+        seen_item_ids.add(item_id)
         records.append(
             MarketHistory(
                 league=league,
@@ -249,14 +361,14 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
                 recent_listing_count=_nonnegative_int(row.get("recent_listing_count")),
                 high_demand=1 if row.get("high_demand") else 0,
                 weak_activity=1 if row.get("weak_activity") else 0,
-                change=_positive_float(row.get("change")),
+                change=_finite_float(row.get("change")),
                 sparkline_json=_json_dump(row.get("sparkline")),
                 sparkline_kind=row.get("sparkline_kind"),
                 max_volume_currency=row.get("max_volume_currency"),
                 max_volume_rate=_positive_float(row.get("max_volume_rate")),
                 query_ids_json=query_ids_json,
                 errors_json=errors_json,
-                timestamp=float(created_ts),
+                timestamp=timestamp,
                 created_at=created_at,
                 granularity="raw",
                 samples=1,
@@ -265,7 +377,26 @@ def _write_sqlite(snapshot: Dict[str, Any]) -> None:
     if not records:
         return
     with get_session() as db:
-        db.add_all(records)
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        existing_ids = set(
+            db.scalars(
+                select(MarketHistory.item_id)
+                .where(MarketHistory.league == league)
+                .where(MarketHistory.category == category)
+                .where(MarketHistory.target == target)
+                .where(MarketHistory.status == status)
+                .where(func.coalesce(MarketHistory.source, "") == source)
+                .where(MarketHistory.timestamp == timestamp)
+                .where(MarketHistory.granularity == "raw")
+                .where(MarketHistory.item_id.in_([record.item_id for record in records]))
+            ).all()
+        )
+        new_records = [record for record in records if record.item_id not in existing_ids]
+        if not new_records:
+            db.rollback()
+            return
+        db.add_all(new_records)
         db.commit()
 
 
@@ -353,28 +484,42 @@ def read_item_history(
     limit: int = 1500,
     history_path: Path | None = DEFAULT_HISTORY_PATH,
 ) -> List[Dict[str, Any]]:
-    snapshots = read_market_history(
-        limit=limit,
-        league=league,
-        category=category,
-        target=target,
-        status=status,
-        history_path=history_path,
-    )
+    snapshots = None
+    if history_path == DEFAULT_HISTORY_PATH or history_path is None or not history_path.exists():
+        category_found, item_snapshots = _read_sqlite_item_snapshots(
+            limit=limit,
+            league=league,
+            category=category,
+            target=target,
+            status=status,
+            item_id=item_id,
+        )
+        if category_found:
+            snapshots = item_snapshots
+    if snapshots is None:
+        snapshots = read_market_history(
+            limit=limit,
+            league=league,
+            category=category,
+            target=target,
+            status=status,
+            history_path=history_path,
+        )
     series: list[dict[str, Any]] = []
-    seen: set[float] = set()
+    seen: set[tuple[float, str, str]] = set()
     for snapshot in sorted(snapshots, key=lambda item: float(item.get("created_ts") or 0)):
         try:
             created_ts = float(snapshot.get("created_ts"))
         except (TypeError, ValueError):
             continue
-        if created_ts <= 0 or created_ts in seen:
+        identity = (created_ts, snapshot.get("source") or "", snapshot.get("granularity") or "raw")
+        if created_ts <= 0 or identity in seen:
             continue
         row = next((item for item in snapshot.get("rows") or [] if item.get("id") == item_id), None)
         value = _history_row_metric(row, metric)
         if value is None:
             continue
-        seen.add(created_ts)
+        seen.add(identity)
         series.append(
             {
                 "created_ts": created_ts,
@@ -393,6 +538,7 @@ def read_item_history(
                 "weak_activity": (row or {}).get("weak_activity"),
                 "change": (row or {}).get("change"),
                 "source": snapshot.get("source") or "",
+                "granularity": snapshot.get("granularity") or "raw",
             }
         )
     return series

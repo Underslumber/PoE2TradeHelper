@@ -19,6 +19,7 @@ from app.trade2 import (
 
 DEFAULT_MARKET_TARGET = "exalted"
 DEFAULT_MARKET_STATUS = "any"
+DEFAULT_MARKET_CURRENCY_TARGETS = ("divine", "chaos")
 DEFAULT_INTERVAL_MINUTES = 15.0
 DEFAULT_EARLY_INTERVAL_MINUTES = 5.0
 DEFAULT_EARLY_DAYS = 2.0
@@ -107,7 +108,11 @@ async def build_market_snapshot_jobs(
         seen.add(key)
         jobs.append(SnapshotJob(league=league, category=category, target=target, status=status))
 
-    for extra_target in currency_targets or []:
+    effective_currency_targets = currency_targets
+    if effective_currency_targets is None:
+        effective_currency_targets = list(DEFAULT_MARKET_CURRENCY_TARGETS) if not categories or "Currency" in categories else []
+
+    for extra_target in effective_currency_targets:
         if not extra_target or extra_target == target:
             continue
         key = ("Currency", extra_target)

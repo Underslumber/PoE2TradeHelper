@@ -117,9 +117,6 @@ def test_live_ui_has_separate_base_tracking_surface() -> None:
     assert "persistBaseMarketHideWeakActivity();" in app_js
     assert "updateBaseMarketPriceCurrencyIcon();" in app_js
     assert "updateBaseMarketPriceTriggerTitle();" in app_js
-    assert "function baseMarketPayloadHasActiveJob(payload)" in app_js
-    assert "!baseMarketPayloadHasActiveJob(cachedMarket)" in app_js
-    assert "!baseMarketPayloadHasActiveJob(data)" in app_js
     assert "function listingAgeText(lot)" in app_js
     assert "listingAgeText(lot)" in app_js
     assert "function baseMarketDemandBadge(row)" in app_js

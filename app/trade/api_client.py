@@ -15,7 +15,7 @@ from tenacity import (
 
 from app.config import USER_AGENT, BASE_URL
 from app.http_client import outbound_httpx_client
-from app.trade.rate_limit import trade2_rate_limited_request
+from app.trade.rate_limit import _parse_retry_after_seconds, trade2_rate_limited_request
 
 TRADE2_BASE = "https://www.pathofexile.com/api/trade2"
 TRADE2_RU_BASE = "https://ru.pathofexile.com/api/trade2"
@@ -54,9 +54,9 @@ def get_retry_after(retry_state: RetryCallState) -> float:
     if retry_state.outcome and retry_state.outcome.failed:
         exc = retry_state.outcome.exception()
         if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-            retry_after = exc.response.headers.get("Retry-After")
-            if retry_after and retry_after.isdigit():
-                return float(retry_after)
+            retry_after = _parse_retry_after_seconds(exc.response.headers.get("Retry-After"))
+            if retry_after:
+                return retry_after
     return 0.0
 
 

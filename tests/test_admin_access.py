@@ -31,7 +31,7 @@ def client_and_session():
 
     app.dependency_overrides[routes.get_db] = override_get_db
     try:
-        yield TestClient(app), SessionLocal
+        yield TestClient(app, base_url="https://public.example.test:9443"), SessionLocal
     finally:
         app.dependency_overrides.clear()
 

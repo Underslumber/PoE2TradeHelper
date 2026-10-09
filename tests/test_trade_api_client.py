@@ -1,6 +1,18 @@
 import asyncio
+from types import SimpleNamespace
+
+import httpx
+import pytest
 
 from app.trade import api_client
+
+
+@pytest.mark.parametrize(("value", "expected"), [(" 2.5 ", 2.5), ("inf", 0.0), ("nan", 0.0)])
+def test_retry_wait_uses_finite_retry_after(value, expected):
+    response = httpx.Response(429, headers={"Retry-After": value}, request=httpx.Request("GET", "https://example.test"))
+    error = httpx.HTTPStatusError("rate limited", request=response.request, response=response)
+    state = SimpleNamespace(outcome=SimpleNamespace(failed=True, exception=lambda: error))
+    assert api_client.get_retry_after(state) == expected
 
 
 class FakeResponse:

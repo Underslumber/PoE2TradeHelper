@@ -391,6 +391,8 @@ class OutboundHttpxClient:
                     )
                     if attempt < attempts and await self._switch_after_failure(failed_proxy_url):
                         continue
+                    # Сохраняем cooldown, если альтернативного маршрута нет.
+                    return response
                 if should_switch and self._response_failover_allowed(method_name, args):
                     failed_proxy_url = self._proxy_url
                     mark_outbound_proxy_failed(failed_proxy_url, proxy_group=self._proxy_group)

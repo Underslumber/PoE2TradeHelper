@@ -1882,6 +1882,11 @@ def test_item_base_market_blank_refresh_scans_catalog_in_rough_batches(monkeypat
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "get", staticmethod(lambda key: None))
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "set", staticmethod(lambda *args, **kwargs: None))
+    monkeypatch.setattr(trade2, "_read_item_base_market_history_snapshot", lambda **kwargs: None)
+    monkeypatch.setattr(trade2, "read_latest_rates", lambda **kwargs: None)
+    monkeypatch.setattr(trade2, "_item_base_market_recent_demand_map", lambda **kwargs: {})
     calls = {"search": 0, "fetch": 0}
     searched_types = []
     batch_size = trade2.ITEM_BASE_MARKET_SCAN_BATCH_SIZE
@@ -2036,8 +2041,10 @@ def test_item_base_market_job_treats_generic_429_as_rate_limited(monkeypatch):
     assert not trade2.ITEM_BASE_MARKET_CACHE
 
 
-def test_item_base_market_refresh_restarts_stale_running_job():
+def test_item_base_market_refresh_restarts_stale_running_job(monkeypatch):
     trade2.ITEM_BASE_MARKET_JOBS.clear()
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "get", staticmethod(lambda key: None))
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "set", staticmethod(lambda *args, **kwargs: None))
     now = time.time()
     key = trade2._item_base_market_job_key("PoE2 - Test", "exalted", "securable", "", None, 100)
     stale_job = {
@@ -2130,7 +2137,31 @@ def test_item_base_market_rate_limit_persists_partial_rough_rows(monkeypatch):
     trade2.ITEM_BASE_MARKET_CACHE.clear()
     trade2.ITEM_BASE_MARKET_JOBS.clear()
     trade2.ITEM_BASE_MARKET_SCAN_CURSORS.clear()
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "get", staticmethod(lambda key: None))
+    monkeypatch.setattr(trade2.SQLiteCacheManager, "set", staticmethod(lambda *args, **kwargs: None))
     captured_history = []
+    retained_base = {
+        "id": "base:old-ring",
+        "type": "Old Ring",
+        "type_ru": "Старое кольцо",
+        "query_type": "Old Ring",
+        "base_class": "ring",
+    }
+    retained_lot = {"price_amount": 4.0, "price_currency": "exalted", "price_target": 4.0}
+    retained_row = {
+        **trade2._base_market_row_from_base(retained_base),
+        **trade2._base_market_stats([retained_lot], 1),
+        "stored_created_ts": 1.0,
+        "sample_lots": [retained_lot],
+    }
+    trade2.ITEM_BASE_MARKET_CACHE[
+        trade2._item_base_market_cache_key(
+            "PoE2 - Test", "exalted", "securable", "", trade2.ITEM_BASE_MARKET_MAX_BASES, None
+        )
+    ] = {
+        "created_ts": 1.0,
+        "data": {"created_ts": 1.0, "source": "trade2/search+fetch:rough", "rows": [retained_row]},
+    }
 
     async def fake_catalog(q="", limit=500):
         return {
@@ -2210,11 +2241,78 @@ def test_item_base_market_rate_limit_persists_partial_rough_rows(monkeypatch):
     assert result["refresh_job"]["status"] == "rate_limited"
     assert result["refresh_job"]["retry_after"] == 299
     assert result["refresh_job"]["scan_batch_size"] == 2
+    assert any(row["id"] == "base:old-ring" for row in result["rows"])
+    assert next(row for row in result["rows"] if row["id"] == "base:old-ring")["stored_created_ts"] == 1.0
     assert captured_history
     persisted = captured_history[-1]
     assert persisted["source"] == "trade2/search+fetch:rough"
     assert [row["id"] for row in persisted["rows"]] == ["base:gold-ring"]
     assert persisted["rows"][0]["low"] == 1.5
+    assert persisted["rows"][0]["stored_created_ts"] == persisted["created_ts"]
+
+
+def test_saved_item_base_history_restores_accumulated_rows_and_observation_times(monkeypatch):
+    trade2.ITEM_BASE_MARKET_CACHE.clear()
+    trade2.ITEM_BASE_MARKET_JOBS.clear()
+    bases = [
+        {
+            "id": "base:old-ring",
+            "type": "Old Ring",
+            "type_ru": "Старое кольцо",
+            "query_type": "Old Ring",
+            "base_class": "ring",
+        },
+        {
+            "id": "base:new-ring",
+            "type": "New Ring",
+            "type_ru": "Новое кольцо",
+            "query_type": "New Ring",
+            "base_class": "ring",
+        },
+    ]
+    snapshots = [
+        {
+            "created_ts": 200.0,
+            "league": "PoE2 - Saved Test",
+            "category": "ItemBases",
+            "target": "exalted",
+            "status": "securable",
+            "source": "trade2/search+fetch:rough",
+            "rows": [{"id": "base:new-ring", "best": 2.0, "median": 2.0, "offers": 2, "volume": 2}],
+        },
+        {
+            "created_ts": 100.0,
+            "league": "PoE2 - Saved Test",
+            "category": "ItemBases",
+            "target": "exalted",
+            "status": "securable",
+            "source": "trade2/search+fetch:rough",
+            "rows": [{"id": "base:old-ring", "best": 4.0, "median": 4.0, "offers": 3, "volume": 3}],
+        },
+    ]
+
+    async def fake_catalog(q="", limit=500):
+        return {"source": "fake", "total": len(bases), "bases": bases, "errors": []}
+
+    monkeypatch.setattr(trade2, "read_history", lambda **kwargs: snapshots)
+    monkeypatch.setattr(trade2, "get_item_base_catalog", fake_catalog)
+    monkeypatch.setattr(trade2, "_item_base_market_recent_demand_map", lambda **kwargs: {})
+
+    result = asyncio.run(
+        trade2.get_item_base_market(
+            league="PoE2 - Saved Test",
+            target="exalted",
+            status="securable",
+            q="",
+            force_refresh=False,
+        )
+    )
+
+    rows = {row["id"]: row for row in result["rows"]}
+    assert set(rows) == {"base:old-ring", "base:new-ring"}
+    assert rows["base:old-ring"]["stored_created_ts"] == 100.0
+    assert rows["base:new-ring"]["stored_created_ts"] == 200.0
+    assert result["created_ts"] == 200.0
 
 
 def test_item_base_market_blank_query_skips_exact_snapshot(monkeypatch):

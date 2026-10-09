@@ -1,5 +1,7 @@
 import asyncio
 
+import httpx
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -26,6 +28,8 @@ def test_row_price_prefers_median_and_skips_bad_values():
     assert row_price({"median": 12, "best": 10}) == 12
     assert row_price({"best": "3.5"}) == 3.5
     assert row_price({"median": None}) is None
+    assert row_price({"median": float("inf")}) is None
+    assert row_price({"median": float("nan")}) is None
 
 
 def test_price_above_triggers_on_threshold_crossing():
@@ -132,3 +136,43 @@ def test_notifications_skip_rules_with_mismatched_currency_and_keep_pin_currency
     assert divine_pin.target_currency == "divine"
     assert divine_pin.last_price == 42.0
     assert result["checked"] == 1
+
+
+def test_failed_notification_keeps_threshold_crossing_for_retry(monkeypatch):
+    import app.notifications as notifications
+
+    db = _memory_session()
+    now = now_iso()
+    db.add(User(id=1, username="retry", email="retry@e.local", display_name="T", password_hash="x", created_at=now))
+    db.commit()
+    pin = _add_pin_with_rule(db, user_id=1, item_id="divine", target_currency="exalted")
+    rule = db.query(TelegramNotificationRule).filter_by(pin_id=pin.id).one()
+    rule.event_type = "price_above"
+    rule.threshold_value = 10
+    rule.last_price = 9
+    db.commit()
+    attempts = []
+
+    async def send(chat_id, text):
+        attempts.append(text)
+        if len(attempts) == 1:
+            raise httpx.ConnectError("temporary failure")
+
+    monkeypatch.setattr(notifications, "telegram_is_configured", lambda: True)
+    monkeypatch.setattr(notifications, "send_telegram_message", send)
+
+    async def check():
+        return await process_telegram_notifications(
+            db, league="Standard", category="Currency", target="exalted",
+            rows=[{"id": "divine", "median": 11}], source="trade2",
+        )
+
+    assert asyncio.run(check())["failed"] == 1
+    assert rule.last_price == 9
+    assert rule.last_triggered_at is None
+    assert asyncio.run(check())["sent"] == 1
+    assert rule.last_price == 11
+    assert rule.last_triggered_at is not None
+    assert asyncio.run(check())["sent"] == 0
+    assert len(attempts) == 2
+    db.close()

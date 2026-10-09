@@ -175,6 +175,7 @@ def test_market_diagnostics_uses_latest_snapshot_and_history(monkeypatch) -> Non
                 "category": "Currency",
                 "target": "exalted",
                 "status": "any",
+                "source": "poe.ninja",
                 "rows": [{"id": "cheap", "median": 10.0, "change": -10, "volume": 50}],
             },
             latest,
@@ -198,6 +199,49 @@ def test_market_diagnostics_uses_latest_snapshot_and_history(monkeypatch) -> Non
     assert payload["health"]["priced"] == 1
     assert payload["health"]["expected"] == 3
     assert payload["backtest"]["evaluated"] == 1
+
+
+def test_historical_currency_benchmark_never_uses_future_or_stale_snapshot() -> None:
+    base_ts = 1_760_000_000
+    cache_key = ("benchmark_history", "Fate", "exalted")
+    future = {
+        "created_ts": base_ts + 3600,
+        "rows": [{"id": "divine", "median": 100}],
+    }
+    stale = {
+        "created_ts": base_ts - 37 * 3600,
+        "rows": [{"id": "divine", "median": 100}],
+    }
+
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", base_ts, {cache_key: [future]}) is None
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", base_ts, {cache_key: [stale]}) is None
+
+
+def test_historical_currency_benchmark_waits_for_hourly_and_daily_bucket_end() -> None:
+    cache_key = ("benchmark_history", "Fate", "exalted")
+    hourly = {"created_ts": 3600, "granularity": "hourly", "rows": [{"id": "divine", "median": 100}]}
+    daily = {"created_ts": 86400, "granularity": "daily", "rows": [{"id": "divine", "median": 100}]}
+
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", 4000, {cache_key: [hourly]}) is None
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", 7200, {cache_key: [hourly]}) == 100
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", 90000, {cache_key: [daily]}) is None
+    assert routes._benchmark_price_at("Fate", "exalted", "divine", 172800, {cache_key: [daily]}) == 100
+
+
+def test_item_base_account_market_keeps_row_observation_timestamp(monkeypatch) -> None:
+    snapshot = {
+        "created_ts": 200,
+        "target": "exalted",
+        "source": "trade2/search+fetch",
+        "rows": [{"id": "base:test", "median": 5, "stored_created_ts": 100}],
+    }
+    monkeypatch.setattr(routes, "_latest_rates_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(routes, "_enrich_itembase_recent_demand", lambda _league, _target, _item, market, _cache: market)
+
+    market = routes._latest_item_market("Fate", "ItemBases", "exalted", "base:test", {})
+
+    assert market["created_ts"] == 200
+    assert market["stored_created_ts"] == 100
 
 
 def test_trade_static_uses_bootstrap_fallback_without_error_field(monkeypatch) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import time
 from datetime import datetime
@@ -40,7 +41,7 @@ def row_price(row: dict[str, Any] | None) -> float | None:
         price = float(value)
     except (TypeError, ValueError):
         return None
-    return price if price > 0 else None
+    return price if math.isfinite(price) and price > 0 else None
 
 
 def row_has_high_demand(row: dict[str, Any] | None) -> bool:
@@ -224,6 +225,8 @@ async def process_telegram_notifications(
                 result["sent"] += 1
             except httpx.HTTPError:
                 result["failed"] += 1
+                # Не теряем пересечение порога: следующий цикл повторит отправку.
+                continue
         elif triggered:
             result["skipped"] += 1
         if current_price is not None:

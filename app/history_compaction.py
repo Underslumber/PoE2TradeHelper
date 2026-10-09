@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db.models import MarketHistory
 from app.db.session import get_session
@@ -29,6 +30,19 @@ def _json_or_none(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _positive_finite_float(value: Any) -> float | None:
+    number = _finite_float(value)
+    return number if number is not None and number > 0 else None
+
+
 def _bucket(timestamp: float, granularity: str) -> float:
     seconds = 3600 if granularity == HOURLY_GRANULARITY else 86400
     return float(int(timestamp // seconds) * seconds)
@@ -37,7 +51,7 @@ def _bucket(timestamp: float, granularity: str) -> float:
 def _sample_weight(record: MarketHistory) -> int:
     try:
         samples = int(record.samples or 1)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         samples = 1
     return max(1, samples)
 
@@ -49,8 +63,14 @@ def _weighted_average(records: list[MarketHistory], field: str) -> float | None:
         value = getattr(record, field, None)
         if value is None:
             continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(value):
+            continue
         weight = _sample_weight(record)
-        total += float(value) * weight
+        total += value * weight
         weight_total += weight
     return total / weight_total if weight_total else None
 
@@ -88,11 +108,11 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
         recent_listing_count=recent_listing_count,
         high_demand=latest.high_demand,
         weak_activity=latest.weak_activity,
-        change=latest.change,
+        change=_finite_float(latest.change),
         sparkline_json=latest.sparkline_json,
         sparkline_kind=latest.sparkline_kind,
         max_volume_currency=latest.max_volume_currency,
-        max_volume_rate=latest.max_volume_rate,
+        max_volume_rate=_positive_finite_float(latest.max_volume_rate),
         query_ids_json=latest.query_ids_json,
         errors_json=latest.errors_json,
         timestamp=timestamp,
@@ -104,12 +124,23 @@ def _aggregate(records: list[MarketHistory], granularity: str) -> MarketHistory:
 
 def _group_records(records: list[MarketHistory], granularity: str) -> dict[tuple[Any, ...], list[MarketHistory]]:
     groups: dict[tuple[Any, ...], list[MarketHistory]] = defaultdict(list)
+    exact_raw_rows: set[tuple[Any, ...]] = set()
     for record in records:
+        if record.granularity in (None, RAW_GRANULARITY):
+            fingerprint = tuple(
+                getattr(record, column.name)
+                for column in MarketHistory.__table__.columns
+                if column.name != "id"
+            )
+            if fingerprint in exact_raw_rows:
+                continue
+            exact_raw_rows.add(fingerprint)
         key = (
             record.league,
             record.category,
             record.target,
             record.status or "any",
+            record.source or "",
             record.item_id,
             _bucket(float(record.timestamp), granularity),
         )
@@ -132,6 +163,7 @@ def _merge_existing_aggregates(db: Any, groups: dict[tuple[Any, ...], list[Marke
             record.category,
             record.target,
             record.status or "any",
+            record.source or "",
             record.item_id,
             _bucket(float(record.timestamp), granularity),
         )
@@ -145,16 +177,20 @@ def compact_market_history(policy: CompactionPolicy | None = None, *, now_ts: fl
     raw_cutoff = now - policy.raw_days * 86400
     hourly_cutoff = now - policy.hourly_days * 86400
     with get_session() as db:
+        if db.get_bind().dialect.name == "sqlite":
+            db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         old_raw = db.scalars(
             select(MarketHistory)
             .where(MarketHistory.timestamp < raw_cutoff)
             .where((MarketHistory.granularity == RAW_GRANULARITY) | (MarketHistory.granularity.is_(None)))
         ).all()
+        old_raw = [record for record in old_raw if _positive_finite_float(record.price) is not None]
         old_hourly = db.scalars(
             select(MarketHistory)
             .where(MarketHistory.timestamp < hourly_cutoff)
             .where(MarketHistory.granularity == HOURLY_GRANULARITY)
         ).all()
+        old_hourly = [record for record in old_hourly if _positive_finite_float(record.price) is not None]
 
         hourly_groups = _group_records([record for record in old_raw if record.timestamp >= hourly_cutoff], HOURLY_GRANULARITY)
         daily_groups = _group_records([*old_hourly, *[record for record in old_raw if record.timestamp < hourly_cutoff]], DAILY_GRANULARITY)
@@ -172,6 +208,7 @@ def compact_market_history(policy: CompactionPolicy | None = None, *, now_ts: fl
                 .where(MarketHistory.category == record.category)
                 .where(MarketHistory.target == record.target)
                 .where(MarketHistory.status == record.status)
+                .where(func.coalesce(MarketHistory.source, "") == (record.source or ""))
                 .where(MarketHistory.item_id == record.item_id)
                 .where(MarketHistory.timestamp == record.timestamp)
                 .where(MarketHistory.granularity == record.granularity)

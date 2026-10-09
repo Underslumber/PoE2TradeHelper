@@ -10,10 +10,12 @@ from app.trade.history import (
 from app.trade.rate_limit import trade2_rate_limited_request
 
 import asyncio
+import hashlib
 import json
 import re
 import statistics
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -90,6 +92,8 @@ ITEM_BASE_MARKET_MIN_GENERAL_LOTS = 1
 ITEM_BASE_MARKET_MAX_SAMPLE_LIMIT = 500
 ITEM_BASE_MARKET_JOB_TTL = 3600
 ITEM_BASE_MARKET_STALE_JOB_SECONDS = 120
+ITEM_BASE_MARKET_SCAN_CHECKPOINT_TTL = 30 * 24 * 60 * 60
+ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION = 1
 ITEM_BASE_MARKET_OVERVIEW_FETCH_LIMIT = 80
 ITEM_BASE_MARKET_EXACT_BASE_LIMIT = 12
 ITEM_BASE_MARKET_MAX_BASES = ITEM_BASE_CATALOG_LIMIT
@@ -2422,6 +2426,146 @@ def _item_base_market_scan_cursor_key(
     return (league, target, status, min_ilvl)
 
 
+def _item_base_market_scan_checkpoint_key(cursor_key: tuple[Any, ...]) -> str:
+    return SQLiteCacheManager.get_dict_key("item-base-market-scan", ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION, *cursor_key)
+
+
+def _merge_item_base_market_scan_rows(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    row_keys: list[set[str]] = []
+    active: list[bool] = []
+    key_owner: dict[str, int] = {}
+    for group in groups:
+        for row in group:
+            keys = _base_market_row_keys(row)
+            superseded_indices = {key_owner[key] for key in keys if key in key_owner}
+            for index in superseded_indices:
+                if not active[index]:
+                    continue
+                active[index] = False
+                for old_key in row_keys[index]:
+                    if key_owner.get(old_key) == index:
+                        del key_owner[old_key]
+            index = len(rows)
+            rows.append(row)
+            row_keys.append(keys)
+            active.append(True)
+            for key in keys:
+                key_owner[key] = index
+    return [row for row, is_active in zip(rows, active) if is_active][-ITEM_BASE_MARKET_SCAN_LIMIT:]
+
+
+def _item_base_market_scan_catalog_fingerprint(bases: list[dict[str, Any]]) -> str:
+    identity = [
+        [
+            str(base.get("id") or ""),
+            str(base.get("query_type") or base.get("type") or ""),
+            str(base.get("base_class") or ""),
+        ]
+        for base in bases
+    ]
+    payload = json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _item_base_market_scan_checkpoint(
+    cursor_key: tuple[Any, ...],
+    *,
+    fingerprint: str,
+    base_count: int,
+) -> dict[str, Any] | None:
+    try:
+        saved = SQLiteCacheManager.get(_item_base_market_scan_checkpoint_key(cursor_key))
+    except Exception:
+        return None
+    if not isinstance(saved, dict):
+        return None
+    if saved.get("version") != ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION or saved.get("fingerprint") != fingerprint:
+        return None
+    try:
+        cursor = int(saved.get("cursor", 0))
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= cursor < max(1, base_count):
+        return None
+    pending = saved.get("pending")
+    if not isinstance(pending, list) or len(pending) > ITEM_BASE_MARKET_SCAN_LIMIT:
+        return None
+    normalized_pending: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in pending:
+        if not isinstance(item, dict):
+            return None
+        base_id = str(item.get("id") or "")
+        if not base_id or base_id in seen:
+            return None
+        seen.add(base_id)
+        normalized_pending.append({"id": base_id, "priority": bool(item.get("priority"))})
+    partial_rows = saved.get("partial_rows")
+    if not isinstance(partial_rows, list) or len(partial_rows) > ITEM_BASE_MARKET_SCAN_LIMIT:
+        return None
+    if any(not isinstance(row, dict) for row in partial_rows):
+        return None
+    retry_at = _to_float(saved.get("retry_at"))
+    return {
+        "version": ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION,
+        "fingerprint": fingerprint,
+        "cursor": cursor,
+        "pending": normalized_pending,
+        "retry_at": retry_at,
+        "partial_rows": partial_rows,
+    }
+
+
+def _item_base_market_scan_retry_at(cursor_key: tuple[Any, ...]) -> float | None:
+    try:
+        saved = SQLiteCacheManager.get(_item_base_market_scan_checkpoint_key(cursor_key))
+    except Exception:
+        return None
+    if not isinstance(saved, dict) or saved.get("version") != ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION:
+        return None
+    return _to_float(saved.get("retry_at"))
+
+
+def _save_item_base_market_scan_checkpoint(
+    cursor_key: tuple[Any, ...],
+    *,
+    fingerprint: str,
+    cursor: int,
+    pending: list[dict[str, Any]],
+    retry_at: float | None = None,
+    partial_rows: list[dict[str, Any]] | None = None,
+) -> None:
+    payload = {
+        "version": ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION,
+        "fingerprint": fingerprint,
+        "cursor": max(0, int(cursor)),
+        "retry_at": _to_float(retry_at),
+        "pending": [
+            {"id": str(item.get("id") or ""), "priority": bool(item.get("priority"))}
+            for item in pending[:ITEM_BASE_MARKET_SCAN_LIMIT]
+            if item.get("id")
+        ],
+        "partial_rows": [
+            row
+            for row in (partial_rows or [])[:ITEM_BASE_MARKET_SCAN_LIMIT]
+            if isinstance(row, dict) and _item_base_market_row_has_evidence(row)
+        ],
+    }
+    try:
+        SQLiteCacheManager.set(
+            _item_base_market_scan_checkpoint_key(cursor_key),
+            payload,
+            ttl=ITEM_BASE_MARKET_SCAN_CHECKPOINT_TTL,
+        )
+    except Exception:
+        return
+
+
+def _item_base_market_job_is_owner(key: tuple[Any, ...], job: dict[str, Any], owner_token: str) -> bool:
+    return ITEM_BASE_MARKET_JOBS.get(key) is job and job.get("owner_token") == owner_token
+
+
 def _item_base_market_scan_batch(
     bases: list[dict[str, Any]],
     cursor_key: tuple[Any, ...],
@@ -2726,7 +2870,11 @@ def _read_item_base_market_history_snapshot(
                 continue
             current_rank = row_source_rank_by_id.get(item_id)
             if current_rank is None or source_rank < current_rank:
-                rows_by_id[item_id] = {**dict(row), "stored_source": source}
+                rows_by_id[item_id] = {
+                    **dict(row),
+                    "stored_source": source,
+                    "stored_created_ts": _to_float(snapshot.get("created_ts")),
+                }
                 row_source_rank_by_id[item_id] = source_rank
 
     if not rows_by_id:
@@ -3075,12 +3223,15 @@ async def run_item_base_market_refresh_job(
     limit: int = ITEM_BASE_MARKET_MAX_BASES,
     min_ilvl: int | None = None,
     sample_limit: int | None = None,
+    _owner_token: str | None = None,
 ) -> dict[str, Any]:
     q = q.strip()
     limit = _bounded_item_base_market_limit(limit)
     bounded_sample_limit = _bounded_item_base_sample_limit(sample_limit)
     key = _item_base_market_job_key(league, target, status, q, min_ilvl, bounded_sample_limit)
     job = ITEM_BASE_MARKET_JOBS.get(key)
+    if _owner_token and (not job or job.get("owner_token") != _owner_token):
+        return _cache_copy((job or {}).get("result") or {})
     if not job:
         now = time.time()
         job = {
@@ -3097,11 +3248,20 @@ async def run_item_base_market_refresh_job(
             "clean_count": 0,
             "priority_recheck_count": 0,
             "error": None,
+            "owner_token": _owner_token or uuid.uuid4().hex,
         }
         ITEM_BASE_MARKET_JOBS[key] = job
+    if not job.get("owner_token"):
+        job["owner_token"] = _owner_token or uuid.uuid4().hex
+    owner_token = _owner_token or str(job["owner_token"])
+    if job.get("owner_token") != owner_token:
+        return _cache_copy(job.get("result") or {})
+    job["runner_task"] = asyncio.current_task()
     job["status"] = "running"
     job["updated_ts"] = time.time()
     catalog = await get_item_base_catalog(q=q if q else "", limit=ITEM_BASE_CATALOG_LIMIT)
+    if not _item_base_market_job_is_owner(key, job, owner_token):
+        return _cache_copy(job.get("result") or {})
     if q and not catalog.get("bases"):
         catalog = {**catalog, "bases": [_manual_item_base_market_base(q)]}
     bases = catalog.get("bases") or [_manual_item_base_market_base(q)]
@@ -3129,9 +3289,18 @@ async def run_item_base_market_refresh_job(
                     min_ilvl=min_ilvl,
                     stored_source=latest_source,
                 )
+                if not _item_base_market_job_is_owner(key, job, owner_token):
+                    return _cache_copy(job.get("result") or {})
 
     priority_recheck_count = 0
     normal_scan_count = 0
+    scan_checkpoint: dict[str, Any] | None = None
+    scan_fingerprint: str | None = None
+    scan_bases: list[dict[str, Any]] = []
+    scan_base_indices: dict[str, int] = {}
+    pending_scan: list[dict[str, Any]] = []
+    scan_cursor = 0
+    restored_partial_rows: list[dict[str, Any]] = []
     if q:
         selected_bases = bases[: min(limit, ITEM_BASE_MARKET_EXACT_BASE_LIMIT)]
         scan_cursor_key = None
@@ -3140,14 +3309,52 @@ async def run_item_base_market_refresh_job(
     else:
         scan_cursor_key = _item_base_market_scan_cursor_key(league, target, status, min_ilvl)
         scan_bases = bases[:ITEM_BASE_MARKET_SCAN_LIMIT]
-        priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows, target=target)
-        deprioritized_keys = _item_base_market_low_priority_base_keys(previous_rows, target=target)
-        selected_bases, scan_start, scan_next, priority_recheck_count, normal_scan_count = _item_base_market_scan_batch(
-            scan_bases,
+        scan_fingerprint = _item_base_market_scan_catalog_fingerprint(scan_bases)
+        scan_checkpoint = _item_base_market_scan_checkpoint(
             scan_cursor_key,
-            priority_bases=priority_bases,
-            deprioritized_keys=deprioritized_keys,
+            fingerprint=scan_fingerprint,
+            base_count=len(scan_bases),
         )
+        if scan_checkpoint:
+            restored_partial_rows = list(scan_checkpoint["partial_rows"])
+            if restored_partial_rows:
+                previous_rows = _merge_item_base_market_scan_rows(previous_rows, restored_partial_rows)
+        by_base_id = {str(base.get("id") or ""): base for base in scan_bases if base.get("id")}
+        if scan_checkpoint and scan_checkpoint["pending"] and all(item["id"] in by_base_id for item in scan_checkpoint["pending"]):
+            pending_scan = list(scan_checkpoint["pending"])
+            selected_bases = [by_base_id[item["id"]] for item in pending_scan]
+            scan_start = int(scan_checkpoint["cursor"])
+            scan_cursor = scan_start
+            scan_base_indices = {str(base.get("id") or ""): index for index, base in enumerate(scan_bases)}
+            scan_next = scan_start
+            priority_recheck_count = sum(1 for item in pending_scan if item["priority"])
+            normal_scan_count = len(pending_scan) - priority_recheck_count
+        else:
+            scan_cursor = int((scan_checkpoint or {}).get("cursor", ITEM_BASE_MARKET_SCAN_CURSORS.get(scan_cursor_key, 0))) % max(1, len(scan_bases))
+            ITEM_BASE_MARKET_SCAN_CURSORS[scan_cursor_key] = scan_cursor
+            priority_bases = _item_base_market_priority_bases(scan_bases, previous_rows, target=target)
+            deprioritized_keys = _item_base_market_low_priority_base_keys(previous_rows, target=target)
+            selected_bases, scan_start, scan_next, priority_recheck_count, normal_scan_count = _item_base_market_scan_batch(
+                scan_bases,
+                scan_cursor_key,
+                priority_bases=priority_bases,
+                deprioritized_keys=deprioritized_keys,
+            )
+            scan_base_indices = {str(base.get("id") or ""): index for index, base in enumerate(scan_bases)}
+            priority_ids = {str(base.get("id") or "") for base in priority_bases}
+            pending_scan = [
+                {"id": str(base.get("id") or ""), "priority": str(base.get("id") or "") in priority_ids}
+                for base in selected_bases
+                if base.get("id")
+            ]
+            scan_checkpoint = {"version": ITEM_BASE_MARKET_SCAN_CHECKPOINT_VERSION, "fingerprint": scan_fingerprint, "cursor": scan_cursor, "pending": pending_scan}
+            _save_item_base_market_scan_checkpoint(
+                scan_cursor_key,
+                fingerprint=scan_fingerprint,
+                cursor=scan_cursor,
+                pending=pending_scan,
+                partial_rows=restored_partial_rows,
+            )
     errors = list(catalog.get("errors") or [])
     job["base_total"] = len(selected_bases)
     job["catalog_total"] = len(bases)
@@ -3159,6 +3366,8 @@ async def run_item_base_market_refresh_job(
     job["total"] = len(bases) if not q else None
 
     _, rates = await _currency_rates_for_target(league, target, status="any")
+    if not _item_base_market_job_is_owner(key, job, owner_token):
+        return _cache_copy(job.get("result") or {})
     recent_demand_by_id = _item_base_market_recent_demand_map(
         league=league,
         target=target,
@@ -3202,6 +3411,14 @@ async def run_item_base_market_refresh_job(
             recent_demand_by_id=recent_demand_by_id,
         )
         result["query_ids"] = exact_query_ids
+        observed_ts = _to_float(result.get("created_ts"))
+        if observed_ts is not None:
+            fresh_ids = {str(row.get("id") or "") for row in rows}
+            for result_row in result.get("rows") or []:
+                if str(result_row.get("id") or "") in fresh_ids:
+                    result_row["stored_created_ts"] = observed_ts
+        if not _item_base_market_job_is_owner(key, job, owner_token):
+            return _cache_copy(job.get("result") or result)
         job["result"] = result
         has_collected_rows = any(_item_base_market_row_has_evidence(row) for row in combined_rows)
         if (not q or has_collected_rows) and not _item_base_market_payload_is_error_only(result):
@@ -3218,29 +3435,84 @@ async def run_item_base_market_refresh_job(
         return result
 
     def persist_priced_result(result: dict[str, Any]) -> None:
+        if not _item_base_market_job_is_owner(key, job, owner_token):
+            return
         priced_rows = [
+            # `result.rows` намеренно сохраняет прежние строки из кэша/checkpoint
+            # для UI. В новую запись истории входят только строки, полученные
+            # этим запуском, иначе старые цены выглядят свежими после каждого скана.
             row
-            for row in result.get("rows") or []
+            for row in rows
             if _to_float(row.get("low")) is not None or _to_float(row.get("best")) is not None
         ]
+        observed_ts = _to_float(result.get("created_ts"))
+        if observed_ts is not None:
+            priced_ids = {str(row.get("id") or "") for row in priced_rows}
+            for row in priced_rows:
+                row["stored_created_ts"] = observed_ts
+            for result_row in result.get("rows") or []:
+                if str(result_row.get("id") or "") in priced_ids:
+                    result_row["stored_created_ts"] = observed_ts
         if priced_rows:
             log_market_history({**result, "rows": priced_rows}, history_path=HISTORY_PATH)
+            if not q and scan_cursor_key is not None:
+                save_scan_checkpoint(retry_at=_to_float(job.get("retry_at")))
 
-    def update_scan_progress(processed_count: int) -> None:
-        if q or scan_start is None or not bases:
+    def save_scan_checkpoint(
+        retry_at: float | None = None,
+        partial_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        if q or scan_cursor_key is None or scan_fingerprint is None:
             return
-        normal_processed = max(0, processed_count - priority_recheck_count)
-        if scan_next is not None and processed_count >= len(selected_bases):
-            job["scan_next"] = scan_next
-        elif normal_scan_count and normal_processed >= normal_scan_count and scan_next is not None:
-            job["scan_next"] = scan_next
-        else:
-            job["scan_next"] = (scan_start + normal_processed) % len(bases)
+        if not _item_base_market_job_is_owner(key, job, owner_token):
+            return
+        job["scan_next"] = scan_cursor
+        _advance_item_base_market_scan_cursor(scan_cursor_key, scan_cursor)
+        checkpoint_partial_rows = (
+            _merge_item_base_market_scan_rows(restored_partial_rows, rows) if partial_rows is None else partial_rows
+        )
+        if scan_checkpoint is not None:
+            scan_checkpoint["cursor"] = scan_cursor
+            scan_checkpoint["pending"] = list(pending_scan)
+            scan_checkpoint["retry_at"] = retry_at
+            scan_checkpoint["partial_rows"] = checkpoint_partial_rows
+        _save_item_base_market_scan_checkpoint(
+            scan_cursor_key,
+            fingerprint=scan_fingerprint,
+            cursor=scan_cursor,
+            pending=pending_scan,
+            retry_at=retry_at,
+            partial_rows=checkpoint_partial_rows,
+        )
+
+    def complete_scanned_base(base: dict[str, Any]) -> None:
+        nonlocal scan_cursor
+        if q or scan_cursor_key is None:
+            return
+        base_id = str(base.get("id") or "")
+        descriptor_index = next((i for i, item in enumerate(pending_scan) if item["id"] == base_id), None)
+        if descriptor_index is None:
+            return
+        descriptor = pending_scan.pop(descriptor_index)
+        if not descriptor["priority"] and base_id in scan_base_indices:
+            scan_cursor = (scan_base_indices[base_id] + 1) % max(1, len(scan_bases))
+        save_scan_checkpoint()
+
+    def defer_rate_limited_base(base: dict[str, Any], retry_at: float) -> None:
+        if q:
+            return
+        base_id = str(base.get("id") or "")
+        descriptor_index = next((i for i, item in enumerate(pending_scan) if item["id"] == base_id), None)
+        if descriptor_index is not None:
+            pending_scan.append(pending_scan.pop(descriptor_index))
+        save_scan_checkpoint(retry_at=retry_at)
 
     publish_result()
     base_index = 0
     attempts = 0
     while base_index < len(selected_bases):
+        if not _item_base_market_job_is_owner(key, job, owner_token):
+            return _cache_copy(job.get("result") or {})
         base = selected_bases[base_index]
         query_type = str(_base_market_row_from_base(base, min_ilvl=min_ilvl).get("query_type") or "").strip()
         if not query_type:
@@ -3256,7 +3528,7 @@ async def run_item_base_market_refresh_job(
             )
             base_index += 1
             job["processed_count"] = base_index
-            update_scan_progress(base_index)
+            complete_scanned_base(base)
             job["updated_ts"] = time.time()
             publish_result()
             continue
@@ -3266,6 +3538,8 @@ async def run_item_base_market_refresh_job(
                 _item_base_market_query(query_type, status, min_ilvl=min_ilvl),
                 api_base=ITEM_BASE_MARKET_TRADE2_BASE,
             )
+            if not _item_base_market_job_is_owner(key, job, owner_token):
+                return _cache_copy(job.get("result") or {})
             if market_search.get("id"):
                 exact_query_ids.append(market_search["id"])
             row = await _fetch_item_base_market_row_from_search(
@@ -3276,6 +3550,8 @@ async def run_item_base_market_refresh_job(
                 min_ilvl=min_ilvl,
                 fetch_limit=bounded_sample_limit if q else ITEM_BASE_MARKET_ROUGH_SAMPLE_LIMIT,
             )
+            if not _item_base_market_job_is_owner(key, job, owner_token):
+                return _cache_copy(job.get("result") or {})
             retry_after = _retry_after_from_error(row.get("error"))
             if retry_after is not None:
                 attempts += 1
@@ -3285,20 +3561,21 @@ async def run_item_base_market_refresh_job(
                 job["status"] = "rate_limited"
                 job["retry_after"] = retry_after
                 job["retry_at"] = time.time() + retry_after
+                defer_rate_limited_base(base, float(job["retry_at"]))
                 job["error"] = str(row.get("error"))
                 job["processed_count"] = base_index
-                update_scan_progress(base_index)
                 if row.get("total") is not None:
                     job["total"] = row.get("total")
                 job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
                 job["clean_count"] = sum(int(item.get("clean_count") or item.get("count") or 0) for item in rows)
                 job["updated_ts"] = time.time()
-                _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
                 result = publish_result()
                 if not q:
                     persist_priced_result(result)
                 return _cache_copy(result)
         except Exception as exc:
+            if not _item_base_market_job_is_owner(key, job, owner_token):
+                return _cache_copy(job.get("result") or {})
             error_text = str(exc)
             retry_after = _retry_after_from_error(error_text)
             error_row = {
@@ -3315,11 +3592,10 @@ async def run_item_base_market_refresh_job(
                 job["status"] = "rate_limited"
                 job["retry_after"] = retry_after
                 job["retry_at"] = time.time() + retry_after
+                defer_rate_limited_base(base, float(job["retry_at"]))
                 job["error"] = error_text
                 job["processed_count"] = base_index + 1
-                update_scan_progress(base_index + 1)
                 job["updated_ts"] = time.time()
-                _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
                 result = publish_result([error_row])
                 if not q:
                     persist_priced_result(result)
@@ -3331,7 +3607,7 @@ async def run_item_base_market_refresh_job(
         rows.append(row)
         base_index += 1
         job["processed_count"] = base_index
-        update_scan_progress(base_index)
+        complete_scanned_base(base)
         if q and row.get("total") is not None:
             job["total"] = row.get("total")
         job["fetched_count"] = sum(int(item.get("fetched_count") or item.get("raw_count") or 0) for item in rows)
@@ -3346,7 +3622,8 @@ async def run_item_base_market_refresh_job(
     job["status"] = "done"
     job["updated_ts"] = time.time()
     job["error"] = None
-    _advance_item_base_market_scan_cursor(scan_cursor_key, job.get("scan_next"))
+    if not q:
+        save_scan_checkpoint()
     result = publish_result()
     persist_priced_result(result)
     return _cache_copy(result)
@@ -3369,6 +3646,10 @@ def start_item_base_market_refresh_job(
     key = _item_base_market_job_key(league, target, status, q, collection_min_ilvl, bounded_sample_limit)
     now = time.time()
     existing = ITEM_BASE_MARKET_JOBS.get(key)
+    if existing and existing.get("status") in {"queued", "running"}:
+        runner_task = existing.get("runner_task")
+        if runner_task is not None and not runner_task.done():
+            return existing, None
     if existing and now - float(existing.get("created_ts") or now) < ITEM_BASE_MARKET_JOB_TTL:
         if existing.get("status") in {"queued", "running"}:
             if not _item_base_market_job_is_stale(existing, now):
@@ -3377,6 +3658,31 @@ def start_item_base_market_refresh_job(
             retry_at = _to_float(existing.get("retry_at")) or 0.0
             if retry_at > now:
                 return existing, None
+    if not q:
+        durable_retry_at = _item_base_market_scan_retry_at(
+            _item_base_market_scan_cursor_key(league, target, status, collection_min_ilvl)
+        )
+        if durable_retry_at and durable_retry_at > now:
+            waiting_job = {
+                "id": "|".join(str(part) for part in key),
+                "status": "rate_limited",
+                "created_ts": now,
+                "updated_ts": now,
+                "retry_at": durable_retry_at,
+                "retry_after": max(1, int(durable_retry_at - now)),
+                "attempts": 0,
+                "sample_limit": bounded_sample_limit,
+                "total": None,
+                "base_total": 0,
+                "processed_count": 0,
+                "fetched_count": 0,
+                "clean_count": 0,
+                "priority_recheck_count": 0,
+                "error": None,
+            }
+            ITEM_BASE_MARKET_JOBS[key] = waiting_job
+            return waiting_job, None
+    owner_token = uuid.uuid4().hex
     job = {
         "id": "|".join(str(part) for part in key),
         "status": "queued",
@@ -3391,6 +3697,7 @@ def start_item_base_market_refresh_job(
         "clean_count": 0,
         "priority_recheck_count": 0,
         "error": None,
+        "owner_token": owner_token,
     }
     ITEM_BASE_MARKET_JOBS[key] = job
     coroutine = run_item_base_market_refresh_job(
@@ -3401,6 +3708,7 @@ def start_item_base_market_refresh_job(
         limit=limit,
         min_ilvl=collection_min_ilvl,
         sample_limit=bounded_sample_limit,
+        _owner_token=owner_token,
     )
     return job, coroutine
 

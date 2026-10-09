@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -36,6 +37,14 @@ def _get_header(headers: Any, key: str) -> Any:
     return None
 
 
+def _parse_retry_after_seconds(value: Any) -> float | None:
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
 def _parse_rate_triplet(value: str) -> tuple[float, float, float] | None:
     parts = value.split(":")
     if len(parts) != 3:
@@ -52,9 +61,9 @@ def trade2_rate_limit_delay(headers: Any) -> float:
         return 0.0
 
     delays: list[float] = []
-    retry_after = _get_header(headers, "Retry-After")
-    if retry_after and str(retry_after).isdigit():
-        delays.append(float(retry_after))
+    retry_after = _parse_retry_after_seconds(_get_header(headers, "Retry-After"))
+    if retry_after:
+        delays.append(retry_after)
 
     rules = _split_header_list(_get_header(headers, "X-Rate-Limit-Rules"))
     for rule in rules:
@@ -111,18 +120,20 @@ async def trade2_rate_limited_request(
     *,
     route_key: str | Callable[[], str] | None = None,
 ) -> Any:
-    async with _trade2_lock():
-        key = _route_key(route_key)
-        now = time.time()
-        next_request_ts = _trade2_next_request_ts_by_route.get(key, 0.0)
-        if next_request_ts > now:
-            wait_seconds = next_request_ts - now
-            if MAX_RATE_LIMIT_WAIT_SECONDS > 0 and wait_seconds > MAX_RATE_LIMIT_WAIT_SECONDS:
-                raise Trade2RateLimitWaitError(f"trade2 rate limited; retry after {wait_seconds:.0f}s")
-            await asyncio.sleep(wait_seconds)
-        response = await request()
-        key = _route_key(route_key)
-        delay = trade2_rate_limit_delay(getattr(response, "headers", None))
-        if delay > 0:
-            _trade2_next_request_ts_by_route[key] = max(_trade2_next_request_ts_by_route.get(key, 0.0), time.time() + delay)
-        return response
+    while True:
+        async with _trade2_lock():
+            key = _route_key(route_key)
+            wait_seconds = _trade2_next_request_ts_by_route.get(key, 0.0) - time.time()
+            if wait_seconds > 0:
+                if MAX_RATE_LIMIT_WAIT_SECONDS > 0 and wait_seconds > MAX_RATE_LIMIT_WAIT_SECONDS:
+                    raise Trade2RateLimitWaitError(f"trade2 rate limited; retry after {wait_seconds:.0f}s")
+            else:
+                response = await request()
+                key = _route_key(route_key)
+                delay = trade2_rate_limit_delay(getattr(response, "headers", None))
+                if delay > 0:
+                    _trade2_next_request_ts_by_route[key] = max(_trade2_next_request_ts_by_route.get(key, 0.0), time.time() + delay)
+                return response
+        # Пауза одного маршрута не удерживает общую очередь HTTP-запросов.
+        # После ожидания заново проверяем срок под lock: лимит мог продлиться.
+        await asyncio.sleep(wait_seconds)

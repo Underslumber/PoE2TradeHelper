@@ -55,6 +55,13 @@ MARKET_HISTORY_COLUMNS = {
     "samples": "INTEGER DEFAULT 1",
 }
 
+MARKET_HISTORY_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_market_history_scope_timestamp "
+    "ON market_history (league, category, target, status, timestamp)",
+    "CREATE INDEX IF NOT EXISTS ix_market_history_scope_item_timestamp "
+    "ON market_history (league, category, target, status, item_id, timestamp)",
+]
+
 
 def _table_columns(table: str) -> set[str]:
     with engine.connect() as conn:
@@ -106,6 +113,8 @@ def _migrate_market_history_table() -> None:
         conn.exec_driver_sql("UPDATE market_history SET status = 'any' WHERE status IS NULL OR status = ''")
         conn.exec_driver_sql("UPDATE market_history SET granularity = 'raw' WHERE granularity IS NULL OR granularity = ''")
         conn.exec_driver_sql("UPDATE market_history SET samples = 1 WHERE samples IS NULL OR samples < 1")
+        for statement in MARKET_HISTORY_INDEXES:
+            conn.exec_driver_sql(statement)
 
 
 def _ensure_bootstrap_admin() -> None:

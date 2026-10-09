@@ -103,8 +103,16 @@ def _is_poe2_league(league: dict[str, Any]) -> bool:
     return realm == "poe2" and bool(league.get("id"))
 
 
+def _is_hardcore_league(league: dict[str, Any]) -> bool:
+    for value in (league.get("id"), league.get("text")):
+        name = str(value or "").strip().lower()
+        if name == "hc" or name.startswith(("hc ", "hc-", "hc_", "hc:")):
+            return True
+    return False
+
+
 def _is_trade_challenge_league(league: dict[str, Any]) -> bool:
-    if not _is_poe2_league(league):
+    if not _is_poe2_league(league) or _is_hardcore_league(league):
         return False
     name = _league_name(league).lower()
     return not any(token in name for token in LEAGUE_EXCLUDE_TOKENS)
@@ -232,16 +240,35 @@ class MarketSnapshotService:
                 if self.settings.funpay_rub_enabled:
                     rub_summary = await self._collect_funpay_rub_snapshot()
                 try:
-                    summary = await collect_market_snapshots(
-                        league=self.current_league,
-                        target=self.settings.target,
-                        status=self.settings.status,
-                        categories=self.settings.categories or None,
-                        include_unsupported=self.settings.include_unsupported,
-                        currency_targets=self.settings.currency_targets,
-                        pause_seconds=self.settings.pause_seconds,
-                        force_refresh=True,
-                    )
+                    categories = self.settings.categories or None
+                    if self.settings.item_base_market_enabled and categories is not None:
+                        # ItemBases собирается выделенным фоновым обработчиком ниже.
+                        # Оставляем общий маршрут при выключенном обработчике и
+                        # исключаем повторный сбор при включенном.
+                        categories = [category for category in categories if category != "ItemBases"]
+                    if categories == []:
+                        summary = {
+                            "created_ts": cycle_started,
+                            "league": self.current_league,
+                            "target": self.settings.target,
+                            "status": self.settings.status,
+                            "jobs_total": 0,
+                            "jobs_ok": 0,
+                            "jobs_failed": 0,
+                            "duration_seconds": 0.0,
+                            "results": [],
+                        }
+                    else:
+                        summary = await collect_market_snapshots(
+                            league=self.current_league,
+                            target=self.settings.target,
+                            status=self.settings.status,
+                            categories=categories,
+                            include_unsupported=self.settings.include_unsupported,
+                            currency_targets=self.settings.currency_targets,
+                            pause_seconds=self.settings.pause_seconds,
+                            force_refresh=True,
+                        )
                     self.last_summary = summary
                     self.last_collection_ts = cycle_started
                     self.last_error = ""
@@ -263,7 +290,7 @@ class MarketSnapshotService:
                     notifications_summary = await self._process_notifications()
                     if notifications_summary is not None:
                         summary["notifications"] = notifications_summary
-                    compaction_summary = self._compact_history_if_due()
+                    compaction_summary = await self._compact_history_if_due()
                     if compaction_summary is not None:
                         summary["history_compaction"] = compaction_summary
 
@@ -439,7 +466,7 @@ class MarketSnapshotService:
             self.last_notification_error = str(exc)
             return None
 
-    def _compact_history_if_due(self) -> dict[str, Any] | None:
+    async def _compact_history_if_due(self) -> dict[str, Any] | None:
         if not self.settings.history_compaction_enabled:
             return None
         now = time.time()
@@ -447,7 +474,9 @@ class MarketSnapshotService:
         if self.last_compaction_ts is not None and now - self.last_compaction_ts < interval:
             return None
         try:
-            summary = compact_market_history(now_ts=now)
+            # Компакция блокирующая (SQLite + bulk DML); выносим из event loop,
+            # чтобы не стопорить обработку HTTP-запросов FastAPI.
+            summary = await asyncio.to_thread(compact_market_history, now_ts=now)
             self.last_compaction_summary = summary
             self.last_compaction_ts = now
             self.last_compaction_error = ""
