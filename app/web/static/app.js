@@ -62,6 +62,17 @@ function loadTable() {
         searching: false,
         info: true,
         order: [],
+        language: {
+          lengthMenu: t('tableLengthMenu'),
+          info: t('tableInfo'),
+          infoEmpty: t('tableInfoEmpty'),
+          infoFiltered: t('tableInfoFiltered'),
+          emptyTable: t('tableInfoEmpty'),
+          zeroRecords: t('tableZeroRecords'),
+          loadingRecords: t('loading'),
+          paginate: { first: t('tableFirst'), previous: t('tablePrevious'), next: t('tableNext'), last: t('tableLast') },
+          aria: { orderable: t('tableSort'), orderableReverse: t('tableSortReverse'), orderableRemove: t('tableSortRemove') },
+        },
       });
     });
 }
