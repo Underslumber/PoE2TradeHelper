@@ -1,5 +1,8 @@
 window.POE2_I18N = {
   ru: {
+    navSections: 'Разделы',
+    chartMetricGroup: 'Метрика графика',
+    languageLabel: 'Язык',
     tableLengthMenu: '_MENU_ на странице',
     tableInfo: '_START_–_END_ из _TOTAL_',
     tableInfoEmpty: 'Нет записей',
@@ -771,6 +774,9 @@ window.POE2_I18N = {
     updateLong: 'Обновляю цены. Для больших категорий это может занять время из-за лимитов запросов...',
   },
   en: {
+    navSections: 'Sections',
+    chartMetricGroup: 'Chart metric',
+    languageLabel: 'Language',
     tableLengthMenu: '_MENU_ per page',
     tableInfo: '_START_–_END_ of _TOTAL_',
     tableInfoEmpty: 'No records',

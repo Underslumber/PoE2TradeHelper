@@ -305,7 +305,7 @@ function applyLanguage() {
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
-  document.querySelector('.language-switch')?.setAttribute('aria-label', state.lang === 'ru' ? 'Язык' : 'Language');
+  document.querySelector('.language-switch')?.setAttribute('aria-label', t('languageLabel'));
   byId('lang-ru')?.classList.toggle('active', state.lang === 'ru');
   byId('lang-en')?.classList.toggle('active', state.lang === 'en');
   fillStatusSelect();
@@ -3235,12 +3235,115 @@ function filteredSellerLots() {
   return filterText ? lots.filter(lot => sellerLotMatchesFilter(lot, filterText)) : lots;
 }
 
+const TABLIST_SELECTOR = '.navbar-main-tabs,.lot-subtabs,.account-tabs,.advice-tabs,.detail-chart-tabs';
+const TAB_SELECTOR = '.main-view-tab,.lot-subtab,.account-tab,.advice-tab,.detail-chart-tab';
+
+function isTabAvailable(tab) {
+  return !tab.disabled && !tab.hidden && !tab.classList.contains('d-none') && !tab.classList.contains('is-hidden');
+}
+
+function tabPanels(tab) {
+  if (tab.dataset.mainTab) return [...document.querySelectorAll(`[data-main-view="${tab.dataset.mainTab}"]`)];
+  if (tab.dataset.lotTab) return [...document.querySelectorAll(`[data-lot-panel="${tab.dataset.lotTab}"]`)];
+  if (tab.dataset.accountTab) return [...document.querySelectorAll(`[data-account-tab-panel="${tab.dataset.accountTab}"]`)];
+  if (tab.dataset.adviceTab) return [byId(`advice-list-${tab.dataset.adviceTab}`)].filter(Boolean);
+  if (tab.dataset.detailChart) return [byId('detail-chart')].filter(Boolean);
+  return [];
+}
+
+function syncTabsA11y() {
+  document.querySelectorAll(TABLIST_SELECTOR).forEach((list, listIndex) => {
+    list.setAttribute('role', 'tablist');
+    const label = list.matches('.navbar-main-tabs') ? 'navSections'
+      : list.matches('.lot-subtabs') ? 'sellerLotsTitle'
+      : list.matches('.account-tabs') ? 'cabinetTitle'
+      : list.matches('.advice-tabs') ? 'detailedSignals' : 'chartMetricGroup';
+    list.setAttribute('aria-label', t(label));
+    const tabs = [...list.querySelectorAll(TAB_SELECTOR)];
+    const current = tabs.find(tab => tab === document.activeElement && isTabAvailable(tab))
+      || tabs.find(tab => tab.classList.contains('active') && isTabAvailable(tab)) || tabs.find(isTabAvailable);
+    tabs.forEach((tab, tabIndex) => {
+      if (!tab.id) tab.id = `ui-tab-${listIndex}-${tabIndex}`;
+      tab.setAttribute('role', 'tab');
+      tab.removeAttribute('aria-pressed');
+      tab.setAttribute('aria-selected', String(tab.classList.contains('active')));
+      tab.tabIndex = tab === current ? 0 : -1;
+      const panels = tabPanels(tab);
+      panels.forEach((panel, panelIndex) => {
+        if (!panel.id) panel.id = `${tab.id}-panel-${panelIndex}`;
+        panel.setAttribute('role', 'tabpanel');
+        // У метрик графика общий контейнер, его подписывает выбранная вкладка.
+        if (!tab.dataset.detailChart || tab.classList.contains('active')) panel.setAttribute('aria-labelledby', tab.id);
+        panel.tabIndex = 0;
+      });
+      if (panels.length) tab.setAttribute('aria-controls', panels.map(panel => panel.id).join(' '));
+    });
+  });
+  document.querySelectorAll('.language-switch .lang-btn').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.classList.contains('active')));
+  });
+}
+
+function handleTablistKeydown(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tab = event.target.closest?.(TAB_SELECTOR);
+  const list = tab?.closest(TABLIST_SELECTOR);
+  if (!list) return;
+  const tabs = [...list.querySelectorAll(TAB_SELECTOR)].filter(isTabAvailable);
+  const index = tabs.indexOf(tab);
+  if (index < 0) return;
+  const last = tabs.length - 1;
+  let next = index;
+  if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = last;
+  else if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+  else next = index === 0 ? last : index - 1;
+  event.preventDefault();
+  tabs.forEach((item, position) => { item.tabIndex = position === next ? 0 : -1; });
+  tabs[next].focus();
+  // Стрелки перемещают фокус; Enter/Space активируют вкладку без лишних запросов.
+  tabs[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function markCurrentNavLink() {
+  document.querySelectorAll('.navbar-actions a[href]').forEach(link => {
+    const url = new URL(link.href, window.location.href);
+    if (url.pathname === window.location.pathname && url.search === window.location.search) {
+      link.setAttribute('aria-current', 'page');
+    }
+  });
+}
+
+function initTabsA11y() {
+  syncTabsA11y();
+  markCurrentNavLink();
+  document.addEventListener('keydown', handleTablistKeydown);
+  document.addEventListener('focusout', event => {
+    if (event.target.closest?.(TABLIST_SELECTOR)) requestAnimationFrame(syncTabsA11y);
+  });
+  let pending = false;
+  new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      syncTabsA11y();
+    });
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initTabsA11y);
+} else {
+  initTabsA11y();
+}
+
 function renderLotSubtabs() {
   const activeTab = state.lotSubtab === 'bases' ? 'bases' : 'seller';
   document.querySelectorAll('[data-lot-tab]').forEach(button => {
     const active = button.dataset.lotTab === activeTab;
     button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
   });
   document.querySelectorAll('[data-lot-panel]').forEach(panel => {
     panel.classList.toggle('d-none', panel.dataset.lotPanel !== activeTab);
@@ -5080,7 +5183,7 @@ function renderDetailChartTabs() {
   document.querySelectorAll('[data-detail-chart]').forEach(button => {
     const active = button.dataset.detailChart === metric;
     button.classList.toggle('active', active);
-    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
   });
 }
 

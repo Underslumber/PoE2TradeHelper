@@ -61,7 +61,7 @@
     <section class="action-row" data-main-control-views="market signals">
       <button id="refresh-rates" class="btn btn-primary" type="button" data-i18n="refreshRates">Обновить цены категории</button>
       <button id="refresh-static" class="btn btn-outline-light" type="button" data-i18n="refreshLists">Обновить списки</button>
-      <span id="rate-status" class="muted-status"></span>
+      <span id="rate-status" class="muted-status" role="status" aria-live="polite"></span>
     </section>
 
     <section id="lot-search-panel" class="lot-panel view-hidden" data-main-view="lots">
@@ -79,7 +79,7 @@
         <div class="lot-search-grid">
           <label class="form-field">
             <span data-i18n="sellerAccount">Продавец</span>
-            <input id="lot-seller" class="form-control" type="search" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
+            <input id="lot-seller" class="form-control" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" data-i18n-placeholder="sellerAccountPlaceholder" placeholder="Аккаунт#1234">
           </label>
           <label class="form-field">
             <span data-i18n="lotNameFilter">Название или тип</span>
@@ -101,7 +101,7 @@
         <div class="action-row">
           <button id="search-lots" class="btn btn-primary" type="button" data-i18n="searchSellerLots">Найти лоты</button>
           <button id="save-lot-default-seller" class="btn btn-outline-light" type="button" data-i18n="saveDefaultSeller">Сохранить продавца</button>
-          <span id="lot-search-status" class="muted-status"></span>
+          <span id="lot-search-status" class="muted-status" role="status" aria-live="polite"></span>
         </div>
         <section id="seller-base-summary-panel" class="seller-base-summary-panel"></section>
         <section id="seller-lot-profile-panel" class="seller-lot-profile-panel"></section>
@@ -117,7 +117,7 @@
           </label>
           <label class="form-field">
             <span data-i18n="baseMarketMinIlvl">Минимальный ilvl</span>
-            <input id="base-market-min-ilvl" class="form-control" type="number" min="1" max="100" placeholder="82">
+            <input id="base-market-min-ilvl" class="form-control" type="number" inputmode="numeric" min="1" max="100" placeholder="82">
           </label>
           <label class="form-field">
             <span data-i18n="baseMarketLimit">Основ</span>
@@ -135,7 +135,7 @@
                 <option value="above">&gt;</option>
                 <option value="below">&lt;</option>
               </select>
-              <input id="base-market-price-value" class="form-control base-market-price-value" type="number" min="0" max="999" step="0.01" placeholder="10" aria-label="Порог цены">
+              <input id="base-market-price-value" class="form-control base-market-price-value" type="number" inputmode="decimal" min="0" max="999" step="0.01" placeholder="10" aria-label="Порог цены">
               <span class="base-market-currency-picker">
                 <img id="base-market-price-currency-icon" alt="" aria-hidden="true">
                 <span id="base-market-price-currency-fallback" aria-hidden="true"></span>

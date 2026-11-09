@@ -2971,3 +2971,25 @@ body.bg-dark{background-color:var(--c-bg)!important}
 @media (max-width:620px){.main-panel{padding:12px}.hero-bar h1{font-size:1.5rem}}
 /* Уменьшение движения */
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important}}
+/* ===== UX: доступность, touch, адаптивные вкладки ===== */
+/* Нативные элементы в тёмной теме */
+:root{color-scheme:dark;scrollbar-color:var(--c-ln2) var(--c-bg)}
+select option{background:var(--c-s1);color:var(--c-tx)}
+::selection{background:rgba(0,209,154,.32);color:#fff}
+/* Типографика */
+.hero-bar h1,:is(.lot-panel,.advice-panel,.item-detail-panel,.cabinet-header) h2{text-wrap:balance}
+.hero-bar p,.lot-panel-header p{max-width:75ch;text-wrap:pretty}
+:is(.market-table,.active-trades-table) td{font-variant-numeric:tabular-nums}
+.muted-status{overflow-wrap:anywhere}
+/* Якоря не прячутся под липким навбаром */
+section[id],[id$="-panel"]{scroll-margin-top:84px}
+/* Фокус внутри сегментов и списков не обрезается */
+:is(.main-view-tab,.lang-btn,.detail-chart-tab,.advice-tab,.category-button):focus-visible{outline-offset:-2px}
+:is(.lot-subtab,.account-tab):focus-visible{border-radius:4px;outline-offset:-3px}
+/* Текущая страница в навбаре */
+.navbar-actions a[aria-current=page]{border-color:var(--c-ac);color:var(--c-ac)}
+/* Подвкладки на узких экранах: горизонтальная прокрутка вместо переноса */
+@media (max-width:980px){.lot-subtabs,.account-tabs{flex-wrap:nowrap;max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:thin}:is(.lot-subtab,.account-tab){flex:0 0 auto;scroll-snap-align:start;white-space:nowrap}}
+/* Touch: крупнее цели, без автозума iOS */
+@media (pointer:coarse){.btn{min-height:44px}}
+@media (pointer:coarse){.btn{--bs-btn-padding-y:.6rem}.btn-sm{--bs-btn-padding-y:.45rem}:is(.main-view-tab,.lang-btn,.lot-subtab,.account-tab,.advice-tab,.detail-chart-tab){padding-bottom:10px;padding-top:10px}.category-button{padding-bottom:11px;padding-top:11px}:is(.form-control,.form-select){font-size:16px;padding-bottom:.55rem;padding-top:.55rem}}
